@@ -13,8 +13,15 @@ pub(super) fn default_pipe_name() -> String {
 }
 
 pub(super) fn pipe_exists(name: &str) -> bool {
-    use std::fs;
-    fs::metadata(name).is_ok()
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
+
+    let wide: Vec<u16> = OsStr::new(name)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe { WaitNamedPipeW(wide.as_ptr(), 1) != 0 }
 }
 
 pub(super) async fn connect(
