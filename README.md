@@ -9,7 +9,7 @@
 ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═════╝   ╚═╝   ╚═╝  ╚═╝
 </pre>
 
-**The Context Engineering Layer for AI Development**
+**The Context Layer for AI Development**
 
 Know what's in your context. Control what reaches the model.
 One Rust binary. Zero cloud dependency.
@@ -48,7 +48,7 @@ One Rust binary. Zero cloud dependency.
 
 ---
 
-> **lean-ctx** is the Context Engineering Layer for AI coding. It compresses, tracks, and governs every token between your code and the AI — so you make better decisions, not just cheaper ones. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 23+ other agents — no config needed.
+> **lean-ctx** is the Context Layer for AI coding. It compresses, tracks, and governs every token between your code and the AI — so you make better decisions, not just cheaper ones. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 23+ other agents — no config needed.
 
 <p align="center"><strong>See it in action:</strong></p>
 
