@@ -1192,6 +1192,10 @@ pub fn run() {
                 super::cmd_session_action(&rest);
                 return;
             }
+            "ledger" => {
+                super::cmd_ledger(&rest);
+                return;
+            }
             "control" | "context-control" => {
                 super::cmd_control(&rest);
                 return;

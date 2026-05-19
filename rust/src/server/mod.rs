@@ -809,11 +809,12 @@ impl ServerHandler for LeanCtxServer {
                     );
                     let mode_used =
                         helpers::get_str(args, "mode").unwrap_or_else(|| "auto".to_string());
+                    let sent_tokens_final = crate::core::tokens::count_tokens(&result_text);
                     let gate_result = context_gate::post_dispatch_record_with_task(
                         &read_path,
                         &mode_used,
-                        pre_terse_len,
                         output_tokens as usize,
+                        sent_tokens_final,
                         &mut ledger,
                         &overlay,
                         active_task.as_deref(),

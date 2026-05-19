@@ -29,10 +29,44 @@ fn ledger_path(agent_id: &str) -> Result<std::path::PathBuf, String> {
 }
 
 fn atomic_write_json(path: &std::path::Path, data: &str) {
-    let tmp = path.with_extension("json.tmp");
-    if std::fs::write(&tmp, data).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    let _ = crate::config_io::write_atomic(path, data);
+}
+
+/// Acquire an advisory file lock for cross-process safety.
+/// Returns the lock file handle (lock released on drop).
+#[cfg(unix)]
+fn acquire_ledger_lock(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+    let lock_path = path.with_extension("json.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .ok()?;
+    let fd = file.as_raw_fd();
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        // Lock held — block up to 2s
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+            if ret == 0 {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+        }
     }
+    Some(file)
+}
+
+#[cfg(not(unix))]
+fn acquire_ledger_lock(_path: &std::path::Path) -> Option<std::fs::File> {
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,13 +403,46 @@ impl ContextLedger {
             .collect()
     }
 
-    pub fn remove(&mut self, path: &str) {
+    pub fn remove(&mut self, path: &str) -> bool {
         if let Some(idx) = self.entries.iter().position(|e| e.path == path) {
             let entry = &self.entries[idx];
-            self.total_tokens_sent -= entry.sent_tokens;
-            self.total_tokens_saved -= entry.original_tokens.saturating_sub(entry.sent_tokens);
+            self.total_tokens_sent = self.total_tokens_sent.saturating_sub(entry.sent_tokens);
+            self.total_tokens_saved = self
+                .total_tokens_saved
+                .saturating_sub(entry.original_tokens.saturating_sub(entry.sent_tokens));
             self.entries.remove(idx);
+            true
+        } else {
+            false
         }
+    }
+
+    /// Clear all entries and reset totals to zero.
+    pub fn reset(&mut self) {
+        let pinned_count = self
+            .entries
+            .iter()
+            .filter(|e| e.state == Some(ContextState::Pinned))
+            .count();
+        self.entries.clear();
+        self.total_tokens_sent = 0;
+        self.total_tokens_saved = 0;
+        if pinned_count > 0 {
+            tracing::info!("{pinned_count} pinned entries were also cleared");
+        }
+    }
+
+    /// Remove specific paths from the ledger. Returns count of entries removed.
+    /// Paths are normalized before matching.
+    pub fn evict_paths(&mut self, paths: &[&str]) -> usize {
+        let mut removed = 0;
+        for path in paths {
+            let normalized = crate::core::pathutil::normalize_tool_path(path);
+            if self.remove(&normalized) {
+                removed += 1;
+            }
+        }
+        removed
     }
 
     pub fn save(&self) {
@@ -400,6 +467,7 @@ impl ContextLedger {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
+            let _lock = acquire_ledger_lock(&path);
             if let Ok(json) = serde_json::to_string(self) {
                 atomic_write_json(&path, &json);
             }
@@ -466,7 +534,10 @@ impl ContextLedger {
     pub fn load_for_agent(agent_id: &str) -> Self {
         let mut ledger: Self = ledger_path(agent_id)
             .ok()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|p| {
+                let _lock = acquire_ledger_lock(&p);
+                std::fs::read_to_string(p).ok()
+            })
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         if let Some((_model, window)) = crate::hook_handlers::load_detected_model() {
@@ -679,9 +750,35 @@ mod tests {
         let mut ledger = ContextLedger::with_window_size(10000);
         ledger.record("a.rs", "full", 500, 500);
         ledger.record("b.rs", "full", 300, 300);
-        ledger.remove("a.rs");
+        assert!(ledger.remove("a.rs"));
         assert_eq!(ledger.total_tokens_sent, 300);
         assert_eq!(ledger.entries.len(), 1);
+        assert!(!ledger.remove("nonexistent.rs"));
+    }
+
+    #[test]
+    fn reset_clears_everything() {
+        let mut ledger = ContextLedger::with_window_size(10000);
+        ledger.record("a.rs", "full", 500, 500);
+        ledger.record("b.rs", "full", 300, 300);
+        ledger.reset();
+        assert_eq!(ledger.entries.len(), 0);
+        assert_eq!(ledger.total_tokens_sent, 0);
+        assert_eq!(ledger.total_tokens_saved, 0);
+        assert_eq!(ledger.pressure().recommendation, PressureAction::NoAction);
+    }
+
+    #[test]
+    fn evict_paths_removes_matching() {
+        let mut ledger = ContextLedger::with_window_size(10000);
+        ledger.record("a.rs", "full", 500, 500);
+        ledger.record("b.rs", "full", 300, 300);
+        ledger.record("c.rs", "full", 200, 200);
+        let removed = ledger.evict_paths(&["a.rs", "c.rs", "nonexistent.rs"]);
+        assert_eq!(removed, 2);
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].path, "b.rs");
+        assert_eq!(ledger.total_tokens_sent, 300);
     }
 
     #[test]

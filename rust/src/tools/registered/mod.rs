@@ -28,6 +28,7 @@ pub mod ctx_impact;
 pub mod ctx_index;
 pub mod ctx_intent;
 pub mod ctx_knowledge;
+pub mod ctx_ledger;
 pub mod ctx_load_tools;
 pub mod ctx_metrics;
 pub mod ctx_multi_read;

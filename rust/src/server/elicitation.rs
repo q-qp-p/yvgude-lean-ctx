@@ -35,7 +35,7 @@ impl ElicitationSuggestion {
             } => {
                 let names = candidates.join(", ");
                 format!(
-                    "[Context {utilization_pct:.0}% full] Consider: ctx_control(action=\"exclude\", target=\"{names}\")"
+                    "[Context {utilization_pct:.0}% full] Evict: ctx_ledger(action=\"evict\", targets=\"{names}\")"
                 )
             }
             Self::LargeFileMode { path, tokens } => {

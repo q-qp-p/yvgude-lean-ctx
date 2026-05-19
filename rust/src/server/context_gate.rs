@@ -371,7 +371,7 @@ pub fn post_dispatch_record_with_task(
                 .collect();
             return PostDispatchResult {
                 eviction_hint: Some(format!(
-                    "Context pressure {:.0}%. Consider evicting: {}",
+                    "Context pressure {:.0}%. Evict: ctx_ledger(action=\"evict\", targets=\"{}\")",
                     pressure.utilization * 100.0,
                     names.join(", ")
                 )),

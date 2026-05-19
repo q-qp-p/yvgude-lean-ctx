@@ -128,6 +128,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(registered::ctx_graph::CtxGraphTool));
     registry.register(Box::new(registered::ctx_proof::CtxProofTool));
     registry.register(Box::new(registered::ctx_cache::CtxCacheTool));
+    registry.register(Box::new(registered::ctx_ledger::CtxLedgerTool));
     registry.register(Box::new(registered::ctx_retrieve::CtxRetrieveTool));
     registry.register(Box::new(registered::ctx_overview::CtxOverviewTool));
     registry.register(Box::new(registered::ctx_preload::CtxPreloadTool));

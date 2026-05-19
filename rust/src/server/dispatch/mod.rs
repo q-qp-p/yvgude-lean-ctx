@@ -214,20 +214,24 @@ impl LeanCtxServer {
 
             if let Some(ref path) = output.path {
                 {
-                    let sent_tokens = if output.original_tokens > 0 {
-                        output.original_tokens.saturating_sub(output.saved_tokens)
-                    } else {
-                        crate::core::tokens::count_tokens(&output.text)
-                    };
-                    let orig = if output.original_tokens > 0 {
-                        output.original_tokens
-                    } else {
-                        sent_tokens
-                    };
-                    let mode_str = output.mode.as_deref().unwrap_or("full");
-                    let mut ledger = self.ledger.write().await;
-                    ledger.record(path, mode_str, orig, sent_tokens);
-                    ledger.save_debounced();
+                    // Skip ledger record for ctx_read — it's recorded in post_dispatch
+                    // with correct final token counts after terse compression.
+                    if name != "ctx_read" {
+                        let sent_tokens = if output.original_tokens > 0 {
+                            output.original_tokens.saturating_sub(output.saved_tokens)
+                        } else {
+                            crate::core::tokens::count_tokens(&output.text)
+                        };
+                        let orig = if output.original_tokens > 0 {
+                            output.original_tokens
+                        } else {
+                            sent_tokens
+                        };
+                        let mode_str = output.mode.as_deref().unwrap_or("full");
+                        let mut ledger = self.ledger.write().await;
+                        ledger.record(path, mode_str, orig, sent_tokens);
+                        ledger.save_debounced();
+                    }
                 }
                 self.record_call_with_path(
                     name,
