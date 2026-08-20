@@ -1,6 +1,6 @@
 use super::{
     ProfileHypothesis, TaskAnalysisInput, TaskAnalyzer, TriageBackendLocal,
-    confidence::clamp_milli,
+    confidence::{RULES_FALLBACK_MILLI, clamp_milli},
     profile::{TaskProfileLocal, TaskScopeLocal},
 };
 use crate::core::{
@@ -60,12 +60,12 @@ fn fallback() -> ProfileHypothesis {
     let profile = TaskProfileLocal {
         task_class: "coding".into(),
         intent: "explore".into(),
-        confidence_milli: 300,
+        confidence_milli: RULES_FALLBACK_MILLI,
         ..Default::default()
     };
     ProfileHypothesis {
         profile,
-        confidence_milli: 300,
+        confidence_milli: RULES_FALLBACK_MILLI,
         backend: TriageBackendLocal::Rules,
     }
 }
@@ -134,7 +134,7 @@ mod tests {
                 .analyze(&TaskAnalysisInput::default())
                 .unwrap()
                 .confidence_milli,
-            300
+            RULES_FALLBACK_MILLI
         );
     }
 }

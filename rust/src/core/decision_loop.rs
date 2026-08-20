@@ -178,7 +178,10 @@ mod tests {
     fn test_unknown_query() {
         let result = DecisionLoop::default().execute_task("", "session", "agent");
 
-        assert_eq!(result.profile.confidence_milli, 300);
+        assert_eq!(
+            result.profile.confidence_milli,
+            crate::core::triage::confidence::RULES_FALLBACK_MILLI
+        );
         assert!(result.envelope_created);
     }
 
