@@ -966,7 +966,9 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
     }
 
     index.rebuild_interner();
-    build_edges_cached(&mut index, &content_cache);
+    // #1494: the scan_deadline covers the entire indexing pipeline, including
+    // edge-building, so a ~7k-file tree cannot spin unbounded on CPU after IO.
+    build_edges_cached(&mut index, &content_cache, scan_deadline);
 
     if let Err(e) = index.save() {
         tracing::warn!("could not save graph index: {e}");

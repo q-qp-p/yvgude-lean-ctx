@@ -594,6 +594,12 @@ pub fn apply_triage_filter(
     if removed == 0 {
         return (output.to_string(), 0);
     }
+    // #1493: total deletion (100% of lines removed) is never a useful
+    // compression outcome — the marker plus retry costs more than passing
+    // through the original content. Return unfiltered when nothing survives.
+    if keep.is_empty() {
+        return (output.to_string(), 0);
+    }
     let mut result = String::with_capacity(output.len());
     let mut consecutive_omitted: usize = 0;
     for (i, line) in lines.iter().enumerate() {
@@ -1202,15 +1208,33 @@ mod tests {
         use std::time::Instant;
 
         let profile = test_profile(500, 200);
-        let output = "// unrelated noise about widgets\n".repeat(2_000);
+        // Use a mix of keyword-matching and non-matching lines so triage
+        // actually filters (100% deletion is now a passthrough per #1493).
+        let output = "// unrelated noise about widgets\n".repeat(1_999) + "fix the context gate\n";
 
         let started = Instant::now();
         for _ in 0..1_000 {
             let (_, removed) = apply_triage_filter(&output, &profile, 2);
-            assert_eq!(removed, 2_000);
+            assert_eq!(removed, 1_999);
         }
         let average = started.elapsed() / 1_000;
         println!("benchmark_apply_triage_filter: {average:?} per call");
+    }
+
+    #[test]
+    fn gh1493_total_deletion_returns_original_output() {
+        let profile = test_profile(500, 200);
+        // 30 lines of plain file names — no keyword match, would be 100% deleted
+        let output = (1..=30)
+            .map(|i| format!("plugin/device_{i:03}.go"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (filtered, removed) = apply_triage_filter(&output, &profile, 2);
+        assert_eq!(
+            removed, 0,
+            "100% deletion must be prevented — output should pass through"
+        );
+        assert_eq!(filtered, output);
     }
 
     #[test]

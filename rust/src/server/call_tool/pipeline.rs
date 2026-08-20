@@ -66,12 +66,19 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // explicitly requested unfiltered output (raw, aggressiveness=0, fresh=true).
     // #1490: an explicit lines:N-M / anchored:N-M window is already an
     // agent-chosen minimal selection — triage has nothing useful to strip.
+    // #1492: mode="full" is documented as "verbatim, edit-ready" — triaging it
+    // defeats its contract and causes agents to edit against incomplete content.
     let triage_bypass = args.is_some_and(|a| {
         a.get("raw")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
             || a.get("mode").and_then(|v| v.as_str()).is_some_and(|m| {
-                m == "raw" || m.starts_with("lines:") || m.starts_with("anchored:") || m == "diff"
+                m == "raw"
+                    || m == "full"
+                    || m == "full-compact"
+                    || m.starts_with("lines:")
+                    || m.starts_with("anchored:")
+                    || m == "diff"
             })
             || a.get("aggressiveness")
                 .and_then(serde_json::Value::as_f64)

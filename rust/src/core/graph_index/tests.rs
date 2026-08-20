@@ -566,7 +566,11 @@ public class OrderRepository { public void Persist() {} }\n";
         cache.insert(path.to_string(), content.to_string());
     }
 
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     // `using App.Data` resolves to the representative file of that namespace.
     assert!(
@@ -626,7 +630,11 @@ public Motor(Engine engine) { _engine = engine; }\n}\n";
             .insert(path.to_string(), fe(path, content, "cs"));
         cache.insert(path.to_string(), content.to_string());
     }
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     // Mirror exactly as the daemon/dashboard reindex does.
     let pg = CodeGraph::open_in_memory().expect("in-memory graph");
@@ -679,7 +687,11 @@ fn go_same_package_type_ref_edge_is_directory_scoped() {
             .insert(path.to_string(), fe(path, content, "go"));
         cache.insert(path.to_string(), content.to_string());
     }
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     assert!(
         index
@@ -721,7 +733,11 @@ public class Bar { }\n";
         cache.insert(path.to_string(), content.to_string());
     }
 
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     assert!(
         index
@@ -775,7 +791,11 @@ func _ready():\n\tvar level = load(\"res://scenes/Main.tscn\")\n";
         cache.insert(path.to_string(), content.to_string());
     }
 
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     // AC1: preload of an unindexed `.tscn` still produces an import edge.
     assert!(
@@ -830,7 +850,11 @@ local function run()\n\treturn util.add(1, 2)\nend\n";
         cache.insert(path.to_string(), content.to_string());
     }
 
-    build_edges_cached(&mut index, &cache);
+    build_edges_cached(
+        &mut index,
+        &cache,
+        std::time::Instant::now() + std::time::Duration::from_mins(5),
+    );
 
     // Dotted `require` maps to a project file.
     assert!(
@@ -1107,7 +1131,11 @@ fn build_edges_cached_is_deterministic_across_runs() {
                 .insert(path.to_string(), fe(path, content, "rs"));
             cache.insert(path.to_string(), content.to_string());
         }
-        build_edges_cached(&mut index, &cache);
+        build_edges_cached(
+            &mut index,
+            &cache,
+            std::time::Instant::now() + std::time::Duration::from_mins(5),
+        );
         index.edges
     };
 

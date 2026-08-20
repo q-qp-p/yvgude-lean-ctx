@@ -8,6 +8,7 @@ use super::*;
 pub(crate) fn build_edges_cached(
     index: &mut ProjectIndex,
     content_cache: &HashMap<String, String>,
+    deadline: std::time::Instant,
 ) {
     // Co-change history is a single `git log` subprocess that is I/O bound on the
     // git object store, whereas the import/deep-analysis pass below is CPU bound.
@@ -16,13 +17,21 @@ pub(crate) fn build_edges_cached(
     // repo state, so overlapping it does not change the result (#934).
     let cochange_git = spawn_cochange_git(&index.project_root);
 
-    build_edges_with_cache(index, content_cache);
+    build_edges_with_cache(index, content_cache, deadline);
+    if std::time::Instant::now() > deadline {
+        tracing::warn!("[graph_index: edge-building deadline exceeded — skipping implicit edges]");
+        return;
+    }
     build_implicit_edges_with_cache(index, content_cache);
     build_cochange_edges(index, cochange_git);
     build_sibling_edges(index);
 }
 
-fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<String, String>) {
+fn build_edges_with_cache(
+    index: &mut ProjectIndex,
+    content_cache: &HashMap<String, String>,
+    deadline: std::time::Instant,
+) {
     index.edges.clear();
 
     if crate::core::memory_guard::abort_requested() {
@@ -75,6 +84,15 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
         if crate::core::memory_guard::is_under_pressure() {
             tracing::warn!(
                 "[graph_index: stopping edge-building after {files_done} files due to memory pressure]"
+            );
+            break;
+        }
+        // #1494: enforce scan-wide deadline so edge-building cannot spin
+        // indefinitely after the IO phase completes.
+        if std::time::Instant::now() > deadline {
+            tracing::warn!(
+                "[graph_index: edge-building deadline exceeded after {files_done}/{} files —                  saving partial edges]",
+                file_paths.len()
             );
             break;
         }
