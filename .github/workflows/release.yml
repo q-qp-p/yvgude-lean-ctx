@@ -1,6 +1,3 @@
-release.yml 568L cognitive
-// /Users/yvesgugger/Documents/Privat/Projects/lean-ctx/.github/workflows/release.yml
-§ config config (L1-L477)
 name: Release
 
 on:
@@ -297,9 +294,9 @@ jobs:
             release-manifest.json
 
   jetbrains-plugin:
+    # Build the JetBrains/IntelliJ plugin and attach it to the GitHub Release as a
     # Disabled: packages/jetbrains-lean-ctx archived (2026-08-20)
     if: false
-    # Build the JetBrains/IntelliJ plugin and attach it to the GitHub Release as a
     # downloadable .zip (#418). The plugin's own workflow only runs on plugin source
     # changes; the GITHUB_TOKEN-created release here does not trigger other workflows,
     # so the asset must be produced from inside this release pipeline. `-Pversion`
@@ -427,6 +424,21 @@ jobs:
 
       # pi-lean-ctx publish removed: package archived (2026-08-20)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   update-homebrew:
     name: Update Homebrew
     needs: release
@@ -466,7 +478,94 @@ jobs:
           cd homebrew-lean-ctx
 
           cat > Formula/lean-ctx.rb <<EOF
-§ type LeanCtx (L478-L478)
           class LeanCtx < Formula
-2/3 chunks shown (5318 tokens)
-[lean-ctx] full source: read "/Users/yvesgugger/Documents/Privat/Projects/lean-ctx/.github/workflows/release.yml" directly (no MCP)  ·  or ctx_read("/Users/yvesgugger/Documents/Privat/Projects/lean-ctx/.github/workflows/release.yml", mode="full")
+            desc "The Context Engineering Layer for AI Coding — 71 MCP tools, 10 read modes, 95+ shell patterns"
+            homepage "https://leanctx.com"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            # Semantic search (ctx_semantic_search / embeddings) loads
+            # libonnxruntime at runtime; the engine resolves it from the
+            # Homebrew prefix lib dir. Without this dependency the dylib is
+            # absent and ORT init fails. See issue #544.
+            depends_on "onnxruntime"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/yvgude/lean-ctx/releases/download/v${VERSION}/lean-ctx-aarch64-apple-darwin.tar.gz"
+                sha256 "${AARCH64_DARWIN_SHA}"
+              else
+                url "https://github.com/yvgude/lean-ctx/releases/download/v${VERSION}/lean-ctx-x86_64-apple-darwin.tar.gz"
+                sha256 "${X86_64_DARWIN_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/yvgude/lean-ctx/releases/download/v${VERSION}/lean-ctx-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${AARCH64_LINUX_SHA}"
+              else
+                url "https://github.com/yvgude/lean-ctx/releases/download/v${VERSION}/lean-ctx-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${X86_64_LINUX_SHA}"
+              end
+            end
+
+            def install
+              bin.install "lean-ctx"
+            end
+
+            test do
+              assert_match "lean-ctx ${VERSION}", shell_output("#{bin}/lean-ctx --version")
+            end
+          end
+          EOF
+          sed -i 's/^          //' Formula/lean-ctx.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/lean-ctx.rb
+          git diff --cached --quiet || git commit -m "lean-ctx ${VERSION}"
+          git push
+        env:
+          HOMEBREW_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
+
+  announce-twitter:
+    name: Announce on Twitter
+    needs: [release, publish-crates, publish-npm, update-homebrew]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-rc') }}
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Post release tweet
+        env:
+          TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
+          TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_SECRET: ${{ secrets.TWITTER_ACCESS_SECRET }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: node .github/scripts/post-release-tweet.mjs
+
+  announce-discord:
+    name: Announce on Discord
+    needs: [release, publish-crates, publish-npm, update-homebrew]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref_name, '-rc') }}
+    steps:
+      - name: Notify Discord via n8n webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          curl -fsSL -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"action\":\"published\",\"release\":{\"tag_name\":\"${RELEASE_TAG}\",\"html_url\":\"https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}\"}}"
+
+
