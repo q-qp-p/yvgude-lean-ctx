@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping, Optional
 
@@ -19,8 +20,26 @@ if TYPE_CHECKING:  # pragma: no cover
 
 @dataclass(frozen=True)
 class LeanCtxRun:
+    """Original agent output together with immutable Runtime evidence."""
+
     output: object
     receipt: ExecutionReceipt
+    metrics: "RunMetrics"
+
+
+@dataclass(frozen=True)
+class RunMetrics:
+    """Proxy-observed telemetry for one completed wrapped-agent run.
+
+    Unknown provider usage remains ``None``.  ``tool_calls`` counts only calls
+    recorded through the bound LeanCTX transport, never inferred agent work.
+    """
+
+    input_tokens: Optional[int]
+    output_tokens: Optional[int]
+    cached_tokens: Optional[int]
+    tool_calls: int
+    elapsed_ms: int
 
 
 class RunTransport:
@@ -164,60 +183,115 @@ class WrappedAgent:
         self._kit = kit
         self._profile = selected_profile
         self._agent_id = ctx._agent_id_for(agent)
+        self._last_metrics: Optional[RunMetrics] = None
 
-    def _degraded_pre_execution_run(self, session: ContextSession, task: str) -> LeanCtxRun:
-        session.add_degradation("proxy_session_unavailable")
-        output = self._adapter.invoke_unbound(task)
-        return LeanCtxRun(output=output, receipt=session.incomplete_receipt())
+    @property
+    def metrics(self) -> Optional[RunMetrics]:
+        """Return telemetry for this wrapper's most recently completed run."""
+        return self._last_metrics
+
+    @property
+    def input_tokens(self) -> Optional[int]:
+        """Return input tokens observed for the most recent run."""
+        return None if self._last_metrics is None else self._last_metrics.input_tokens
+
+    @property
+    def output_tokens(self) -> Optional[int]:
+        """Return output tokens observed for the most recent run."""
+        return None if self._last_metrics is None else self._last_metrics.output_tokens
+
+    @property
+    def cached_tokens(self) -> Optional[int]:
+        """Return cached tokens observed for the most recent run."""
+        return None if self._last_metrics is None else self._last_metrics.cached_tokens
+
+    @property
+    def tool_calls(self) -> int:
+        """Return bound LeanCTX transport calls recorded for the latest run."""
+        return 0 if self._last_metrics is None else self._last_metrics.tool_calls
+
+    @property
+    def elapsed_ms(self) -> Optional[int]:
+        """Return wall-clock duration of the most recent run in milliseconds."""
+        return None if self._last_metrics is None else self._last_metrics.elapsed_ms
+
+    @staticmethod
+    def _usage_total(observations: tuple[ProxyObservation, ...], field_name: str) -> Optional[int]:
+        if not observations:
+            return None
+        values = [observation.usage.get(field_name) for observation in observations]
+        if any(value is None for value in values):
+            return None
+        return sum(value for value in values if value is not None)
+
+    def _record_metrics(self, session: ContextSession, started_ns: int) -> RunMetrics:
+        observations = tuple(session._observations)
+        elapsed_ms = max(0, (time.perf_counter_ns() - started_ns) // 1_000_000)
+        metrics = RunMetrics(
+            input_tokens=self._usage_total(observations, "input_tokens"),
+            output_tokens=self._usage_total(observations, "output_tokens"),
+            cached_tokens=self._usage_total(observations, "cached_tokens"),
+            tool_calls=len(observations),
+            elapsed_ms=elapsed_ms,
+        )
+        self._last_metrics = metrics
+        return metrics
 
     def run(self, task) -> LeanCtxRun:
+        """Run the wrapped agent once through a fresh LeanCTX Runtime session."""
         task_text = ContextSession.validate_task(task)
         session = self._ctx.session()
         session._set_agent_id(self._agent_id)
+        started_ns = time.perf_counter_ns()
         try:
-            resolved_kit = None if self._kit is None else self._ctx.load_kit(self._kit)
-            session._begin(task_text, resolved_kit, self._profile)
-        except (LeanCtxConnectionError, LeanCtxAuthError):
-            if self._ctx.config.fail_open:
-                return self._degraded_pre_execution_run(session, task_text)
-            raise
-
-        token = session._bind_current()
-        reset = None
-        agent_error: Optional[BaseException] = None
-        try:
-            transport = RunTransport(self._ctx._proxy, session.proxy_headers(), session)
-            reset = self._adapter.configure(transport)
-            output = self._adapter.invoke(task_text, transport)
-            if not session._observations:
-                session.add_degradation(
-                    "provider_transport_not_bound"
-                    if isinstance(self._adapter, _RunOnlyAdapter)
-                    else "proxy_response_not_observed"
-                )
-        except BaseException as exc:
-            agent_error = exc
             try:
-                session.abort(exc)
-            except Exception:
-                # The original agent exception remains authoritative.
-                pass
-            raise
-        finally:
-            try:
-                if reset is not None:
-                    reset()
-            except Exception:
-                if agent_error is None:
+                resolved_kit = None if self._kit is None else self._ctx.load_kit(self._kit)
+                session._begin(task_text, resolved_kit, self._profile)
+            except (LeanCtxConnectionError, LeanCtxAuthError):
+                if not self._ctx.config.fail_open:
                     raise
-            finally:
-                session._reset_current(token)
+                session.add_degradation("proxy_session_unavailable")
+                output = self._adapter.invoke_unbound(task_text)
+                receipt = session.incomplete_receipt()
+            else:
+                token = session._bind_current()
+                reset = None
+                agent_error: Optional[BaseException] = None
+                try:
+                    transport = RunTransport(self._ctx._proxy, session.proxy_headers(), session)
+                    reset = self._adapter.configure(transport)
+                    output = self._adapter.invoke(task_text, transport)
+                    if not session._observations:
+                        session.add_degradation(
+                            "provider_transport_not_bound"
+                            if isinstance(self._adapter, _RunOnlyAdapter)
+                            else "proxy_response_not_observed"
+                        )
+                except BaseException as exc:
+                    agent_error = exc
+                    try:
+                        session.abort(exc)
+                    except Exception:
+                        # The original agent exception remains authoritative.
+                        pass
+                    raise
+                finally:
+                    try:
+                        if reset is not None:
+                            reset()
+                    except Exception:
+                        if agent_error is None:
+                            raise
+                    finally:
+                        session._reset_current(token)
 
-        try:
-            receipt = session.complete(output)
-        except (LeanCtxConnectionError, LeanCtxAuthError):
-            if not self._ctx.config.fail_open:
-                raise
-            session.add_degradation("receipt_sealing_failed")
-            receipt = session.incomplete_receipt()
-        return LeanCtxRun(output=output, receipt=receipt)
+                try:
+                    receipt = session.complete(output)
+                except (LeanCtxConnectionError, LeanCtxAuthError):
+                    if not self._ctx.config.fail_open:
+                        raise
+                    session.add_degradation("receipt_sealing_failed")
+                    receipt = session.incomplete_receipt()
+        finally:
+            metrics = self._record_metrics(session, started_ns)
+        return LeanCtxRun(output=output, receipt=receipt, metrics=metrics)

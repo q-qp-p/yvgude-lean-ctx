@@ -27,9 +27,32 @@ def test_context_aware_agent_records_bound_response(v1_proxy):
             assert leanctx.headers["X-LeanCTX-Protocol"] == "1"
             return leanctx.compress([{"role": "user", "content": "long text body"}]).messages
 
-    run = LeanCTX({"proxy_url": base_url}).wrap(Agent()).run("Review")
+    wrapped = LeanCTX({"proxy_url": base_url}).wrap(Agent())
+    run = wrapped.run("Review")
     assert run.output == [{"role": "user", "content": "long tex"}]
     assert run.receipt.coverage == "compressed"
+    assert run.metrics.input_tokens == wrapped.input_tokens == 20
+    assert run.metrics.output_tokens == wrapped.output_tokens == 5
+    assert run.metrics.cached_tokens is None
+    assert run.metrics.tool_calls == wrapped.tool_calls == 1
+    assert run.metrics.elapsed_ms >= 0
+    assert wrapped.elapsed_ms == run.metrics.elapsed_ms
+
+
+def test_runtime_receipt_preserves_baseline_treatment_cost_comparison(v1_proxy):
+    state, base_url = v1_proxy
+    state.baseline_cost_micros = 1200
+    state.treatment_cost_micros = 450
+
+    class Agent:
+        def run(self, task):
+            return task
+
+    receipt = LeanCTX({"proxy_url": base_url}).wrap(Agent()).run("Review").receipt
+    assert receipt.savings.methodology == "baseline_treatment"
+    assert receipt.savings.baseline_cost_micros == 1200
+    assert receipt.savings.treatment_cost_micros == 450
+    assert receipt.savings.avoided_cost_micros == 750
 
 
 def test_proxy_bound_reset_runs_after_error(v1_proxy):

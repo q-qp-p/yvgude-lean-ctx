@@ -27,6 +27,8 @@ class _RuntimeState:
         self.profile_mismatch = False
         self.kit_mismatch = False
         self.kit_hash = "a" * 64
+        self.baseline_cost_micros = None
+        self.treatment_cost_micros = None
 
     @staticmethod
     def profile():
@@ -69,9 +71,24 @@ class _RuntimeState:
                 "provider_cached_tokens": None,
                 "provider_output_tokens": None,
                 "reasoning_tokens": None,
-                "methodology": "compression_observation",
-                "baseline_ref": None,
+                "methodology": (
+                    "baseline_treatment"
+                    if self.baseline_cost_micros is not None and self.treatment_cost_micros is not None
+                    else "compression_observation"
+                ),
+                "baseline_ref": (
+                    "baseline-v1"
+                    if self.baseline_cost_micros is not None and self.treatment_cost_micros is not None
+                    else None
+                ),
                 "quality_status": "unknown",
+                "baseline_cost_micros": self.baseline_cost_micros,
+                "treatment_cost_micros": self.treatment_cost_micros,
+                "avoided_cost_micros": (
+                    max(0, self.baseline_cost_micros - self.treatment_cost_micros)
+                    if self.baseline_cost_micros is not None and self.treatment_cost_micros is not None
+                    else None
+                ),
             },
         }
         canonical = _canonical(receipt)

@@ -29,6 +29,7 @@ _CONFIG_KEYS = {
 }
 _DEPTHS = {"attach", "wrap", "embed"}
 _KIT_CACHE_LIMIT = 128
+_DEFAULT_WRAP_PROXY_URL = "http://localhost:8077"
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,10 @@ class LeanCTX:
     def __init__(self, config=None) -> None:
         self.config = _normalize_config(config)
         self._proxy = ProxyClient(
-            base_url=self.config.proxy_url,
+            # The wrapping flow targets the local Runtime proxy by default.
+            # ``ProxyClient`` itself retains discovery for the compatibility
+            # compression API; an explicit SDK configuration always wins here.
+            base_url=self.config.proxy_url or _DEFAULT_WRAP_PROXY_URL,
             token=self.config.proxy_token,
             timeout=float(self.config.timeout),
         )

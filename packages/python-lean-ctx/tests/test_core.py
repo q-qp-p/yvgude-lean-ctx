@@ -11,6 +11,10 @@ def test_construction_is_local_and_mapping_normalizes(v1_proxy):
     assert state.requests == []
 
 
+def test_wrapper_defaults_to_the_local_proxy():
+    assert LeanCTX()._proxy.base_url == "http://localhost:8077"
+
+
 def test_invalid_config_rejected_locally():
     with pytest.raises(ValueError):
         LeanCTX({"unknown": True})

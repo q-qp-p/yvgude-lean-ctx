@@ -84,6 +84,9 @@ class SavingsInfo:
     methodology: str
     baseline_ref: Optional[str]
     quality_status: Optional[str]
+    baseline_cost_micros: Optional[int]
+    treatment_cost_micros: Optional[int]
+    avoided_cost_micros: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -210,7 +213,21 @@ def _canonical_payload(source: Mapping[str, object]) -> Tuple[bytes, Mapping[str
     return _canonical(unsigned), decoded
 
 
-def _savings(value: object) -> SavingsInfo:
+def _runtime_token(
+    savings: Mapping[str, object],
+    source: Mapping[str, object],
+    field_name: str,
+    *fallback_names: str,
+) -> Optional[int]:
+    """Return a Runtime-issued token or cost value without deriving it locally."""
+    for mapping in (savings, source):
+        for name in (field_name, *fallback_names):
+            if name in mapping:
+                return _token(mapping[name], field_name)
+    return None
+
+
+def _savings(value: object, *, source: Mapping[str, object]) -> SavingsInfo:
     if not isinstance(value, Mapping):
         raise LeanCtxError("receipt savings must be an object")
     original = _token(value.get("original_tokens"), "original_tokens")
@@ -231,6 +248,13 @@ def _savings(value: object) -> SavingsInfo:
         saved_pct = float(saved_pct_value)
         if not math.isfinite(saved_pct):
             raise LeanCtxError("invalid receipt saved_pct")
+    # Cost evidence belongs to the Runtime receipt.  In particular, do not
+    # infer a baseline or treatment cost from token headers in this client.
+    baseline_cost = _runtime_token(value, source, "baseline_cost_micros")
+    treatment_cost = _runtime_token(
+        value, source, "treatment_cost_micros", "actual_cost_micros"
+    )
+    avoided_cost = _runtime_token(value, source, "avoided_cost_micros")
     return SavingsInfo(
         original_tokens=original,
         delivered_tokens=delivered,
@@ -243,6 +267,9 @@ def _savings(value: object) -> SavingsInfo:
         methodology=methodology,
         baseline_ref=_optional_string(value.get("baseline_ref"), "baseline_ref"),
         quality_status=_optional_string(value.get("quality_status"), "quality_status"),
+        baseline_cost_micros=baseline_cost,
+        treatment_cost_micros=treatment_cost,
+        avoided_cost_micros=avoided_cost,
     )
 
 
@@ -316,7 +343,7 @@ def parse_execution_receipt(
         integrity_status=integrity_status,
         outcome=outcome,
         degradations=tuple(degradations),
-        _savings=_savings(savings_value),
+        _savings=_savings(savings_value, source=source),
         _canonical_json=canonical_json,
         _verify_url=verify_url.rstrip("/") if verify_url else None,
     )
@@ -374,6 +401,9 @@ def make_unsealed_receipt(
             methodology="unavailable",
             baseline_ref=None,
             quality_status=None,
+            baseline_cost_micros=None,
+            treatment_cost_micros=None,
+            avoided_cost_micros=None,
         ),
         _canonical_json=b"",
         _verify_url=None,
