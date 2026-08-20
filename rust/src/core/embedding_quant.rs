@@ -80,6 +80,7 @@ pub(crate) fn quantize(v: &[f32]) -> QuantizedVector {
 /// vector. For L2-normalized inputs this approximates cosine similarity; the
 /// quantization error is well within embedding-ranking tolerance.
 #[must_use]
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub(crate) fn dot_quant(query: &[f32], doc: &QuantizedVector) -> f32 {
     debug_assert_eq!(query.len(), doc.code.len(), "dim mismatch");
     if doc.scale == 0.0 {
@@ -110,6 +111,7 @@ pub(crate) fn dot_quant(query: &[f32], doc: &QuantizedVector) -> f32 {
 /// non-associative) but far within similarity tolerance, and materially faster
 /// on the 384-dim vectors used for semantic recall.
 #[must_use]
+#[allow(unknown_lints, clippy::chunks_exact_to_as_chunks)]
 pub(crate) fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len(), "dim mismatch");
 

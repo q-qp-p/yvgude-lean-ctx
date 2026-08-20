@@ -420,14 +420,12 @@ pub fn optimize_response(request: &ResponseOptimizationRequest) -> OptimizationD
 }
 
 fn record_response_measurement(request: &ResponseOptimizationRequest, delivered_tokens: u64) {
-    let ledger_disabled = std::env::var("LEAN_CTX_SAVINGS_LEDGER")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "off" | "0" | "false" | "no"
-            )
-        });
+    let ledger_disabled = std::env::var("LEAN_CTX_SAVINGS_LEDGER").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        )
+    });
     if request.original_tokens <= delivered_tokens || ledger_disabled {
         return;
     }

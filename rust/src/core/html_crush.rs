@@ -797,7 +797,7 @@ fn collapse_tracking_parameters(href: &str) -> String {
     };
     let (query, fragment) = query_and_fragment
         .split_once('#')
-        .map_or((query_and_fragment, ""), |parts| parts);
+        .unwrap_or((query_and_fragment, ""));
     let kept: Vec<&str> = query
         .split('&')
         .filter(|part| {

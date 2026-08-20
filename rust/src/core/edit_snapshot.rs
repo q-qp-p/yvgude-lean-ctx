@@ -174,8 +174,7 @@ pub(crate) fn get_for_path(path: &str) -> Option<EditSnapshot> {
 pub(crate) fn validate(path: &str, digest: &str) -> bool {
     global()
         .lock()
-        .ok()
-        .is_some_and(|s| s.validate_inner(path, digest))
+        .is_ok_and(|s| s.validate_inner(path, digest))
 }
 
 /// Remove snapshot for a path (called after a full read clears lossy state).

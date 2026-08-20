@@ -76,8 +76,7 @@ impl BudgetTracker {
             return None;
         }
         if std::env::var("LEAN_CTX_COST_CAP_OVERRIDE")
-            .ok()
-            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         {
             return None;
         }
