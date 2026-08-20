@@ -102,3 +102,62 @@ def test_fail_closed_rejects_run_only(v1_proxy):
 
     with pytest.raises(LeanCtxError):
         LeanCTX({"proxy_url": base_url, "fail_open": False}).wrap(Agent())
+
+def test_run_only_receives_unchanged_task_argument(v1_proxy):
+    _, base_url = v1_proxy
+    task = "Review payments"
+
+    class Agent:
+        def run(self, received):
+            assert received is task
+            return received
+
+    run = LeanCTX({"proxy_url": base_url}).wrap(Agent()).run(task)
+    assert run.output is task
+
+
+def test_run_only_receipt_coverage_is_not_addressable(v1_proxy):
+    _, base_url = v1_proxy
+
+    class Agent:
+        def run(self, task):
+            return task
+
+    run = LeanCTX({"proxy_url": base_url}).wrap(Agent()).run("Review")
+    assert run.receipt.coverage == "not_addressable"
+
+
+def test_fail_open_returns_unsealed_when_session_unavailable(v1_proxy):
+    state, base_url = v1_proxy
+    state.session_unavailable = True
+
+    class Agent:
+        def run(self, task):
+            return {"done": task}
+
+    run = LeanCTX({"proxy_url": base_url, "fail_open": True}).wrap(Agent()).run("Review")
+    assert run.output == {"done": "Review"}
+    assert run.receipt.integrity_status == "unsealed"
+    assert "proxy_session_unavailable" in run.receipt.degradations
+    assert run.receipt.verify() is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"kit": 123},
+        {"kit": ""},
+        {"profile": ""},
+        {"profile": 42},
+    ],
+)
+def test_wrap_validates_kit_and_profile_arguments(v1_proxy, kwargs):
+    _, base_url = v1_proxy
+
+    class Agent:
+        def run(self, task):
+            return task
+
+    with pytest.raises(ValueError):
+        LeanCTX({"proxy_url": base_url}).wrap(Agent(), **kwargs)
+

@@ -26,6 +26,10 @@ class _RuntimeState:
         self.verification_false = False
         self.profile_mismatch = False
         self.kit_mismatch = False
+        self.session_unavailable = False
+        self.kit_unavailable = False
+        self.kit_missing_identity = False
+        self.verification_hash_mismatch = False
         self.kit_hash = "a" * 64
         self.baseline_cost_micros = None
         self.treatment_cost_micros = None
@@ -133,12 +137,32 @@ class _RuntimeHandler(BaseHTTPRequestHandler):
         self._request(body)
         state = self._state()
         if self.path == "/v1/sessions":
+            if state.session_unavailable:
+                self._json(503, {"error": "session unavailable"})
+                return
             profile = state.profile()
             if state.profile_mismatch:
                 profile = {**profile, "content_hash": "d" * 64}
             kits = body.get("requested_kits", [])
+            if kits:
+                enriched = []
+                for item in kits:
+                    kit_item = dict(item)
+                    if "manifest" not in kit_item:
+                        kit_item["manifest"] = {
+                            "id": kit_item["id"],
+                            "version": kit_item["version"],
+                            "package_hash": kit_item["package_hash"],
+                        }
+                    enriched.append(kit_item)
+                kits = enriched
             if state.kit_mismatch and kits:
-                kits = [{**kits[0], "package_hash": "e" * 64}]
+                mismatched = {**kits[0], "package_hash": "e" * 64}
+                mismatched["manifest"] = {
+                    **kits[0]["manifest"],
+                    "package_hash": "e" * 64,
+                }
+                kits = [mismatched]
             reply = {
                 "session_id": "session-v1",
                 "task_id": "task-v1",
@@ -206,7 +230,13 @@ class _RuntimeHandler(BaseHTTPRequestHandler):
         self._request({})
         state = self._state()
         if self.path.startswith("/v1/kits/"):
+            if state.kit_unavailable:
+                self._json(503, {"error": "kit unavailable"})
+                return
             name = urllib.parse.unquote(self.path.rsplit("/", 1)[-1])
+            if state.kit_missing_identity:
+                self._json(200, {"id": "kit-incomplete"})
+                return
             self._json(
                 200,
                 {
@@ -224,11 +254,14 @@ class _RuntimeHandler(BaseHTTPRequestHandler):
             if receipt is None:
                 self._json(404, {"error": "not found"})
                 return
+            canonical_hash = receipt["canonical_hash"]
+            if state.verification_hash_mismatch:
+                canonical_hash = "sha256:" + "f" * 64
             self._json(
                 200,
                 {
                     "receipt_id": receipt_id,
-                    "canonical_hash": receipt["canonical_hash"],
+                    "canonical_hash": canonical_hash,
                     "verified": not state.verification_false,
                 },
             )
