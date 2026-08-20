@@ -4,7 +4,7 @@ Python SDK for [lean-ctx](https://github.com/yvgude/lean-ctx) — context compre
 
 [![PyPI](https://img.shields.io/pypi/v/lean-ctx-sdk)](https://pypi.org/project/lean-ctx-sdk/)
 [![Python](https://img.shields.io/pypi/pyversions/lean-ctx-sdk)](https://pypi.org/project/lean-ctx-sdk/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Requires Python 3.9+. Zero runtime dependencies.
 
