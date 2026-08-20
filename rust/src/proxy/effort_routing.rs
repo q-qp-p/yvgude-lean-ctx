@@ -326,14 +326,36 @@ pub fn route_effort_budget(body: &mut Value) -> TaskComplexity {
     apply_effort_budget(body, complexity)
 }
 
-/// Checks whether an Anthropic model supports extended thinking.
-/// Models like sonnet-5 do not support the thinking parameter.
+/// Whether an Anthropic model accepts the `thinking` parameter with a fixed
+/// `budget_tokens`, the form this module injects.
+///
+/// The list is deliberately narrow and fails **closed**: unknown models get no
+/// injection rather than risk a 400 from a model whose capabilities we guessed
+/// wrong. Ineligible families:
+/// - `claude-3-opus`/`claude-3-sonnet`/`claude-3-haiku`/`claude-3-5-haiku` have
+///   no extended thinking at all.
+/// - Opus/Sonnet 4.6+ and the 5-generation models reject `budget_tokens` (400);
+///   they take `thinking: {type: "adaptive"}` plus `output_config.effort`.
 fn anthropic_supports_thinking(model: &str) -> bool {
     let bare = model.rsplit('/').next().unwrap_or(model);
-    bare.starts_with("claude-3")
-        || bare.starts_with("claude-opus-4")
-        || bare.starts_with("claude-sonnet-4")
-        || bare.starts_with("claude-haiku-4")
+    let budget_token_families = [
+        "claude-3-5-sonnet",
+        "claude-3-7-sonnet",
+        "claude-3.5-sonnet",
+        "claude-3.7-sonnet",
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "claude-haiku-4-5",
+        "claude-4-5",           // alias form (claude-4-5-sonnet / -haiku)
+        "claude-sonnet-4-2025", // dated snapshot (claude-sonnet-4-20250514)
+        "claude-opus-4-2025",   // dated snapshot (claude-opus-4-20250514)
+    ];
+    budget_token_families
+        .iter()
+        .any(|family| bare.starts_with(family))
+        // Bare launch-model ids that predate the 4.6+ adaptive-only era.
+        || bare == "claude-sonnet-4"
+        || bare == "claude-opus-4"
 }
 
 /// Calculates complexity for a request and applies its provider-native effort budget.
@@ -434,14 +456,21 @@ mod output_token_intelligence_tests {
         let mut body = json!({"model": "claude-sonnet-5", "max_tokens": 4096, "messages": []});
         let task = apply_effort_budget(&mut body, 4);
         assert_eq!(task.budget_tokens, 8_192);
-        assert!(body.get("thinking").is_none(), "sonnet-5 must not get thinking params");
+        assert!(
+            body.get("thinking").is_none(),
+            "sonnet-5 must not get thinking params"
+        );
     }
 
     #[test]
     fn skips_thinking_for_openrouter_wrapped_unsupported() {
-        let mut body = json!({"model": "anthropic/claude-sonnet-5", "max_tokens": 4096, "messages": []});
+        let mut body =
+            json!({"model": "anthropic/claude-sonnet-5", "max_tokens": 4096, "messages": []});
         apply_effort_budget(&mut body, 4);
-        assert!(body.get("thinking").is_none(), "openrouter-wrapped sonnet-5 must not get thinking");
+        assert!(
+            body.get("thinking").is_none(),
+            "openrouter-wrapped sonnet-5 must not get thinking"
+        );
     }
 
     #[test]
@@ -452,8 +481,76 @@ mod output_token_intelligence_tests {
             "messages": []
         });
         apply_effort_budget(&mut body, 4);
-        assert_eq!(body["thinking"]["type"], "adaptive", "must not overwrite client thinking");
-        assert!(body["thinking"].get("budget_tokens").is_none(), "must not inject budget_tokens");
+        assert_eq!(
+            body["thinking"]["type"], "adaptive",
+            "must not overwrite client thinking"
+        );
+        assert!(
+            body["thinking"].get("budget_tokens").is_none(),
+            "must not inject budget_tokens"
+        );
+    }
+
+    #[test]
+    fn skips_thinking_for_adaptive_only_models() {
+        // Opus/Sonnet 4.6+ and the 5-generation reject `budget_tokens` with a
+        // 400 — never inject, even though these models do support thinking.
+        for model in [
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+            "claude-opus-5",
+            "claude-fable-5",
+        ] {
+            let mut body = json!({"model": model, "max_tokens": 4096, "messages": []});
+            apply_effort_budget(&mut body, 4);
+            assert!(
+                body.get("thinking").is_none(),
+                "{model} must not get thinking params"
+            );
+        }
+    }
+
+    #[test]
+    fn skips_thinking_for_thinkingless_claude3() {
+        // The 2024 claude-3 series has no extended thinking at all.
+        for model in [
+            "claude-3-opus-20240229",
+            "claude-3-sonnet-20240229",
+            "claude-3-haiku-20240307",
+            "claude-3-5-haiku",
+        ] {
+            let mut body = json!({"model": model, "max_tokens": 4096, "messages": []});
+            apply_effort_budget(&mut body, 4);
+            assert!(
+                body.get("thinking").is_none(),
+                "{model} must not get thinking params"
+            );
+        }
+    }
+
+    #[test]
+    fn applies_thinking_to_budget_token_era() {
+        // claude-3-5/3-7 sonnet and the 4-5 era still accept budget_tokens.
+        for model in [
+            "claude-3-5-sonnet",
+            "claude-3-7-sonnet",
+            "anthropic/claude-3.5-sonnet",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+        ] {
+            let mut body = json!({"model": model, "max_tokens": 4096, "messages": []});
+            apply_effort_budget(&mut body, 4);
+            assert_eq!(
+                body["thinking"]["budget_tokens"], 8_192,
+                "{model} must get a thinking budget"
+            );
+        }
     }
 
     #[test]
