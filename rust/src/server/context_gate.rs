@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn no_model_installed_means_passthrough() {
-        use crate::core::triage::{rules::RuleTriageBackend, TaskAnalysisInput, TaskAnalyzer};
+        use crate::core::triage::{TaskAnalysisInput, TaskAnalyzer, rules::RuleTriageBackend};
 
         let profile = RuleTriageBackend
             .analyze(&TaskAnalysisInput::default())
