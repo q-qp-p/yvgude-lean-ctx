@@ -523,13 +523,19 @@ fn try_load_graph(project_root: &str) -> Option<crate::core::graph_provider::Ope
 
 /// Determines the output-filtering aggressiveness from a task profile.
 pub fn triage_filter_level(profile: &crate::core::triage::profile::TaskProfileLocal) -> u8 {
-    if profile.confidence_milli < 300 {
-        0
-    } else if profile.context_need_milli < 300 {
-        2
-    } else {
-        u8::from(profile.context_need_milli < 600)
+    use crate::core::triage::confidence::ACTIONABLE_FLOOR_MILLI;
+    // An unset context need means "unknown", never "needs no context".
+    if profile.confidence_milli < ACTIONABLE_FLOOR_MILLI || profile.context_need_milli == 0 {
+        return 0;
     }
+    // Level 2 removes declarations and leaves output that parses but no longer
+    // means what it says (#1484). Nothing in a rules-derived profile is precise
+    // enough to justify that: `confidence_milli` measures how sure the intent
+    // classification is, not how much information loss the output tolerates.
+    // The level stays reachable through `apply_triage_filter` for callers that
+    // ask for it, and should return here again only once a model backend can
+    // supply the prediction.
+    u8::from(profile.context_need_milli < 600)
 }
 
 /// Filters output according to the task profile and selected triage level.
@@ -1148,14 +1154,29 @@ mod tests {
 
     #[test]
     fn triage_filter_level_selects_expected_level() {
-        for (confidence, context_need, expected) in
-            [(200, 200, 0), (500, 200, 2), (500, 450, 1), (500, 700, 0)]
-        {
+        for (confidence, context_need, expected) in [
+            (200, 200, 0),
+            (500, 200, 1),
+            (500, 450, 1),
+            (500, 700, 0),
+            (500, 0, 0),
+        ] {
             assert_eq!(
                 triage_filter_level(&test_profile(confidence, context_need)),
                 expected
             );
         }
+    }
+
+    #[test]
+    fn no_model_installed_means_passthrough() {
+        use crate::core::triage::{rules::RuleTriageBackend, TaskAnalysisInput, TaskAnalyzer};
+
+        let profile = RuleTriageBackend
+            .analyze(&TaskAnalysisInput::default())
+            .unwrap()
+            .profile;
+        assert_eq!(triage_filter_level(&profile), 0);
     }
 
     #[test]
