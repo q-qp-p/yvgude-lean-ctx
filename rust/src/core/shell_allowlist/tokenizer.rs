@@ -272,6 +272,62 @@ pub(super) fn extract_base_from_segment(segment: &str) -> String {
         .to_string()
 }
 
+/// #1488: detect whether a segment is a shell function definition.
+/// Pattern: `NAME() {` or `function NAME {` or `function NAME() {`.
+/// Returns the function name if it is a definition, `None` otherwise.
+pub(super) fn detect_function_def(segment: &str) -> Option<String> {
+    let cmd_part = skip_env_assignments(segment.trim());
+    if cmd_part.is_empty() {
+        return None;
+    }
+    let tokens = shell_tokenize(cmd_part);
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    // Form 1: NAME() { ... }
+    if tokens[0].ends_with("()") && tokens.get(1).map(String::as_str) == Some("{") {
+        let name = tokens[0].trim_end_matches("()");
+        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Some(name.to_string());
+        }
+    }
+
+    // Form 2: function NAME { ... } or function NAME() { ... }
+    if tokens[0] == "function" && tokens.len() >= 3 {
+        let name_tok = &tokens[1];
+        let name = name_tok.trim_end_matches("()");
+        if tokens.get(2).map(String::as_str) == Some("{")
+            && !name.is_empty()
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        {
+            return Some(name.to_string());
+        }
+    }
+
+    None
+}
+
+/// #1488: extract the body commands from a function definition segment.
+/// Given `greet() { echo hi; echo bye; }`, returns `["echo hi", "echo bye"]`.
+pub(super) fn extract_function_body_commands(segment: &str) -> Vec<String> {
+    let trimmed = segment.trim();
+    // Find the opening `{` and closing `}`
+    let Some(open) = trimmed.find('{') else {
+        return vec![];
+    };
+    let Some(close) = trimmed.rfind('}').filter(|&i| i > open) else {
+        return vec![];
+    };
+    let body = &trimmed[open + 1..close];
+    // Split the body on `;` (simple split — nested braces are rare in
+    // single-line function defs, and the allowlist already handles segments).
+    body.split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Shell builtins that legitimately export or mutate environment variables.
 /// A segment beginning with one of these (`export PATH=…`, `readonly FOO=bar`)
 /// is not a bare inline `PATH=… cmd` hijack — skip the builtin and any

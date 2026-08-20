@@ -148,10 +148,61 @@ pub(super) fn apply_line_window(
 /// `mode`. When `raw` is unset, the caller's `mode` (if any) passes through
 /// unchanged. The caller separately forces `fresh=true` for raw so a re-read
 /// never collapses to an `[unchanged]`/auto-delta stub.
+///
+/// #1490: when the caller specified both `raw=true` and a `lines:N-M` /
+/// `anchored:N-M` range, preserve the range — the agent explicitly chose a
+/// window and `raw` means "lossless" not "ignore my selector". The triage
+/// bypass already fires for both `raw=true` and pinned modes, so the content
+/// is returned verbatim within the requested window.
 pub(super) fn resolve_raw_alias(arg_raw: bool, mode_arg: Option<String>) -> Option<String> {
     if arg_raw {
+        if let Some(ref m) = mode_arg {
+            if m.starts_with("lines:") || m.starts_with("anchored:") {
+                return mode_arg;
+            }
+        }
         Some("raw".to_string())
     } else {
         mode_arg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #1490: raw=true must NOT override an explicit lines: or anchored: mode.
+    #[test]
+    fn gh1490_raw_preserves_lines_mode() {
+        assert_eq!(
+            resolve_raw_alias(true, Some("lines:90-100".into())),
+            Some("lines:90-100".into()),
+        );
+        assert_eq!(
+            resolve_raw_alias(true, Some("anchored:5-10".into())),
+            Some("anchored:5-10".into()),
+        );
+    }
+
+    #[test]
+    fn gh1490_raw_still_works_without_range() {
+        assert_eq!(resolve_raw_alias(true, None), Some("raw".into()));
+        assert_eq!(
+            resolve_raw_alias(true, Some("full".into())),
+            Some("raw".into()),
+        );
+        assert_eq!(
+            resolve_raw_alias(true, Some("map".into())),
+            Some("raw".into()),
+        );
+    }
+
+    #[test]
+    fn raw_false_passes_through_mode() {
+        assert_eq!(resolve_raw_alias(false, None), None);
+        assert_eq!(
+            resolve_raw_alias(false, Some("lines:5-10".into())),
+            Some("lines:5-10".into()),
+        );
     }
 }

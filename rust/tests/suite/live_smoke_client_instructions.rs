@@ -239,7 +239,8 @@ fn cursor_covered_client_gets_anchor_and_lazy_core() {
     let core: Vec<String> = lean_ctx::tool_defs::CORE_TOOL_NAMES
         .iter()
         .filter(|&&s| s != "ctx_patch")
-        .map(|s| s.to_string())
+        .copied()
+        .map(ToString::to_string)
         .collect();
     for tool in &core {
         assert!(
@@ -317,7 +318,8 @@ fn codex_covered_client_gets_anchor() {
     // now get the full core tool surface, not just ctx_call.
     let core: Vec<String> = lean_ctx::tool_defs::CORE_TOOL_NAMES
         .iter()
-        .map(|s| s.to_string())
+        .copied()
+        .map(ToString::to_string)
         .collect();
     for tool in &core {
         assert!(

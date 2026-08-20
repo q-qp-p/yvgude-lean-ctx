@@ -80,7 +80,7 @@ pub enum Permission {
 /// Serialize semantic versions as their canonical string representation without
 /// requiring the optional `semver` serde feature in the workspace dependency.
 mod version_serde {
-    use super::*;
+    use super::{Deserialize, Deserializer, Serializer, Version};
 
     pub(super) fn serialize<S>(version: &Version, serializer: S) -> Result<S::Ok, S::Error>
     where

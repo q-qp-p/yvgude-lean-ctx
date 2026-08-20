@@ -60,8 +60,12 @@ fn deduplicate_tool_results(
         .collect::<HashMap<_, _>>();
     let mut misses = Vec::new();
     let mut tokens_saved = 0;
+    let cached_prefix = crate::proxy::history_prune::cached_prefix_len(messages);
 
-    for message in messages {
+    for (index, message) in messages.iter_mut().enumerate() {
+        if index < cached_prefix {
+            continue;
+        }
         let Some(blocks) = message
             .get_mut("content")
             .and_then(|content| content.as_array_mut())

@@ -64,13 +64,15 @@ pub(in crate::server) async fn dispatch_and_post_process(
     };
     // #1484: respect lossless escape hatches — never triage when the caller
     // explicitly requested unfiltered output (raw, aggressiveness=0, fresh=true).
+    // #1490: an explicit lines:N-M / anchored:N-M window is already an
+    // agent-chosen minimal selection — triage has nothing useful to strip.
     let triage_bypass = args.is_some_and(|a| {
         a.get("raw")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
-            || a.get("mode")
-                .and_then(|v| v.as_str())
-                .is_some_and(|m| m == "raw")
+            || a.get("mode").and_then(|v| v.as_str()).is_some_and(|m| {
+                m == "raw" || m.starts_with("lines:") || m.starts_with("anchored:") || m == "diff"
+            })
             || a.get("aggressiveness")
                 .and_then(serde_json::Value::as_f64)
                 .is_some_and(|v| v == 0.0)

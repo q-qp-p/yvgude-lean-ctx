@@ -439,9 +439,20 @@ fn check_inline_env_block(segment: &str) -> Result<(), ShellError> {
     let trimmed = segment.trim();
     for blocked in BLOCKED_INLINE_ENV {
         if trimmed.starts_with(blocked) {
+            let var_name = blocked.trim_end_matches('=');
+            let all_blocked: Vec<&str> = BLOCKED_INLINE_ENV
+                .iter()
+                .map(|b| b.trim_end_matches('='))
+                .collect();
             return Err(format!(
-                "[BLOCKED — DO NOT RETRY] Inline environment override '{blocked}' is blocked.\n\
-                 This is a permanent security restriction."
+                "[BLOCKED — DO NOT RETRY] Inline environment override '{blocked}' is blocked \
+                 (it can redirect which binary runs).\n\
+                 Use the env parameter instead:  ctx_shell(command=\"<your command>\", \
+                 env={{\"{}\": \"<value>\"}})\n\
+                 Blocked variables: {}\n\
+                 Other inline assignments (e.g. FOO=bar cmd) are allowed.",
+                var_name,
+                all_blocked.join(", "),
             )
             .into());
         }
@@ -517,10 +528,37 @@ pub(super) fn check_all_segments(command: &str, allowlist: &[String]) -> Result<
     }
 
     let total = segments.len();
+    let mut local_functions: Vec<String> = Vec::new();
     for (idx, seg) in segments.iter().enumerate() {
         check_inline_env_block(seg)?;
+
+        // #1488: a function definition (`name() { ... }`) is not a command
+        // invocation — check the body commands instead of the function name.
+        if let Some(fn_name) = super::tokenizer::detect_function_def(seg) {
+            local_functions.push(fn_name);
+            let body_cmds = super::tokenizer::extract_function_body_commands(seg);
+            for body_seg in &body_cmds {
+                check_inline_env_block(body_seg)?;
+                let body_base = extract_base_from_segment(body_seg);
+                if body_base.is_empty() || SHELL_BUILTINS.contains(&body_base.as_str()) {
+                    continue;
+                }
+                if !matches_allowlist_entry(&body_base, allowlist) {
+                    return Err(format!(
+                        "[BLOCKED — DO NOT RETRY] '{body_base}' (inside function body) is not in the                          shell allowlist.\nFix (additive, keeps the defaults): run  lean-ctx allow {body_base}",
+                    ).into());
+                }
+            }
+            continue;
+        }
+
         let base = extract_base_from_segment(seg);
         if base.is_empty() {
+            continue;
+        }
+
+        // #1488: allow calling a function defined earlier in the same pipeline.
+        if local_functions.contains(&base) {
             continue;
         }
         if UNCONDITIONAL_BLOCKED.contains(&base.as_str()) {

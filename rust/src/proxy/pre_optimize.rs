@@ -26,7 +26,11 @@ pub fn pre_optimize(body: &mut Value) -> Option<PreOptimizeResult> {
     crate::core::context_prefetch::plan_after_triage(&task_class);
     let original_token_estimate = estimate_tokens(messages.iter().map(message_char_count).sum());
 
+    let cached_prefix = super::history_prune::cached_prefix_len(messages);
     for (index, message) in messages.iter_mut().enumerate() {
+        if index < cached_prefix {
+            continue;
+        }
         if relevance_score(message_role(message), index, last_user) < TRUNCATION_SCORE {
             truncate_message(message);
         }
@@ -333,5 +337,45 @@ mod tests {
         }
         let average = started.elapsed() / 1_000;
         println!("benchmark_pre_optimize: {average:?} per call");
+    }
+
+    #[test]
+    fn cache_controlled_messages_are_never_truncated() {
+        let old_msg = "x".repeat(1000);
+        let mut body = json!({
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": [{"type": "text", "text": old_msg, "cache_control": {"type": "ephemeral"}}]},
+                {"role": "user", "content": old_msg},
+                {"role": "assistant", "content": old_msg},
+                {"role": "user", "content": "what is this?"}
+            ]
+        });
+        let cached_before: Vec<_> = body["messages"].as_array().unwrap()[..13]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+
+        pre_optimize(&mut body);
+
+        let cached_after: Vec<_> = body["messages"].as_array().unwrap()[..13]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            cached_before, cached_after,
+            "messages within cache_control boundary must not be modified"
+        );
     }
 }
