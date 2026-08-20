@@ -13,9 +13,9 @@ use crate::core::ocla::invocation::{
 use crate::core::ocla::{OclaError, OclaResult};
 
 /// Repository-relative manifest used by this adapter.
-pub const MANIFEST_PATH: &str = "contracts/ocla/capability-manifests/leanctx/passthrough-v1.json";
+pub const MANIFEST_PATH: &str = "docs/contracts/ocla/capability-manifests/leanctx/passthrough-v1.json";
 const MANIFEST_JSON: &str =
-    include_str!("../../../../../contracts/ocla/capability-manifests/leanctx/passthrough-v1.json");
+    include_str!("../../../../../docs/contracts/ocla/capability-manifests/leanctx/passthrough-v1.json");
 
 fn manifest() -> &'static CapabilityManifestV1 {
     static MANIFEST: OnceLock<CapabilityManifestV1> = OnceLock::new();

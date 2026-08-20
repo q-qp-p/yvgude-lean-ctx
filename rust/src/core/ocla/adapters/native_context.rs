@@ -17,9 +17,9 @@ use crate::core::tokens;
 
 /// Repository-relative manifest used by this adapter.
 pub const MANIFEST_PATH: &str =
-    "contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json";
+    "docs/contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json";
 const MANIFEST_JSON: &str = include_str!(
-    "../../../../../contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json"
+    "../../../../../docs/contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json"
 );
 
 fn manifest() -> &'static CapabilityManifestV1 {
