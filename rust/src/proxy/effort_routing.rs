@@ -326,6 +326,16 @@ pub fn route_effort_budget(body: &mut Value) -> TaskComplexity {
     apply_effort_budget(body, complexity)
 }
 
+/// Checks whether an Anthropic model supports extended thinking.
+/// Models like sonnet-5 do not support the thinking parameter.
+fn anthropic_supports_thinking(model: &str) -> bool {
+    let bare = model.rsplit('/').next().unwrap_or(model);
+    bare.starts_with("claude-3")
+        || bare.starts_with("claude-opus-4")
+        || bare.starts_with("claude-sonnet-4")
+        || bare.starts_with("claude-haiku-4")
+}
+
 /// Calculates complexity for a request and applies its provider-native effort budget.
 pub fn apply_effort_budget(body: &mut Value, complexity: u8) -> TaskComplexity {
     let task = TaskComplexity::from_score(complexity);
@@ -339,13 +349,16 @@ pub fn apply_effort_budget(body: &mut Value, complexity: u8) -> TaskComplexity {
         .unwrap_or_default();
     let is_anthropic = object.contains_key("messages")
         && (object.contains_key("max_tokens") || model.contains("claude"));
-    if is_anthropic {
-        let thinking = object
-            .entry("thinking")
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if let Some(thinking) = thinking.as_object_mut() {
-            thinking.insert("type".into(), Value::String("enabled".into()));
-            thinking.insert("budget_tokens".into(), Value::from(task.budget_tokens));
+    if is_anthropic && anthropic_supports_thinking(model) {
+        // Don't overwrite client-set thinking params
+        if object.get("thinking").is_none() {
+            let thinking = object
+                .entry("thinking")
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(thinking) = thinking.as_object_mut() {
+                thinking.insert("type".into(), Value::String("enabled".into()));
+                thinking.insert("budget_tokens".into(), Value::from(task.budget_tokens));
+            }
         }
     } else if crate::proxy::effort::openai_supports_effort(model) {
         if object.contains_key("reasoning_effort") {
@@ -414,6 +427,33 @@ mod output_token_intelligence_tests {
         let task = apply_effort_budget(&mut body, 4);
         assert_eq!(task.budget_tokens, 8_192);
         assert_eq!(body["thinking"]["budget_tokens"], 8_192);
+    }
+
+    #[test]
+    fn skips_thinking_for_unsupported_models() {
+        let mut body = json!({"model": "claude-sonnet-5", "max_tokens": 4096, "messages": []});
+        let task = apply_effort_budget(&mut body, 4);
+        assert_eq!(task.budget_tokens, 8_192);
+        assert!(body.get("thinking").is_none(), "sonnet-5 must not get thinking params");
+    }
+
+    #[test]
+    fn skips_thinking_for_openrouter_wrapped_unsupported() {
+        let mut body = json!({"model": "anthropic/claude-sonnet-5", "max_tokens": 4096, "messages": []});
+        apply_effort_budget(&mut body, 4);
+        assert!(body.get("thinking").is_none(), "openrouter-wrapped sonnet-5 must not get thinking");
+    }
+
+    #[test]
+    fn preserves_client_thinking_params() {
+        let mut body = json!({
+            "model": "claude-sonnet-4",
+            "thinking": {"type": "adaptive"},
+            "messages": []
+        });
+        apply_effort_budget(&mut body, 4);
+        assert_eq!(body["thinking"]["type"], "adaptive", "must not overwrite client thinking");
+        assert!(body["thinking"].get("budget_tokens").is_none(), "must not inject budget_tokens");
     }
 
     #[test]
