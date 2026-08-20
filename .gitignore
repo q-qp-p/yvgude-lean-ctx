@@ -100,3 +100,7 @@ docs/archive/
 
 # Compiled binaries
 packages/lean-ctx-bin/bin/
+test-results/
+tmp/
+_archive/bench/lifecycle/runs/
+_archive/bench/lifecycle/.cache/
