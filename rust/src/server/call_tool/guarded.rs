@@ -127,8 +127,7 @@ impl LeanCtxServer {
             .and_then(|values| values.get("query").and_then(serde_json::Value::as_str))
             .or_else(|| {
                 args.and_then(|values| values.get("task").and_then(serde_json::Value::as_str))
-            })
-            .unwrap_or(name);
+            });
         let session_id = self.session.read().await.id.clone();
         let agent_id = match self.agent_id.read().await.clone() {
             Some(agent_id) => agent_id,
