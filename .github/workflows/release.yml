@@ -304,7 +304,6 @@ jobs:
     name: Attach JetBrains Plugin
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     permissions:
       contents: write
     steps:
@@ -348,7 +347,6 @@ jobs:
     name: Publish to crates.io
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -396,7 +394,6 @@ jobs:
     name: Publish to npm
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -423,27 +420,10 @@ jobs:
           npm publish --access public
 
       # pi-lean-ctx publish removed: package archived (2026-08-20)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   update-homebrew:
     name: Update Homebrew
     needs: release
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     steps:
       - name: Download checksums and extract platform hashes
         id: checksums
@@ -533,7 +513,6 @@ jobs:
     name: Announce on Twitter
     needs: [release, publish-crates, publish-npm, update-homebrew]
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -557,7 +536,6 @@ jobs:
     name: Announce on Discord
     needs: [release, publish-crates, publish-npm, update-homebrew]
     runs-on: ubuntu-latest
-    if: ${{ !contains(github.ref_name, '-rc') }}
     steps:
       - name: Notify Discord via n8n webhook
         env:
@@ -567,5 +545,3 @@ jobs:
           curl -fsSL -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"action\":\"published\",\"release\":{\"tag_name\":\"${RELEASE_TAG}\",\"html_url\":\"https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}\"}}"
-
-
