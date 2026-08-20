@@ -13,7 +13,6 @@ package-lock.json
 lean-ctx.config.example.json
 INTERNAL_ARCHITECTURE.md
 RELEASE_SUMMARY.md
-aur/
 server.md
 
 .lean-ctx/
@@ -28,7 +27,6 @@ discord-bot/
 n8n-workflows/
 
 # ── Lab / Neural (private, not for OSS) ──
-
 lab/
 rust/models/
 *.onnx
@@ -66,9 +64,7 @@ rust/lean-ctx-report.html
 
 # ── Generated / worktrees (local) ──
 website/
-website/generated/
-website/design/
-worktrees/website/generated/
+.worktrees/
 AGENTS.md.lean-ctx.*.bak
 docs/gpt/
 
@@ -83,24 +79,17 @@ markdownai/
 .idea/
 .serena/
 .claude/
-ts-sdk/node_modules/
-.worktrees/
 *.kt
-.worktrees/
-.worktrees/
-bench/lifecycle/.cache/
-bench/lifecycle/runs/
 
-# Internal strategy docs (confidential)
+# ── Internal strategy docs (confidential) ──
 docs/internal/
 .codex/vision-input/
 .codex/vision-output/
 .cursor/skills/focus-contract/
 docs/archive/
 
-# Compiled binaries
+# ── Compiled binaries / build artifacts ──
 packages/lean-ctx-bin/bin/
-test-results/
-tmp/
+*.egg-info/
 _archive/bench/lifecycle/runs/
 _archive/bench/lifecycle/.cache/
