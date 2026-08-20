@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lean-ctx-sdk"
+name = "lean-ctx-python"
 version = "1.0.0"
 description = "SDK for lean-ctx — context compression and execution evidence for AI agents"
 readme = "README.md"

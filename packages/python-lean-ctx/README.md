@@ -1,9 +1,9 @@
-# lean-ctx-sdk
+# lean-ctx-python
 
 Python SDK for [lean-ctx](https://github.com/yvgude/lean-ctx) — context compression and execution evidence for AI agents.
 
-[![PyPI](https://img.shields.io/pypi/v/lean-ctx-sdk)](https://pypi.org/project/lean-ctx-sdk/)
-[![Python](https://img.shields.io/pypi/pyversions/lean-ctx-sdk)](https://pypi.org/project/lean-ctx-sdk/)
+[![PyPI](https://img.shields.io/pypi/v/lean-ctx-python)](https://pypi.org/project/lean-ctx-python/)
+[![Python](https://img.shields.io/pypi/pyversions/lean-ctx-python)](https://pypi.org/project/lean-ctx-python/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Requires Python 3.9+. Zero runtime dependencies.
@@ -28,18 +28,18 @@ Each `run()` returns the agent's original output plus a sealed `ExecutionReceipt
 ## Installation
 
 ```bash
-pip install lean-ctx-sdk
+pip install lean-ctx-python
 ```
 
 Optional extras (install only what you need):
 
 ```bash
-pip install "lean-ctx-sdk[langchain]"    # LangChain message compression + retriever
-pip install "lean-ctx-sdk[litellm]"      # LiteLLM pre-call hook
-pip install "lean-ctx-sdk[llamaindex]"   # LlamaIndex node parser
-pip install "lean-ctx-sdk[verify]"       # Ed25519 receipt signature verification (cryptography>=42.0)
-pip install "lean-ctx-sdk[all]"          # all optional integrations + verify
-pip install "lean-ctx-sdk[test]"         # pytest (development only)
+pip install "lean-ctx-python[langchain]"    # LangChain message compression + retriever
+pip install "lean-ctx-python[litellm]"      # LiteLLM pre-call hook
+pip install "lean-ctx-python[llamaindex]"   # LlamaIndex node parser
+pip install "lean-ctx-python[verify]"       # Ed25519 receipt signature verification (cryptography>=42.0)
+pip install "lean-ctx-python[all]"          # all optional integrations + verify
+pip install "lean-ctx-python[test]"         # pytest (development only)
 ```
 
 The SDK communicates with a local lean-ctx proxy over HTTP. The wrap/session API expects the Runtime proxy at `http://localhost:8077` by default. The legacy `compress()` API discovers the proxy port automatically (see [Configuration](#configuration)).
@@ -108,26 +108,26 @@ class MyAgent:
 
 ### 2. ContextAwareAgent
 
-Agent accepts an optional keyword argument `leanctx`. When the proxy session is available, the SDK passes a `RunTransport` with bound `compress()` and observation recording.
+Agent accepts an optional keyword argument `lean-ctx-python`. When the proxy session is available, the SDK passes a `RunTransport` with bound `compress()` and observation recording.
 
 ```python
 class MyAgent:
-    def run(self, task: str, *, leanctx=None) -> str:
-        if leanctx is not None:
-            result = leanctx.compress(messages, model="gpt-4o")
+    def run(self, task: str, *, lean-ctx-python=None) -> str:
+        if lean-ctx-python is not None:
+            result = lean-ctx-python.compress(messages, model="gpt-4o")
             messages = result.messages
         return call_llm(messages)
 ```
 
-When the proxy is unavailable and `fail_open=True`, the SDK calls `run(task, leanctx=None)` so the agent can detect missing transport explicitly.
+When the proxy is unavailable and `fail_open=True`, the SDK calls `run(task, lean-ctx-python=None)` so the agent can detect missing transport explicitly.
 
 ### 3. ProxyBoundAgent
 
-Agent implements `set_leanctx_transport(proxy, headers)` (returning an optional reset callable). The SDK configures transport before `run(task)`.
+Agent implements `set_lean-ctx-python_transport(proxy, headers)` (returning an optional reset callable). The SDK configures transport before `run(task)`.
 
 ```python
 class MyAgent:
-    def set_leanctx_transport(self, *, proxy, headers):
+    def set_lean-ctx-python_transport(self, *, proxy, headers):
         self._proxy = proxy
         self._headers = headers
         return lambda: setattr(self, "_proxy", None)
@@ -136,7 +136,7 @@ class MyAgent:
         return self._call_via_proxy(task)
 ```
 
-An agent matching both `set_leanctx_transport` and a `leanctx` keyword raises `LeanCtxError` at wrap time.
+An agent matching both `set_lean-ctx-python_transport` and a `lean-ctx-python` keyword raises `LeanCtxError` at wrap time.
 
 ## Configuration
 
@@ -193,7 +193,7 @@ Returns `True` only when all checks pass:
 
 1. `integrity_status == "sealed"` and canonical JSON is present
 2. Local SHA-256 digest matches `canonical_hash` (`sha256:<hex>`)
-3. If `signature` and a signer public key are present → Ed25519 verification (requires `pip install "lean-ctx-sdk[verify]"`)
+3. If `signature` and a signer public key are present → Ed25519 verification (requires `pip install "lean-ctx-python[verify]"`)
 4. Otherwise, if a verifier client is available → `GET /v1/receipts/{receipt_id}/verify` must return `verified: true`
 5. If no signature and no verifier client → digest match alone is sufficient (local/mock environments)
 
@@ -243,7 +243,7 @@ compressed = compress(messages, model="gpt-4o")
 
 ### LangChain
 
-Requires `pip install "lean-ctx-sdk[langchain]"`.
+Requires `pip install "lean-ctx-python[langchain]"`.
 
 ```python
 from lean_ctx import compress_messages, LeanCtxRetriever
@@ -257,7 +257,7 @@ docs = retriever.invoke("authentication flow")
 
 ### LiteLLM
 
-Requires `pip install "lean-ctx-sdk[litellm]"`.
+Requires `pip install "lean-ctx-python[litellm]"`.
 
 ```python
 import litellm
@@ -273,7 +273,7 @@ The handler runs compression in a thread pool inside `async_pre_call_hook` so th
 
 ### LlamaIndex
 
-Requires `pip install "lean-ctx-sdk[llamaindex]"`.
+Requires `pip install "lean-ctx-python[llamaindex]"`.
 
 ```python
 from lean_ctx import LeanCtxNodeParser
@@ -335,7 +335,7 @@ python -m pytest tests/ -v
 ## Learn more
 
 - [lean-ctx repository](https://github.com/yvgude/lean-ctx)
-- [Installation guide](https://leanctx.com/docs/install)
+- [Installation guide](https://lean-ctx-python.com/docs/install)
 
 ## License
 
