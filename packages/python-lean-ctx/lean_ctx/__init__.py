@@ -1,30 +1,39 @@
-"""lean-ctx SDK — context compression for AI agents and frameworks.
+"""Synchronous, dependency-free LeanCTX lifecycle and proxy SDK."""
 
-Drop-in usage::
+from .core import LeanCTX, LeanCTXConfig
+from .kit import ContextKit
+from .profile import TuningProfile
+from .receipt import ExecutionReceipt, SavingsInfo
+from .session import ContextSession
+from .wrap import LeanCtxRun, WrappedAgent
+from .proxy import CompressResult, ProxyClient, compress
+from .client import LeanCtxClient
+from .errors import LeanCtxAuthError, LeanCtxConnectionError, LeanCtxError
+from .langchain import LeanCtxRetriever, compress_messages
+from .litellm import LeanCtxLiteLLMHandler, compress_request_data
+from .llamaindex import LeanCtxNodeParser
 
-    from lean_ctx import compress
-    messages = compress(messages, model="claude-sonnet-4")
-"""
-
-from lean_ctx.client import LeanCtxClient
-from lean_ctx.errors import LeanCtxAuthError, LeanCtxConnectionError, LeanCtxError
-from lean_ctx.langchain import LeanCtxRetriever, compress_messages
-from lean_ctx.litellm import LeanCtxLiteLLMHandler, compress_request_data
-from lean_ctx.llamaindex import LeanCtxNodeParser
-from lean_ctx.proxy import CompressResult, ProxyClient, compress
-
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 __all__ = [
-    "compress",
-    "ProxyClient",
+    "LeanCTX",
+    "LeanCTXConfig",
+    "ContextKit",
+    "TuningProfile",
+    "ExecutionReceipt",
+    "SavingsInfo",
+    "ContextSession",
+    "LeanCtxRun",
+    "WrappedAgent",
     "CompressResult",
+    "ProxyClient",
+    "compress",
     "LeanCtxClient",
+    "LeanCtxAuthError",
+    "LeanCtxConnectionError",
+    "LeanCtxError",
     "LeanCtxRetriever",
     "compress_messages",
     "LeanCtxLiteLLMHandler",
     "compress_request_data",
     "LeanCtxNodeParser",
-    "LeanCtxError",
-    "LeanCtxConnectionError",
-    "LeanCtxAuthError",
 ]

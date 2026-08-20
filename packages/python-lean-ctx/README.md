@@ -7,6 +7,29 @@ Context compression for AI agents — a thin, dependency-free client for the loc
 pip install lean-ctx-sdk
 ```
 
+## Task lifecycle
+
+The v1 SDK adds a small synchronous lifecycle facade for supported agents. It
+creates a Runtime-owned task session before the agent runs and returns the
+original result plus immutable execution evidence.
+
+```python
+from lean_ctx import LeanCTX
+
+ctx = LeanCTX({"proxy_url": "http://127.0.0.1:4444"})
+run = ctx.wrap(agent, kit="payments", profile="balanced").run(
+    "Review the payments module"
+)
+
+assert run.output == agent_output
+assert run.receipt.verify() in (True, False)
+print(run.receipt.savings)
+```
+
+Supported agents either expose `run(task)`, accept `run(task, *, leanctx)`, or
+implement `set_leanctx_transport(proxy=..., headers=...)` plus `run(task)`.
+The SDK never monkey-patches provider clients or changes the agent's output.
+
 ## Drop-in `compress(messages, model)`
 
 Compress a chat-style `messages` array before sending it to any model. Only text
