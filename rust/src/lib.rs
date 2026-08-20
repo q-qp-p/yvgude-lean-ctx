@@ -30,6 +30,7 @@ pub mod instructions;
 pub mod lsp;
 pub mod marked_block;
 pub mod mcp_stdio;
+pub mod ocla;
 pub mod rewrite_registry;
 pub mod rules_inject;
 pub mod server;
