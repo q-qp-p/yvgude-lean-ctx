@@ -259,6 +259,8 @@ jobs:
         run: npm run build
 
   pi-extension:
+    # Disabled: pi-lean-ctx archived (2026-08-20)
+    if: false
     name: Pi Extension (Node)
     runs-on: ubuntu-latest
     steps:
@@ -370,6 +372,8 @@ jobs:
         run: python -m pytest -q
 
   hermes-plugin:
+    # Disabled: integrations/hermes-lean-ctx archived (2026-08-20)
+    if: false
     # The Hermes context-engine plugin (integrations/hermes-lean-ctx) replaces
     # Hermes' built-in ContextCompressor with lean-ctx. Gate: pytest (ABC
     # conformance + tool_call/tool_result invariant + daemon-down graceful) and
@@ -684,11 +688,11 @@ jobs:
       - build-minimal
       - fmt
       - cookbook
-      - pi-extension
+      # - pi-extension  # disabled: archived (2026-08-20)
       - rust-sdk
       - embed-sdk
       # - python-sdk  # disabled (#1497)
-      - hermes-plugin
+      # - hermes-plugin  # disabled: archived (2026-08-20)
       # - sdk-conformance  # disabled (#1497)
       - coverage
       - deny
@@ -717,3 +721,4 @@ jobs:
           PY
 
   # Security audit runs in security-check.yml workflow
+
