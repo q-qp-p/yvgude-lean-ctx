@@ -14,6 +14,7 @@ ALLOWLIST=(
   "rust/src/cli/config_cmd.rs"
   "rust/src/cli/completions/spec.rs"
   "rust/src/core/config/sections.rs"
+  "rust/src/core/shell_allowlist/tests.rs"
 )
 
 cd "$(dirname "$0")/.."
