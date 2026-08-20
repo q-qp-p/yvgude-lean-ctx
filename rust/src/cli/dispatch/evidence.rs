@@ -93,6 +93,10 @@ struct EvidenceRealworldCommand {
     /// API key (or set OPENAI_API_KEY env var).
     #[arg(long)]
     api_key: Option<String>,
+
+    /// Assert PROOF-DOCTRINE VERIFY gates after the run (exit 1 on FAIL).
+    #[arg(long)]
+    quality_gate: bool,
 }
 
 #[derive(Debug, Args)]
@@ -142,7 +146,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
             }
         },
         EvidenceSubcommand::Realworld(cmd) => match execute_realworld(&cmd) {
-            Ok(()) => 0,
+            Ok(exit_code) => exit_code,
             Err(error) => {
                 eprintln!("evidence realworld: {error:#}");
                 1
@@ -170,7 +174,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
     }
 }
 
-fn execute_realworld(cmd: &EvidenceRealworldCommand) -> Result<()> {
+fn execute_realworld(cmd: &EvidenceRealworldCommand) -> Result<i32> {
     let api_key = cmd
         .api_key
         .clone()
@@ -198,6 +202,7 @@ fn execute_realworld(cmd: &EvidenceRealworldCommand) -> Result<()> {
         endpoint: cmd.endpoint.clone(),
         model: cmd.model.clone(),
         api_key,
+        quality_gate: cmd.quality_gate,
     };
 
     let result = evidence_realworld::execute_realworld_evidence(&args)?;
@@ -247,7 +252,20 @@ fn execute_realworld(cmd: &EvidenceRealworldCommand) -> Result<()> {
     println!("Artifacts: {}", output_dir.display());
     println!("Methodology: {}", result.methodology.description);
 
-    Ok(())
+    if let Some(ref gate) = result.quality_gate {
+        println!();
+        println!("Quality Gate: {}", gate.verdict);
+        for reason in &gate.reasons {
+            println!("  - {reason}");
+        }
+        let gate_json = serde_json::to_string_pretty(gate)?;
+        fs::write(output_dir.join("quality-gate.json"), gate_json)?;
+        if gate.verdict == "FAIL" {
+            return Ok(1);
+        }
+    }
+
+    Ok(0)
 }
 
 fn execute_workflow(cmd: &EvidenceWorkflowCommand) -> Result<()> {

@@ -516,7 +516,7 @@ fn turn_llm_analysis(
     Ok((quality, baseline_resp, treatment_resp))
 }
 
-fn score_quality(baseline: &str, treatment: &str) -> QualityScore {
+pub(crate) fn score_quality(baseline: &str, treatment: &str) -> QualityScore {
     let bl_issues = count_issues(baseline);
     let tr_issues = count_issues(treatment);
     let bl_has_code = baseline.contains("```") || baseline.contains("    ");

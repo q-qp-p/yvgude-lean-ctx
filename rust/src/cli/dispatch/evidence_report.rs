@@ -372,7 +372,7 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::dispatch::evidence_realworld::{ArmResult, Methodology};
+    use crate::cli::dispatch::evidence_realworld::{ArmResult, Methodology, ReceiptSavings};
 
     fn evidence() -> RealWorldResult {
         let baseline_turn = TurnResult {
@@ -396,6 +396,9 @@ mod tests {
             ..baseline_turn.clone()
         };
         RealWorldResult {
+            schema_version: "1".to_string(),
+            integrity_status: "observed".to_string(),
+            outcome: "succeeded".to_string(),
             baseline: ArmResult {
                 arm: "baseline".to_string(),
                 turns: vec![baseline_turn],
@@ -417,6 +420,15 @@ mod tests {
             savings_tokens_pct: 70.0,
             savings_cost_pct: 75.0,
             savings_usd: 0.015,
+            savings: ReceiptSavings {
+                original_tokens: 1000,
+                delivered_tokens: 300,
+                saved_tokens: 700,
+                saved_pct: 70.0,
+                methodology: "baseline_treatment".to_string(),
+            },
+            quality: None,
+            quality_gate: None,
             model: "test-model".to_string(),
             endpoint: "https://example.test".to_string(),
             target_path: "/tmp/project".to_string(),
@@ -424,6 +436,8 @@ mod tests {
             lean_ctx_version: "3.9.19".to_string(),
             methodology: Methodology {
                 description: "Sequential & measured".to_string(),
+                multi_turn: true,
+                fair_baseline: "Shell output capped to last 500 lines".to_string(),
                 turns_per_arm: 1,
                 shell_cap_lines: 500,
                 cache_source: "provider cache field".to_string(),

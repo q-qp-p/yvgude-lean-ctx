@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::evidence_workflow::{QualityScore, score_quality};
 use crate::core::extension_registry::ExtensionRegistry;
 use crate::core::gain::model_pricing::ModelPricing;
 use crate::core::tokens::count_tokens;
@@ -57,27 +58,72 @@ pub(crate) struct ArmResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReceiptSavings {
+    pub original_tokens: usize,
+    pub delivered_tokens: usize,
+    pub saved_tokens: usize,
+    pub saved_pct: f64,
+    pub methodology: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct QualityGateVerdict {
+    pub verdict: String,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RealWorldResult {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
+    #[serde(default = "default_integrity_status")]
+    pub integrity_status: String,
+    #[serde(default = "default_outcome")]
+    pub outcome: String,
     pub baseline: ArmResult,
     pub treatment: ArmResult,
     pub savings_tokens_pct: f64,
     pub savings_cost_pct: f64,
     pub savings_usd: f64,
+    pub savings: ReceiptSavings,
     pub model: String,
     pub endpoint: String,
     pub target_path: String,
     pub timestamp: String,
     pub lean_ctx_version: String,
     pub methodology: Methodology,
+    pub quality: Option<QualityScore>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality_gate: Option<QualityGateVerdict>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Methodology {
     pub description: String,
+    #[serde(default = "default_multi_turn")]
+    pub multi_turn: bool,
+    #[serde(default)]
+    pub fair_baseline: String,
     pub turns_per_arm: usize,
     pub shell_cap_lines: usize,
     pub cache_source: String,
     pub cost_calculation: String,
+}
+
+fn default_schema_version() -> String {
+    "1".to_string()
+}
+
+fn default_integrity_status() -> String {
+    "observed".to_string()
+}
+
+fn default_outcome() -> String {
+    "succeeded".to_string()
+}
+
+fn default_multi_turn() -> bool {
+    true
 }
 
 // ─── Args ───────────────────────────────────────────────────────────────────
@@ -89,15 +135,186 @@ pub(crate) struct RealWorldArgs {
     pub endpoint: String,
     pub model: String,
     pub api_key: String,
+    pub quality_gate: bool,
 }
 
 // ─── Main Entry Point ───────────────────────────────────────────────────────
 
+pub(crate) fn validate_workload(target: &Path) -> Result<()> {
+    if !target.exists() {
+        bail!("workload directory does not exist: {}", target.display());
+    }
+    if !target.is_dir() {
+        bail!("workload must be a directory: {}", target.display());
+    }
+    let rs_files = collect_rs_files_by_size(target, 1, 3)?;
+    if rs_files.is_empty() {
+        bail!(
+            "workload has no analyzable source files: no .rs files found under {} \
+             (searched 3 levels, excluding target/, node_modules/, and dot-directories)",
+            target.display()
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn quality_meets_baseline(quality: &QualityScore) -> bool {
+    quality.treatment_issues_found >= quality.baseline_issues_found && quality.overlap_pct >= 40.0
+}
+
+pub(crate) fn evaluate_quality_gate(result: &RealWorldResult) -> QualityGateVerdict {
+    let mut reasons = Vec::new();
+    let mut pass = true;
+    let expected = result.methodology.turns_per_arm;
+
+    if result.savings.saved_pct <= 0.0 {
+        pass = false;
+        reasons.push(format!(
+            "savings_pct must be > 0, got {:.1}",
+            result.savings.saved_pct
+        ));
+    }
+
+    if result.baseline.turns.len() != expected {
+        pass = false;
+        reasons.push(format!(
+            "baseline completed {}/{} turns without error",
+            result.baseline.turns.len(),
+            expected
+        ));
+    }
+    if result.treatment.turns.len() != expected {
+        pass = false;
+        reasons.push(format!(
+            "treatment completed {}/{} turns without error",
+            result.treatment.turns.len(),
+            expected
+        ));
+    }
+
+    match &result.quality {
+        Some(quality) if quality_meets_baseline(quality) => {}
+        Some(quality) => {
+            pass = false;
+            reasons.push(format!(
+                "treatment quality below baseline: overlap {:.1}% (min 40%), issues {}/{} (min {})",
+                quality.overlap_pct,
+                quality.treatment_issues_found,
+                quality.baseline_issues_found,
+                quality.baseline_issues_found
+            ));
+        }
+        None => {
+            pass = false;
+            reasons.push("missing quality score from final analysis turn".to_string());
+        }
+    }
+
+    if pass {
+        reasons.push("all quality gate assertions passed".to_string());
+    }
+
+    QualityGateVerdict {
+        verdict: if pass { "PASS" } else { "FAIL" }.to_string(),
+        reasons,
+    }
+}
+
+fn final_analysis_response(arm: &ArmResult) -> Option<&str> {
+    arm.turns
+        .iter()
+        .find(|turn| turn.name == "final_analysis")
+        .map(|turn| turn.response.as_str())
+}
+
+fn build_realworld_result(
+    args: &RealWorldArgs,
+    baseline: ArmResult,
+    treatment: ArmResult,
+) -> RealWorldResult {
+    let savings_tokens_pct = if baseline.total_prompt_tokens > 0 {
+        (1.0 - treatment.total_prompt_tokens as f64 / baseline.total_prompt_tokens as f64) * 100.0
+    } else {
+        0.0
+    };
+    let savings_cost_pct = if baseline.total_real_cost_usd > 0.0 {
+        (1.0 - treatment.total_real_cost_usd / baseline.total_real_cost_usd) * 100.0
+    } else {
+        0.0
+    };
+    let savings_usd = baseline.total_real_cost_usd - treatment.total_real_cost_usd;
+    let original_tokens = baseline.total_prompt_tokens;
+    let delivered_tokens = treatment.total_prompt_tokens;
+    let saved_tokens = original_tokens.saturating_sub(delivered_tokens);
+
+    let quality = match (
+        final_analysis_response(&baseline),
+        final_analysis_response(&treatment),
+    ) {
+        (Some(baseline_resp), Some(treatment_resp)) => {
+            Some(score_quality(baseline_resp, treatment_resp))
+        }
+        _ => None,
+    };
+
+    let mut result = RealWorldResult {
+        schema_version: default_schema_version(),
+        integrity_status: default_integrity_status(),
+        outcome: default_outcome(),
+        baseline,
+        treatment,
+        savings_tokens_pct,
+        savings_cost_pct,
+        savings_usd,
+        savings: ReceiptSavings {
+            original_tokens,
+            delivered_tokens,
+            saved_tokens,
+            saved_pct: savings_tokens_pct,
+            methodology: "baseline_treatment".to_string(),
+        },
+        model: args.model.clone(),
+        endpoint: args.endpoint.clone(),
+        target_path: args.target_dir.display().to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        lean_ctx_version: env!("CARGO_PKG_VERSION").to_string(),
+        methodology: Methodology {
+            description: "Sequential 5-turn API calls per arm. Each turn accumulates \
+                          context from previous turns. Provider-reported cached_tokens \
+                          used for real cost calculation."
+                .to_string(),
+            multi_turn: true,
+            fair_baseline: format!(
+                "Shell output capped to last {SHELL_CAP_LINES} lines (realistic agent view)"
+            ),
+            turns_per_arm: 5,
+            shell_cap_lines: SHELL_CAP_LINES,
+            cache_source: "OpenAI usage.prompt_tokens_details.cached_tokens".to_string(),
+            cost_calculation: "(prompt - cached) * input_price + cached * cache_read_price \
+                              + output * output_price"
+                .to_string(),
+        },
+        quality,
+        quality_gate: None,
+    };
+
+    if args.quality_gate {
+        result.quality_gate = Some(evaluate_quality_gate(&result));
+        if result
+            .quality_gate
+            .as_ref()
+            .is_some_and(|gate| gate.verdict == "FAIL")
+        {
+            result.outcome = "failed".to_string();
+        }
+    }
+
+    result
+}
+
 pub(crate) fn execute_realworld_evidence(args: &RealWorldArgs) -> Result<RealWorldResult> {
     let target = &args.target_dir;
-    if !target.is_dir() {
-        bail!("target must be a directory: {}", target.display());
-    }
+    validate_workload(target)?;
 
     println!("═══ Real-World Multi-Turn Evidence ═══");
     println!("Target:   {}", target.display());
@@ -128,42 +345,7 @@ pub(crate) fn execute_realworld_evidence(args: &RealWorldArgs) -> Result<RealWor
     );
     println!();
 
-    let savings_tokens_pct = if baseline.total_prompt_tokens > 0 {
-        (1.0 - treatment.total_prompt_tokens as f64 / baseline.total_prompt_tokens as f64) * 100.0
-    } else {
-        0.0
-    };
-    let savings_cost_pct = if baseline.total_real_cost_usd > 0.0 {
-        (1.0 - treatment.total_real_cost_usd / baseline.total_real_cost_usd) * 100.0
-    } else {
-        0.0
-    };
-    let savings_usd = baseline.total_real_cost_usd - treatment.total_real_cost_usd;
-
-    Ok(RealWorldResult {
-        baseline,
-        treatment,
-        savings_tokens_pct,
-        savings_cost_pct,
-        savings_usd,
-        model: args.model.clone(),
-        endpoint: args.endpoint.clone(),
-        target_path: target.display().to_string(),
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        lean_ctx_version: env!("CARGO_PKG_VERSION").to_string(),
-        methodology: Methodology {
-            description: "Sequential 5-turn API calls per arm. Each turn accumulates \
-                          context from previous turns. Provider-reported cached_tokens \
-                          used for real cost calculation."
-                .to_string(),
-            turns_per_arm: 5,
-            shell_cap_lines: SHELL_CAP_LINES,
-            cache_source: "OpenAI usage.prompt_tokens_details.cached_tokens".to_string(),
-            cost_calculation: "(prompt - cached) * input_price + cached * cache_read_price \
-                              + output * output_price"
-                .to_string(),
-        },
-    })
+    Ok(build_realworld_result(args, baseline, treatment))
 }
 
 // ─── Turn Content Preparation ───────────────────────────────────────────────
@@ -610,4 +792,104 @@ fn sha256_hex(input: &str) -> String {
         let _ = write!(s, "{b:02x}");
         s
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_arm(arm: &str, per_turn_prompt: usize, turns: usize) -> ArmResult {
+        ArmResult {
+            arm: arm.to_string(),
+            turns: (0..turns)
+                .map(|i| TurnResult {
+                    turn: i + 1,
+                    name: if i + 1 == turns {
+                        "final_analysis".to_string()
+                    } else {
+                        format!("turn-{}", i + 1)
+                    },
+                    description: "test".to_string(),
+                    new_content_tokens: 10,
+                    prompt_tokens_sent: per_turn_prompt,
+                    cached_tokens: 0,
+                    provider_prompt_tokens: per_turn_prompt,
+                    provider_completion_tokens: 10,
+                    real_cost_usd: 0.01,
+                    response: if i + 1 == turns {
+                        "1. division by zero bug
+2. missing error handling
+3. performance issue"
+                            .to_string()
+                    } else {
+                        String::new()
+                    },
+                    duration_ms: 1,
+                })
+                .collect(),
+            total_prompt_tokens: per_turn_prompt * turns,
+            total_cached_tokens: 0,
+            total_completion_tokens: 10 * turns,
+            total_real_cost_usd: 0.05,
+            effective_input_cost_usd: 0.04,
+        }
+    }
+
+    fn sample_result(baseline_per_turn: usize, treatment_per_turn: usize) -> RealWorldResult {
+        build_realworld_result(
+            &RealWorldArgs {
+                target_dir: PathBuf::from("/tmp/project"),
+                output_dir: PathBuf::from("/tmp/out"),
+                endpoint: "https://example.test".to_string(),
+                model: "test-model".to_string(),
+                api_key: "test".to_string(),
+                quality_gate: false,
+            },
+            sample_arm("baseline", baseline_per_turn, 5),
+            sample_arm("treatment", treatment_per_turn, 5),
+        )
+    }
+
+    #[test]
+    fn validate_workload_rejects_missing_directory() {
+        let missing = PathBuf::from("/tmp/lean-ctx-missing-workload-99999999");
+        assert!(validate_workload(&missing).is_err());
+    }
+
+    #[test]
+    fn validate_workload_accepts_rust_project() {
+        assert!(validate_workload(Path::new(".")).is_ok());
+    }
+
+    #[test]
+    fn quality_gate_passes_for_positive_savings_and_matching_quality() {
+        let result = sample_result(1000, 300);
+        let gate = evaluate_quality_gate(&result);
+        assert_eq!(gate.verdict, "PASS");
+    }
+
+    #[test]
+    fn quality_gate_fails_when_savings_are_not_positive() {
+        let result = sample_result(300, 1000);
+        let gate = evaluate_quality_gate(&result);
+        assert_eq!(gate.verdict, "FAIL");
+        assert!(
+            gate.reasons
+                .iter()
+                .any(|reason| reason.contains("savings_pct"))
+        );
+    }
+
+    #[test]
+    fn build_result_populates_receipt_fields() {
+        let result = sample_result(1000, 300);
+        assert_eq!(result.schema_version, "1");
+        assert_eq!(result.integrity_status, "observed");
+        assert_eq!(result.outcome, "succeeded");
+        assert_eq!(result.savings.methodology, "baseline_treatment");
+        assert_eq!(result.savings.original_tokens, 5000);
+        assert_eq!(result.savings.delivered_tokens, 1500);
+        assert!(result.methodology.multi_turn);
+        assert!(!result.methodology.fair_baseline.is_empty());
+    }
 }

@@ -160,4 +160,3 @@ def test_wrap_validates_kit_and_profile_arguments(v1_proxy, kwargs):
 
     with pytest.raises(ValueError):
         LeanCTX({"proxy_url": base_url}).wrap(Agent(), **kwargs)
-
