@@ -53,7 +53,8 @@ jobs:
 
   publish-pypi:
     name: Publish lean-ctx-client to PyPI
-    if: ${{ github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'pypi' }}
+    # Disabled: clients/python archived, new SDK in packages/python-lean-ctx (#1497)
+    if: false # ${{ github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'pypi' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4 # v4

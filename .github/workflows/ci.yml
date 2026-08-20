@@ -351,6 +351,8 @@ jobs:
         run: cargo doc -p lean-ctx-sdk --no-deps
 
   python-sdk:
+    # Disabled: clients/python archived in 106f90446, new SDK in packages/python-lean-ctx (#1497)
+    if: false
     name: Python SDK (leanctx)
     runs-on: ubuntu-latest
     steps:
@@ -397,6 +399,8 @@ jobs:
         run: python benchmarks/run.py --turns 40 --needles 6 --context-length 2000 --base-url http://127.0.0.1:9 --no-write
 
   sdk-conformance:
+    # Disabled: depends on clients/python, archived in 106f90446 (#1497)
+    if: false
     # GL #395: every first-party SDK must prove the full /v1 contract against
     # a real engine build. Red when an SDK misses a route, mistypes a shape,
     # or the engine drifts from the frozen surface.
@@ -683,9 +687,9 @@ jobs:
       - pi-extension
       - rust-sdk
       - embed-sdk
-      - python-sdk
+      # - python-sdk  # disabled (#1497)
       - hermes-plugin
-      - sdk-conformance
+      # - sdk-conformance  # disabled (#1497)
       - coverage
       - deny
       - adversarial
