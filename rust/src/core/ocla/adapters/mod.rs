@@ -8,6 +8,7 @@ use crate::core::ocla::OclaError;
 use crate::core::ocla::OclaResult;
 use crate::core::tokens;
 
+pub(crate) mod external_process;
 pub mod native_context;
 pub mod passthrough;
 pub mod registry;
