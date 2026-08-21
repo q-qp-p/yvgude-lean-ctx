@@ -1,0 +1,24 @@
+{
+  "evaluator": "expected-findings-v1",
+  "task": "Review fixture/checkout.py for correctness, security, and authorization defects. Return JSON ReviewResult v1.",
+  "required": [
+    {
+      "id": "sql_injection",
+      "file": "checkout.py",
+      "function": "find_order",
+      "must_match": "sql|inject|concatenat|parameter"
+    },
+    {
+      "id": "missing_authz",
+      "file": "checkout.py",
+      "function": "export_orders",
+      "must_match": "auth|permission|unauthor"
+    },
+    {
+      "id": "discount_off_by_one",
+      "file": "checkout.py",
+      "function": "apply_discount",
+      "must_match": "off-by-one|range\\(|index|len\\(prices\\) \\+ 1"
+    }
+  ]
+}

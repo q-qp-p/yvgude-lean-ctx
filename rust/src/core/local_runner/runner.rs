@@ -210,7 +210,7 @@ mod tests {
                 agent: "mock".into(),
                 model: "test-model".into(),
                 success: self.should_succeed,
-                exit_code: if self.should_succeed { 0 } else { 1 },
+                exit_code: i32::from(!self.should_succeed),
                 stdout: "task output".into(),
                 stderr: String::new(),
                 duration_ms: 1000,
@@ -308,7 +308,7 @@ mod tests {
                 id: "test".into(),
                 name: "Test".into(),
                 description: "Test task".into(),
-                kind: kind.clone(),
+                kind: *kind,
                 timeout_ms: None,
             };
             let prompt = task_to_prompt(&task);

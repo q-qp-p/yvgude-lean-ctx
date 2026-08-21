@@ -164,8 +164,14 @@ mod tests {
         let _parsed: serde_json::Value =
             serde_json::from_str(&result.observation.output_ref.as_deref().unwrap_or(""))
                 .unwrap_or_default();
-        assert!(result.observation.metrics.get("word_count").copied() == Some(3));
-        assert!(result.observation.metrics.get("line_count").copied() == Some(1));
+        assert_eq!(
+            result.observation.metrics.get("word_count").copied(),
+            Some(3)
+        );
+        assert_eq!(
+            result.observation.metrics.get("line_count").copied(),
+            Some(1)
+        );
     }
 
     #[test]
@@ -176,7 +182,7 @@ mod tests {
             capability_id: "capability://example/word-count-optimizer".into(),
             capability_version: "1.0.0".into(),
             input: CapabilityInput::ShellCommand {
-                command: "".into(),
+                command: String::new(),
                 workdir: None,
             },
             policy_constraints: PolicyConstraints::default(),

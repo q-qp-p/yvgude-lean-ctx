@@ -1,0 +1,11 @@
+{
+  "workload_id": "sprint-poc-code-review-v1",
+  "agent": "ReferenceCodeReviewAgent",
+  "agent_version": "1.0.0",
+  "fixture": "fixture/checkout.py",
+  "quality_evaluator": "expected-findings-v1",
+  "model_env": "OPENAI_MODEL",
+  "model_default": "gpt-4.1-mini",
+  "kit": "code-review",
+  "comparison_rule": "reject if agent, fixture, or evaluator hash differ between arms"
+}
