@@ -161,7 +161,7 @@ mod tests {
         let result = adapter.invoke(test_invocation("hello world foo")).unwrap();
         assert!(result.success);
         assert_eq!(result.observation.input_tokens, 3);
-        let parsed: serde_json::Value =
+        let _parsed: serde_json::Value =
             serde_json::from_str(&result.observation.output_ref.as_deref().unwrap_or(""))
                 .unwrap_or_default();
         assert!(result.observation.metrics.get("word_count").copied() == Some(3));
