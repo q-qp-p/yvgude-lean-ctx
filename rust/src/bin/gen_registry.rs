@@ -94,7 +94,7 @@ type Canonicalize = fn(&str) -> Result<Snapshot, String>;
 
 fn canonical_addon(text: &str) -> Result<Snapshot, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let entries = value.as_array().map(|a| a.len()).unwrap_or(0);
+    let entries = value.as_array().map_or(0, Vec::len);
     let canonical = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     Ok(Snapshot {
         canonical,
