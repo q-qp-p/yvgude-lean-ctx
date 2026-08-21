@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 use std::time::Instant;
 
 use lean_ctx::core::ocla::builtin::compression_provider::BuiltinCompressionProvider;
@@ -8,14 +7,6 @@ use lean_ctx::core::ocla::registry::OclaRegistry;
 use lean_ctx::core::ocla::types::{CompressionRequest, OclaRequestContext};
 use lean_ctx::core::tokens::count_tokens;
 use lean_ctx_protocol::CapabilityManifestV1;
-
-struct TemporaryBenchmarkFile(PathBuf);
-
-impl Drop for TemporaryBenchmarkFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
 
 fn benchmark_content() -> String {
     let removable = std::iter::repeat_n(
