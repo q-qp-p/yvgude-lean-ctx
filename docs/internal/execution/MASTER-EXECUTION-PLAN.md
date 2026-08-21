@@ -15,7 +15,7 @@ WS-1: CODEBASE CLEANUP          ██████████  DONE (2026-08-20
 WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; paid sprint is sales, not an engineering gate
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
 WS-4: OCLA + COMPOSABLE (B)     ████████░░  Engineering dogfood allowed; no public claim until #1254
-WS-5: PARTNERSHIP (C)           ░░░░░░░░░░  After WS-4
+WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
 WS-6: BENCHMARK + CALIBRATOR    ████░░░░░░  6.1–6.4 + 6.6 + 6.8 code landed; 23 tests pass
 ```
 
@@ -120,23 +120,24 @@ cargo fmt --check
 
 ---
 
-## WS-5: Partnership + Ecosystem (Phase C)
+## WS-5: ~~Partnership + Ecosystem~~ CANCELLED
 
-**Goal:** Prove composable optimization creates additional value.  
-**Timeline:** After WS-4  
-**Prerequisite:** External capability path works end-to-end
+**Decision (2026-08-21):** Gestrichen. LeanCTX strebt Monopolstellung an —
+absolute Performance aus einer Hand statt composable Partner-Oekosystem.
+Die technische Faehigkeit (OCLA external capability path) existiert als
+Fallback fuer Enterprise-Kunden, wird aber nicht aktiv beworben oder
+entwickelt.
 
-| # | Task | Status |
-|---|------|--------|
-| 5.1 | Define OptimizationProvider interop contract | pending |
-| 5.2 | RTK conversation: propose joint benchmark experiment | pending |
-| 5.3 | Implement RTK as external capability provider (if agreed) | pending |
-| 5.4 | Run 4-arm benchmark: Stock / RTK / LeanCTX / RTK+LeanCTX | pending |
-| 5.5 | Publish results (blog post, community) | pending |
-| 5.6 | Customer-developed capability example (Knowledge Graph) | pending |
+**Reasoning:**
+- Partner-Oekosystem gibt Wertschoepfung ab
+- "Composable Layer" positioniert LeanCTX als Infrastruktur statt Loesung
+- Monopol auf Token-Savings-Kette ist strategisch staerker
+- Kapazitaet besser investiert in eigene Performance-Verbesserungen
 
----
-
+**Was bleibt:**
+- WS-4.8 External Capability Cookbook (technische Referenz)
+- OCLA Contract (Enterprise kann eigene Capabilities bauen falls noetig)
+- Kein aktives Marketing, keine Partner-Akquise, kein Oekosystem-Bau
 
 ## WS-6: Benchmark + Calibrator (Research Track)
 **Goal:** Validate the Calibrator concept: one agent, two profiles, controlled benchmark, quality preserved, correct recommendation.
@@ -181,7 +182,7 @@ cargo fmt --check
 | WS-3 | #1260 old pages / nav / footer / SEO | **open** |
 | WS-3 | #1261 production deploy | **open** |
 | WS-4 | #1262–#1266 | **open** — engineering unblocked 2026-08-21; do not market |
-| WS-5 | #1267–#1268 | **open** — still blocked (needs a partner + working external path) |
+| WS-5 | #1267–#1268 | **cancelled** — monopoly strategy, close issues |
 
 ---
 
@@ -189,6 +190,9 @@ cargo fmt --check
 
 - No marketplace
 - No 10 partner integrations
+- No partner ecosystem or "composable optimizer" marketing
+- No RTK/Headroom/Caveman integrations or joint experiments
+- No OptimizationProvider interop promotion
 - No control plane or dashboard
 - No AutoTune (Continuous Optimization is Phase E, later)
 - No hosted platform claims
@@ -205,7 +209,7 @@ cargo fmt --check
 ✓ SDK v1 on PyPI with ctx.wrap() + Receipt
 ✓ One paid customer has a verified Receipt
 ✓ CompressionProvider runs through OCLA v0 contract
-✓ One external capability benchmarked
+✗ WS-5 cancelled — monopoly strategy, no external partnerships
 ```
 
 When all six are true, we have earned the right to talk about
