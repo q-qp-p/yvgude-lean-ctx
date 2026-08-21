@@ -573,18 +573,22 @@ pub fn apply_triage_filter(
             .collect(),
         2 => {
             let keywords = extract_task_keywords(&profile.task_class, &profile.intent);
-            lines
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| {
-                    let trimmed = line.trim();
-                    is_structural_line(trimmed) || {
-                        let lowercase = trimmed.to_lowercase();
-                        keywords.iter().any(|keyword| lowercase.contains(keyword))
-                    }
-                })
-                .map(|(i, _)| i)
-                .collect()
+            if crate::core::triage::markdown::looks_like_markdown(&lines) {
+                crate::core::triage::markdown::keep_indices(&lines, &keywords)
+            } else {
+                lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| {
+                        let trimmed = line.trim();
+                        is_structural_line(trimmed) || {
+                            let lowercase = trimmed.to_lowercase();
+                            keywords.iter().any(|keyword| lowercase.contains(keyword))
+                        }
+                    })
+                    .map(|(i, _)| i)
+                    .collect()
+            }
         }
         _ => return (output.to_string(), 0),
     };
@@ -598,6 +602,12 @@ pub fn apply_triage_filter(
     // compression outcome — the marker plus retry costs more than passing
     // through the original content. Return unfiltered when nothing survives.
     if keep.is_empty() {
+        return (output.to_string(), 0);
+    }
+    // Heading-only markdown is the same failure mode: ATX titles match
+    // is_structural_line (`#…`) so keep is non-empty, but every body
+    // paragraph is gone. Pass through instead of returning a TOC.
+    if crate::core::triage::markdown::is_heading_only_collapse(&lines, &keep) {
         return (output.to_string(), 0);
     }
     let mut result = String::with_capacity(output.len());
@@ -1243,5 +1253,45 @@ mod tests {
             extract_task_keywords("bug_fix", "Fix context-gate"),
             ["bug", "context", "fix", "gate"]
         );
+    }
+
+    #[test]
+    fn markdown_level_two_keeps_section_leads_not_just_headings() {
+        let profile = test_profile(500, 200);
+        let filler = "Later filler that restates the same loop in racing language. ".repeat(8);
+        let extra = "Ignore this extra dashboard discussion. ".repeat(8);
+        let output = [
+            "# LeanCTX: The Context SDK for AI Agents",
+            "",
+            "## The context-performance loop",
+            "Connect, measure, tune, prove, deploy, repeat.",
+            "",
+            filler.as_str(),
+            "",
+            "## The Receipt is the trust product",
+            "A Receipt is evidence, not a decorative log.",
+            "",
+            extra.as_str(),
+            "",
+            "## Guardrails",
+            "Local runtime, SDK, CLI, and Receipt stay useful offline.",
+            "",
+            extra.as_str(),
+        ]
+        .join("\n");
+        let (filtered, removed) = apply_triage_filter(&output, &profile, 2);
+        assert!(
+            filtered.contains("Connect, measure, tune, prove"),
+            "section lead must survive: {filtered}"
+        );
+        assert!(
+            filtered.contains("A Receipt is evidence"),
+            "receipt lead must survive: {filtered}"
+        );
+        assert!(
+            !filtered.contains("racing language"),
+            "later filler should drop: {filtered}"
+        );
+        assert!(removed > 0);
     }
 }
