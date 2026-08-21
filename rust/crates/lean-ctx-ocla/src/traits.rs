@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use lean_ctx_protocol::CapabilityManifestV1;
 
 use crate::types::{
     AgentEnvelope, CompressionRequest, CompressionResult, ConfigProposal, ConfigTuningRequest,
@@ -12,6 +13,37 @@ use crate::types::{
 /// Common, versioned discovery surface for every OCLA capability.
 pub trait OclaService: Send + Sync {
     fn capability(&self) -> OclaCapability;
+
+    /// Returns the versioned contract, or a valid unavailable placeholder.
+    fn manifest(&self) -> CapabilityManifestV1 {
+        let capability = self.capability();
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "capability_id": format!(
+                "capability://leanctx/placeholder/{:?}",
+                capability.kind
+            )
+            .to_ascii_lowercase(),
+            "provider": "leanctx",
+            "kind": "context_source",
+            "version": "0.0.0",
+            "surfaces": ["context"],
+            "support_matrix": {"context": {"supported": false}},
+            "local": true,
+            "remote": false,
+            "reversibility": "reversible",
+            "determinism": "deterministic",
+            "data_movement": "local_only",
+            "supported_classifications": ["Public"],
+            "measurement_support": {
+                "latency": false,
+                "tokens": false,
+                "quality": false
+            },
+            "conformance_version": 1
+        }))
+        .expect("static OCLA placeholder manifest is valid")
+    }
 }
 
 #[async_trait]

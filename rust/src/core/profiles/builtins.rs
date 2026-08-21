@@ -1,6 +1,7 @@
 use super::types::{
-    BudgetConfig, CompressionConfig, DegradationConfig, LayoutConfig, OutputHints, PipelineConfig,
-    Profile, ProfileAutonomy, ProfileMeta, ReadConfig, RoutingConfig, TranslationConfig,
+    BudgetConfig, CapabilitiesConfig, CompressionConfig, ConstraintsConfig, DegradationConfig,
+    LayoutConfig, OutputHints, PipelineConfig, Profile, ProfileAutonomy, ProfileMeta, ReadConfig,
+    RoutingConfig, TranslationConfig,
 };
 use std::collections::HashMap;
 
@@ -36,6 +37,11 @@ pub(super) fn builtin_coder() -> Profile {
             max_shell_invocations: Some(100),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig {
+            quality_floor: Some(0.95),
+            ..ConstraintsConfig::default()
+        },
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig::default(),
         degradation: DegradationConfig::default(),
@@ -74,6 +80,11 @@ pub(super) fn builtin_exploration() -> Profile {
             max_context_tokens: Some(200_000),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig {
+            quality_floor: Some(0.90),
+            ..ConstraintsConfig::default()
+        },
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig::default(),
         degradation: DegradationConfig::default(),
@@ -114,6 +125,8 @@ fn builtin_bugfix() -> Profile {
             max_shell_invocations: Some(50),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig {
             max_model_tier: Some("standard".to_string()),
@@ -154,6 +167,8 @@ fn builtin_hotfix() -> Profile {
             max_shell_invocations: Some(20),
             max_cost_usd: Some(1.0),
         },
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig {
             max_model_tier: Some("fast".to_string()),
@@ -193,6 +208,8 @@ fn builtin_ci_debug() -> Profile {
             max_shell_invocations: Some(200),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig {
             max_model_tier: Some("standard".to_string()),
@@ -232,6 +249,11 @@ fn builtin_review() -> Profile {
             max_shell_invocations: Some(30),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig {
+            quality_floor: Some(0.98),
+            ..ConstraintsConfig::default()
+        },
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig {
             max_model_tier: Some("standard".to_string()),
@@ -278,6 +300,8 @@ fn builtin_passthrough() -> Profile {
             max_context_tokens: Some(1_000_000),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig {
             intent: Some(false),
             relevance: Some(false),

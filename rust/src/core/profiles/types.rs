@@ -20,6 +20,10 @@ pub struct Profile {
     #[serde(default)]
     pub budget: BudgetConfig,
     #[serde(default)]
+    pub constraints: ConstraintsConfig,
+    #[serde(default)]
+    pub capabilities: CapabilitiesConfig,
+    #[serde(default)]
     pub pipeline: PipelineConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
@@ -255,6 +259,67 @@ impl BudgetConfig {
     pub fn max_cost_usd_effective(&self) -> f64 {
         self.max_cost_usd.unwrap_or(5.0)
     }
+}
+
+/// Hard requirements for a profile's output and resource use.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ConstraintsConfig {
+    /// Minimum quality score, from 0.0 to 1.0.
+    pub quality_floor: Option<f64>,
+    /// Maximum cost per task in USD.
+    pub max_cost_usd: Option<f64>,
+    /// Maximum latency per operation in milliseconds.
+    pub max_latency_ms: Option<u64>,
+    /// Hard context limit, overriding the budget when lower.
+    pub max_context_tokens: Option<usize>,
+    /// Require output verification before accepting a result.
+    pub require_verification: Option<bool>,
+}
+
+impl ConstraintsConfig {
+    pub fn quality_floor_effective(&self) -> f64 {
+        self.quality_floor.unwrap_or(0.95)
+    }
+
+    pub fn max_cost_usd_effective(&self) -> f64 {
+        self.max_cost_usd.unwrap_or(f64::MAX)
+    }
+
+    pub fn max_latency_ms_effective(&self) -> u64 {
+        self.max_latency_ms.unwrap_or(u64::MAX)
+    }
+
+    pub fn max_context_tokens_effective(&self) -> usize {
+        self.max_context_tokens.unwrap_or(usize::MAX)
+    }
+
+    pub fn require_verification_effective(&self) -> bool {
+        self.require_verification.unwrap_or(false)
+    }
+}
+
+/// Provider and strategy selected for one context-engineering capability.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CapabilityBinding {
+    /// Provider identifier, such as `leanctx`, `rtk`, or `custom`.
+    pub provider: Option<String>,
+    /// Strategy identifier, such as `structural` or `adaptive`.
+    pub strategy: Option<String>,
+    /// Pinned provider or strategy version.
+    pub version: Option<String>,
+}
+
+/// Capability provider bindings selected by a profile.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CapabilitiesConfig {
+    pub code_context: Option<CapabilityBinding>,
+    pub shell_output: Option<CapabilityBinding>,
+    pub knowledge: Option<CapabilityBinding>,
+    pub routing: Option<CapabilityBinding>,
+    pub compression: Option<CapabilityBinding>,
 }
 
 /// Pipeline layer activation per profile.

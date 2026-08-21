@@ -4,6 +4,7 @@
 //! capability Unavailable when no valid project root exists. Rejects non-file refs
 //! and propagates all errors (fail-closed, no fabricated fallbacks).
 
+use lean_ctx_protocol::CapabilityManifestV1;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -19,6 +20,12 @@ use crate::core::ocla::types::{
 };
 use crate::core::ocla_bus::{self, OclaEvent};
 use crate::core::tokens;
+
+const COMPRESSION_MANIFEST_JSON: &str = include_str!(
+    "../../../../../docs/contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json"
+);
+
+static COMPRESSION_MANIFEST: OnceLock<CapabilityManifestV1> = OnceLock::new();
 
 static DEFAULT_PORT: OnceLock<Option<CompressionContentPort>> = OnceLock::new();
 
@@ -58,6 +65,16 @@ pub struct BuiltinCompressionProvider;
 impl BuiltinCompressionProvider {
     pub fn new() -> Self {
         Self
+    }
+
+    /// The pinned v1 contract exposed by the context-compression capability.
+    pub fn manifest(&self) -> CapabilityManifestV1 {
+        COMPRESSION_MANIFEST
+            .get_or_init(|| {
+                serde_json::from_str(COMPRESSION_MANIFEST_JSON)
+                    .expect("pinned compression capability manifest must parse")
+            })
+            .clone()
     }
 
     pub fn compress_with_port(
@@ -145,6 +162,10 @@ impl OclaService for BuiltinCompressionProvider {
                 limits: BTreeMap::new(),
             }
         }
+    }
+
+    fn manifest(&self) -> CapabilityManifestV1 {
+        BuiltinCompressionProvider::manifest(self)
     }
 }
 

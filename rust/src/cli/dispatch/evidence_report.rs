@@ -399,6 +399,8 @@ mod tests {
             schema_version: "1".to_string(),
             integrity_status: "observed".to_string(),
             outcome: "succeeded".to_string(),
+            capability_id: None,
+            capability_version: None,
             baseline: ArmResult {
                 arm: "baseline".to_string(),
                 turns: vec![baseline_turn],

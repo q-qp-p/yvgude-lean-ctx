@@ -8,6 +8,7 @@
 //!   lean-ctx-enterprise depends on lean-ctx-ocla (Proprietary → OSS)
 //!   lean-ctx-ocla depends on NOTHING from lean-ctx-core or enterprise
 
+pub mod manifest;
 pub mod traits;
 pub mod types;
 

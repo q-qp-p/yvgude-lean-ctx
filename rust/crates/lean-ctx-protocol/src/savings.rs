@@ -214,6 +214,8 @@ mod savings_receipt_tests {
             requested_model: "model-1".to_owned(),
             selected_model: "model-1".to_owned(),
             provider: "provider-1".to_owned(),
+            capability_id: None,
+            capability_version: None,
             model_calls: 1,
             retries: 0,
             latency_ms: 10,

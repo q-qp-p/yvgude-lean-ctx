@@ -90,6 +90,28 @@ impl OclaRegistry {
             delivery_registry: Arc::new(BuiltinDeliveryRegistry::new()),
         }
     }
+
+    /// Lists capability manifests in the same deterministic order as the
+    /// registry's service fields.
+    pub fn manifests(&self) -> Vec<CapabilityManifestV1> {
+        vec![
+            self.observation_hook.manifest(),
+            self.usage_sink.manifest(),
+            self.metrics_exporter.manifest(),
+            self.savings_ledger.manifest(),
+            self.intent_classifier.manifest(),
+            self.outcome_tracker.manifest(),
+            self.compression_provider.manifest(),
+            self.response_optimizer.manifest(),
+            self.model_router.manifest(),
+            self.efficiency_analyzer.manifest(),
+            self.config_tuner.manifest(),
+            self.experiment_runner.manifest(),
+            self.connector_scheduler.manifest(),
+            self.agent_gateway.manifest(),
+            self.delivery_registry.manifest(),
+        ]
+    }
 }
 
 #[cfg(test)]

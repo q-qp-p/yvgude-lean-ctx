@@ -151,6 +151,8 @@ mod tests {
             reasoning_need_milli: 0,
             risk_signal: lean_ctx_protocol::RiskClass::High,
             confidence_milli: 0,
+            capability_id: None,
+            capability_version: None,
             keywords: vec![],
             language_hints: vec![],
         };

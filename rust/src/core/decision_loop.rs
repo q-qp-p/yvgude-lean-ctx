@@ -120,6 +120,8 @@ pub(crate) fn protocol_profile(profile: &TaskProfileLocal) -> TaskProfileV1 {
             _ => RiskClass::Low,
         },
         confidence_milli: profile.confidence_milli,
+        capability_id: None,
+        capability_version: None,
         keywords: Vec::new(),
         language_hints: Vec::new(),
     }

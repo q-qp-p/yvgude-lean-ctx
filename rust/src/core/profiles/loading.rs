@@ -1,7 +1,8 @@
 use super::builtins::{builtin_coder, builtin_profile, builtin_profiles};
 use super::types::{
-    BudgetConfig, CompressionConfig, DegradationConfig, LayoutConfig, OutputHints, PipelineConfig,
-    Profile, ProfileAutonomy, ProfileMeta, ReadConfig, RoutingConfig, TranslationConfig,
+    BudgetConfig, CapabilitiesConfig, CapabilityBinding, CompressionConfig, ConstraintsConfig,
+    DegradationConfig, LayoutConfig, OutputHints, PipelineConfig, Profile, ProfileAutonomy,
+    ProfileMeta, ReadConfig, RoutingConfig, TranslationConfig,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -236,6 +237,47 @@ pub(super) fn merge_profiles(parent: Profile, child: Profile) -> Profile {
             .or(parent.budget.max_shell_invocations),
         max_cost_usd: child.budget.max_cost_usd.or(parent.budget.max_cost_usd),
     };
+    let constraints = ConstraintsConfig {
+        quality_floor: child
+            .constraints
+            .quality_floor
+            .or(parent.constraints.quality_floor),
+        max_cost_usd: child
+            .constraints
+            .max_cost_usd
+            .or(parent.constraints.max_cost_usd),
+        max_latency_ms: child
+            .constraints
+            .max_latency_ms
+            .or(parent.constraints.max_latency_ms),
+        max_context_tokens: child
+            .constraints
+            .max_context_tokens
+            .or(parent.constraints.max_context_tokens),
+        require_verification: child
+            .constraints
+            .require_verification
+            .or(parent.constraints.require_verification),
+    };
+    let capabilities = CapabilitiesConfig {
+        code_context: merge_capability_binding(
+            parent.capabilities.code_context,
+            child.capabilities.code_context,
+        ),
+        shell_output: merge_capability_binding(
+            parent.capabilities.shell_output,
+            child.capabilities.shell_output,
+        ),
+        knowledge: merge_capability_binding(
+            parent.capabilities.knowledge,
+            child.capabilities.knowledge,
+        ),
+        routing: merge_capability_binding(parent.capabilities.routing, child.capabilities.routing),
+        compression: merge_capability_binding(
+            parent.capabilities.compression,
+            child.capabilities.compression,
+        ),
+    };
     let pipeline = PipelineConfig {
         intent: child.pipeline.intent.or(parent.pipeline.intent),
         relevance: child.pipeline.relevance.or(parent.pipeline.relevance),
@@ -360,11 +402,29 @@ pub(super) fn merge_profiles(parent: Profile, child: Profile) -> Profile {
         memory,
         verification,
         budget,
+        constraints,
+        capabilities,
         pipeline,
         routing,
         degradation,
         autonomy,
         output_hints,
+    }
+}
+
+fn merge_capability_binding(
+    parent: Option<CapabilityBinding>,
+    child: Option<CapabilityBinding>,
+) -> Option<CapabilityBinding> {
+    match (parent, child) {
+        (Some(parent), Some(child)) => Some(CapabilityBinding {
+            provider: child.provider.or(parent.provider),
+            strategy: child.strategy.or(parent.strategy),
+            version: child.version.or(parent.version),
+        }),
+        (Some(parent), None) => Some(parent),
+        (None, Some(child)) => Some(child),
+        (None, None) => None,
     }
 }
 

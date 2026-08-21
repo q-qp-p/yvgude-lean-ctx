@@ -1,4 +1,5 @@
 use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
+use lean_ctx_protocol::CapabilityManifestV1;
 
 use super::types::{
     AgentEnvelope, CompressionRequest, CompressionResult, ConfigProposal, ConfigTuningRequest,
@@ -13,6 +14,41 @@ use super::types::{
 /// Common, versioned discovery surface for every OCLA capability.
 pub trait OclaService: Send + Sync {
     fn capability(&self) -> OclaCapability;
+
+    /// Returns a discoverable manifest for this service.
+    ///
+    /// Services without a dedicated capability contract use this valid,
+    /// explicitly unsupported placeholder until they are promoted to a
+    /// versioned capability.
+    fn manifest(&self) -> CapabilityManifestV1 {
+        let capability = self.capability();
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "capability_id": format!(
+                "capability://leanctx/placeholder/{:?}",
+                capability.kind
+            )
+            .to_ascii_lowercase(),
+            "provider": "leanctx",
+            "kind": "context_source",
+            "version": "0.0.0",
+            "surfaces": ["context"],
+            "support_matrix": {"context": {"supported": false}},
+            "local": true,
+            "remote": false,
+            "reversibility": "reversible",
+            "determinism": "deterministic",
+            "data_movement": "local_only",
+            "supported_classifications": ["Public"],
+            "measurement_support": {
+                "latency": false,
+                "tokens": false,
+                "quality": false
+            },
+            "conformance_version": 1
+        }))
+        .expect("static OCLA placeholder manifest is valid")
+    }
 }
 
 pub trait ObservationHook: OclaService {

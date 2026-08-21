@@ -114,6 +114,12 @@ pub struct ExecutionReceiptV1 {
     pub requested_model: String,
     pub selected_model: String,
     pub provider: String,
+    /// Capability that produced this receipt, when the producer is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    /// Version of the capability that produced this receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_version: Option<String>,
     pub model_calls: u32,
     pub retries: u32,
     pub latency_ms: u64,
@@ -209,6 +215,8 @@ mod tests {
             requested_model: "model-requested".to_owned(),
             selected_model: "model-selected".to_owned(),
             provider: "provider-1".to_owned(),
+            capability_id: Some("capability://leanctx/context".to_owned()),
+            capability_version: Some("1.0.0".to_owned()),
             model_calls: 2,
             retries: 1,
             latency_ms: 900,
@@ -229,5 +237,61 @@ mod tests {
         receipt
             .validate()
             .expect("receipt should satisfy invariants");
+    }
+
+    #[test]
+    fn receipt_capability_metadata_is_optional_and_backward_compatible() {
+        let receipt = ExecutionReceiptV1 {
+            schema_version: 1,
+            receipt_id: id("receipt-1"),
+            task_id: id("task-1"),
+            plan_id: id("plan-1"),
+            context_balance: balance(),
+            fresh_input_tokens: 600,
+            cached_input_tokens: 100,
+            output_tokens: 200,
+            reasoning_tokens: 50,
+            requested_model: "model-requested".to_owned(),
+            selected_model: "model-selected".to_owned(),
+            provider: "provider-1".to_owned(),
+            capability_id: Some("capability://leanctx/context".to_owned()),
+            capability_version: Some("1.0.0".to_owned()),
+            model_calls: 2,
+            retries: 1,
+            latency_ms: 900,
+            actual_cost_micros: 2_000,
+            baseline_cost_micros: 3_000,
+            avoided_cost_micros: 1_000,
+            etpao_milli: 1_250,
+            outcome_ref: Some("outcome:1".to_owned()),
+            knowledge_refs: vec!["knowledge:1".to_owned()],
+            decision_refs: vec!["decision:1".to_owned()],
+            evidence_refs: vec![],
+            signature: "signature".to_owned(),
+        };
+        let json = serde_json::to_value(&receipt).expect("receipt should serialize");
+        assert_eq!(json["capability_id"], "capability://leanctx/context");
+        assert_eq!(
+            serde_json::from_value::<ExecutionReceiptV1>(json.clone())
+                .expect("receipt with capability metadata should deserialize"),
+            receipt
+        );
+
+        let mut legacy = json;
+        let object = legacy
+            .as_object_mut()
+            .expect("serialized receipt should be an object");
+        object.remove("capability_id");
+        object.remove("capability_version");
+
+        let decoded: ExecutionReceiptV1 =
+            serde_json::from_value(legacy).expect("legacy receipt should deserialize");
+        assert_eq!(decoded.capability_id, None);
+        assert_eq!(decoded.capability_version, None);
+
+        let without_capability = serde_json::to_value(decoded)
+            .expect("receipt without capability metadata should serialize");
+        assert!(without_capability.get("capability_id").is_none());
+        assert!(without_capability.get("capability_version").is_none());
     }
 }

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://leanctx.com/schemas/performance-profile/v1/performance-profile.json",
+  "title": "LeanCTX PerformanceProfileV1",
+  "description": "Canonical, shareable configuration and constraint profile for context-engineering performance benchmarks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version"],
+  "properties": {
+    "id": { "$ref": "#/$defs/identifier" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "version": { "$ref": "#/$defs/semanticVersion" },
+    "description": { "type": "string", "maxLength": 4096 },
+    "author": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "visibility": { "type": "string", "enum": ["public", "private", "team"] },
+    "inherits": { "$ref": "#/$defs/identifier" },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "uniqueItems": true,
+      "maxItems": 64
+    },
+    "context": { "$ref": "#/$defs/contextConfiguration" },
+    "capabilities": { "$ref": "#/$defs/capabilities" },
+    "constraints": { "$ref": "#/$defs/constraints" },
+    "routing": { "$ref": "#/$defs/routing" },
+    "pipeline": { "$ref": "#/$defs/pipeline" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "contextConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "budget_tokens": { "type": "integer", "minimum": 1000, "maximum": 1000000 },
+        "read_strategy": { "type": "string", "enum": ["exact", "structural", "adaptive"] },
+        "compression": { "type": "string", "enum": ["lossless", "balanced", "aggressive"] },
+        "reuse_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "recovery": { "type": "boolean" },
+        "search": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_results": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "capabilityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "strategy": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code_context": { "$ref": "#/$defs/capabilityBinding" },
+        "shell_output": { "$ref": "#/$defs/capabilityBinding" },
+        "knowledge": { "$ref": "#/$defs/capabilityBinding" },
+        "routing": { "$ref": "#/$defs/capabilityBinding" },
+        "compression": { "$ref": "#/$defs/capabilityBinding" }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quality_floor": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "max_cost_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "max_latency_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "require_verification": { "type": "boolean" }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_model_tier": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "degrade_under_pressure": { "type": "boolean" }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intent": { "type": "boolean" },
+        "relevance": { "type": "boolean" },
+        "compression": { "type": "boolean" },
+        "translation": { "type": "boolean" }
+      }
+    }
+  }
+}

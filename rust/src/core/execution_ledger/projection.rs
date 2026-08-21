@@ -216,6 +216,8 @@ pub fn receipt_for_task_from_store(
         requested_model,
         selected_model,
         provider,
+        capability_id: None,
+        capability_version: None,
         model_calls,
         retries: 0,
         latency_ms: total_latency,

@@ -276,6 +276,8 @@ impl ReceiptBuilder {
             requested_model,
             selected_model,
             provider,
+            capability_id: None,
+            capability_version: None,
             model_calls,
             retries,
             latency_ms,

@@ -1,0 +1,182 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://lean-ctx.dev/contracts/ocla/ocla-capability-manifest-v1.schema.json",
+  "title": "OCLA Capability Manifest v1",
+  "description": "Provider capability declaration. Unknown top-level fields are permitted for additive forward-compatible evolution.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "capability_id",
+    "provider",
+    "kind",
+    "version",
+    "surfaces",
+    "support_matrix",
+    "local",
+    "remote",
+    "reversibility",
+    "determinism",
+    "data_movement",
+    "supported_classifications",
+    "measurement_support",
+    "conformance_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Capability-manifest wire-schema version.",
+      "type": "integer",
+      "const": 1
+    },
+    "capability_id": {
+      "description": "Stable, non-empty capability identifier.",
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "description": "Provider that exposes the capability.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "Capability category (CapabilityKind).",
+      "type": "string",
+      "enum": [
+        "tool",
+        "model",
+        "provider",
+        "context_source",
+        "validator",
+        "scheduler",
+        "shell_output_optimization",
+        "other"
+      ]
+    },
+    "version": {
+      "description": "Provider-defined capability version.",
+      "type": "string",
+      "minLength": 1
+    },
+    "surfaces": {
+      "description": "Invocation or discovery surfaces exposed by the capability.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "support_matrix": {
+      "description": "Per-surface support metadata keyed by surface name.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/surfaceSupport"
+      }
+    },
+    "local": {
+      "description": "Whether the capability supports local execution.",
+      "type": "boolean"
+    },
+    "remote": {
+      "description": "Whether the capability supports remote execution.",
+      "type": "boolean"
+    },
+    "reversibility": {
+      "description": "Effect rollback guarantee (Reversibility).",
+      "type": "string",
+      "enum": ["reversible", "irreversible", "conditional"]
+    },
+    "determinism": {
+      "description": "Output determinism guarantee (Determinism).",
+      "type": "string",
+      "enum": ["deterministic", "seeded", "non_deterministic"]
+    },
+    "data_movement": {
+      "description": "Furthest boundary crossed by capability data (DataMovement).",
+      "type": "string",
+      "enum": ["none", "local_only", "remote", "cross_region"]
+    },
+    "supported_classifications": {
+      "description": "Data classifications accepted by the capability.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["Public", "Internal", "Confidential", "Restricted"]
+      }
+    },
+    "measurement_support": {
+      "$ref": "#/definitions/measurementSupport"
+    },
+    "input_schema_ref": {
+      "description": "Optional reference to the capability-wide input schema.",
+      "type": ["string", "null"]
+    },
+    "output_schema_ref": {
+      "description": "Optional reference to the capability-wide output schema.",
+      "type": ["string", "null"]
+    },
+    "conformance_version": {
+      "description": "Major version of the conformance contract implemented by this capability.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "description": "A capability must support at least one execution locality.",
+      "anyOf": [
+        {"properties": {"local": {"const": true}}},
+        {"properties": {"remote": {"const": true}}}
+      ]
+    },
+    {
+      "description": "Remote execution must declare a data-movement boundary beyond none.",
+      "if": {"properties": {"remote": {"const": true}}},
+      "then": {
+        "properties": {
+          "data_movement": {"enum": ["local_only", "remote", "cross_region"]}
+        }
+      }
+    },
+    {
+      "description": "Confidential or restricted data cannot be declared for remote or cross-region movement.",
+      "if": {
+        "properties": {
+          "supported_classifications": {
+            "contains": {"enum": ["Confidential", "Restricted"]}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "remote": {"const": false},
+          "data_movement": {"enum": ["none", "local_only"]}
+        }
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "definitions": {
+    "measurementSupport": {
+      "description": "MeasurementSupportV1. This nested object is closed.",
+      "type": "object",
+      "required": ["latency", "tokens", "quality"],
+      "properties": {
+        "latency": {"type": "boolean"},
+        "tokens": {"type": "boolean"},
+        "quality": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "surfaceSupport": {
+      "description": "SurfaceSupportV1. This nested object is closed.",
+      "type": "object",
+      "required": ["supported"],
+      "properties": {
+        "supported": {"type": "boolean"},
+        "input_schema_ref": {"type": ["string", "null"]},
+        "output_schema_ref": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  }
+}

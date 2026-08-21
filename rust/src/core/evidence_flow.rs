@@ -186,6 +186,8 @@ pub fn arm_to_receipt(arm: &ArmResult, run_id: &str, plan_id: &str) -> Execution
         requested_model: arm.model.clone(),
         selected_model: arm.model.clone(),
         provider: arm.provider.clone(),
+        capability_id: None,
+        capability_version: None,
         model_calls: 1,
         retries: 0,
         latency_ms: arm.latency_ms,

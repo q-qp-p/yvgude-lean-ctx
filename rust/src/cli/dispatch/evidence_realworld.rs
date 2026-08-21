@@ -21,6 +21,7 @@ use crate::shell::compress::engine::compress_if_beneficial_pub;
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 const SHELL_CAP_LINES: usize = 500;
+const REALWORLD_EVIDENCE_CAPABILITY_ID: &str = "capability://leanctx/evidence-realworld";
 
 // ─── Data Structures ────────────────────────────────────────────────────────
 
@@ -80,6 +81,12 @@ pub(crate) struct RealWorldResult {
     pub integrity_status: String,
     #[serde(default = "default_outcome")]
     pub outcome: String,
+    /// Capability that produced this performance result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    /// Version of the capability that produced this performance result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_version: Option<String>,
     pub baseline: ArmResult,
     pub treatment: ArmResult,
     pub savings_tokens_pct: f64,
@@ -261,6 +268,8 @@ fn build_realworld_result(
         schema_version: default_schema_version(),
         integrity_status: default_integrity_status(),
         outcome: default_outcome(),
+        capability_id: Some(REALWORLD_EVIDENCE_CAPABILITY_ID.to_owned()),
+        capability_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         baseline,
         treatment,
         savings_tokens_pct,
@@ -889,7 +898,32 @@ mod tests {
         assert_eq!(result.savings.methodology, "baseline_treatment");
         assert_eq!(result.savings.original_tokens, 5000);
         assert_eq!(result.savings.delivered_tokens, 1500);
+        assert_eq!(
+            result.capability_id.as_deref(),
+            Some(REALWORLD_EVIDENCE_CAPABILITY_ID)
+        );
+        assert_eq!(
+            result.capability_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
         assert!(result.methodology.multi_turn);
         assert!(!result.methodology.fair_baseline.is_empty());
+    }
+
+    #[test]
+    fn performance_result_capability_metadata_is_backward_compatible() {
+        let result = sample_result(1000, 300);
+        let mut legacy =
+            serde_json::to_value(result).expect("performance result should serialize as JSON");
+        let object = legacy
+            .as_object_mut()
+            .expect("serialized performance result should be an object");
+        object.remove("capability_id");
+        object.remove("capability_version");
+
+        let decoded: RealWorldResult =
+            serde_json::from_value(legacy).expect("legacy performance result should deserialize");
+        assert_eq!(decoded.capability_id, None);
+        assert_eq!(decoded.capability_version, None);
     }
 }

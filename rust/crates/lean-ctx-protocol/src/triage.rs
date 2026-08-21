@@ -45,6 +45,12 @@ pub struct TaskProfileV1 {
     pub risk_signal: RiskClass,
     #[serde(deserialize_with = "deserialize_milliunit")]
     pub confidence_milli: u16,
+    /// Capability that produced this profile, when the producer is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    /// Version of the capability that produced this profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_version: Option<String>,
     #[serde(default)]
     pub keywords: Vec<String>,
     #[serde(default)]
@@ -62,6 +68,8 @@ impl Default for TaskProfileV1 {
             reasoning_need_milli: 0,
             risk_signal: RiskClass::Low,
             confidence_milli: 0,
+            capability_id: None,
+            capability_version: None,
             keywords: Vec::new(),
             language_hints: Vec::new(),
         }
@@ -138,6 +146,8 @@ mod tests {
             reasoning_need_milli: 800,
             risk_signal: RiskClass::Low,
             confidence_milli: 900,
+            capability_id: Some("capability://leanctx/triage".to_owned()),
+            capability_version: Some("1.0.0".to_owned()),
             keywords: vec!["rust".to_owned(), "protocol".to_owned()],
             language_hints: vec!["rust".to_owned()],
         }
@@ -165,6 +175,35 @@ mod tests {
             serde_json::from_str(&json).expect("triage result should deserialize");
         assert_eq!(result, decoded);
         result.validate().expect("triage result should be valid");
+    }
+
+    #[test]
+    fn profile_capability_metadata_is_optional_and_backward_compatible() {
+        let profile = valid_profile();
+        let json = serde_json::to_value(&profile).expect("profile should serialize");
+        assert_eq!(json["capability_id"], "capability://leanctx/triage");
+        assert_eq!(
+            serde_json::from_value::<TaskProfileV1>(json.clone())
+                .expect("profile with capability metadata should deserialize"),
+            profile
+        );
+
+        let mut legacy = json;
+        let object = legacy
+            .as_object_mut()
+            .expect("serialized profile should be an object");
+        object.remove("capability_id");
+        object.remove("capability_version");
+
+        let decoded: TaskProfileV1 =
+            serde_json::from_value(legacy).expect("legacy profile should deserialize");
+        assert_eq!(decoded.capability_id, None);
+        assert_eq!(decoded.capability_version, None);
+
+        let without_capability = serde_json::to_value(decoded)
+            .expect("profile without capability metadata should serialize");
+        assert!(without_capability.get("capability_id").is_none());
+        assert!(without_capability.get("capability_version").is_none());
     }
 
     #[test]

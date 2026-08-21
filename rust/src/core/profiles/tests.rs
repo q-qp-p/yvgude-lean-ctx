@@ -63,6 +63,8 @@ fn merge_child_overrides_parent() {
             max_context_tokens: Some(10_000),
             ..BudgetConfig::default()
         },
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig::default(),
         degradation: DegradationConfig::default(),
@@ -98,6 +100,8 @@ fn merge_partial_child_inherits_parent_fields() {
         memory: crate::core::memory_policy::MemoryPolicyOverrides::default(),
         verification: crate::core::output_verification::VerificationConfig::default(),
         budget: BudgetConfig::default(),
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig::default(),
         degradation: DegradationConfig::default(),
@@ -180,6 +184,8 @@ fn default_profile_has_sane_values() {
         memory: crate::core::memory_policy::MemoryPolicyOverrides::default(),
         verification: crate::core::output_verification::VerificationConfig::default(),
         budget: BudgetConfig::default(),
+        constraints: ConstraintsConfig::default(),
+        capabilities: CapabilitiesConfig::default(),
         pipeline: PipelineConfig::default(),
         routing: RoutingConfig::default(),
         degradation: DegradationConfig::default(),
@@ -241,4 +247,119 @@ default_mode = "map"
     assert_eq!(p.read.prefer_cache, None);
     assert_eq!(p.budget.max_context_tokens, None);
     assert_eq!(p.compression.crp_mode, None);
+}
+
+#[test]
+fn constraints_merge_field_by_field() {
+    let mut parent = builtin_exploration();
+    parent.constraints = ConstraintsConfig {
+        quality_floor: Some(0.99),
+        max_cost_usd: Some(2.50),
+        max_latency_ms: Some(500),
+        max_context_tokens: Some(80_000),
+        require_verification: Some(true),
+    };
+    let mut child = builtin_exploration();
+    child.constraints = ConstraintsConfig {
+        quality_floor: Some(0.97),
+        max_cost_usd: None,
+        max_latency_ms: Some(250),
+        max_context_tokens: None,
+        require_verification: None,
+    };
+
+    let merged = merge_profiles(parent, child);
+
+    assert_eq!(merged.constraints.quality_floor, Some(0.97));
+    assert_eq!(merged.constraints.max_cost_usd, Some(2.50));
+    assert_eq!(merged.constraints.max_latency_ms, Some(250));
+    assert_eq!(merged.constraints.max_context_tokens, Some(80_000));
+    assert_eq!(merged.constraints.require_verification, Some(true));
+}
+
+#[test]
+fn capabilities_merge_field_by_field() {
+    let mut parent = builtin_exploration();
+    parent.capabilities = CapabilitiesConfig {
+        code_context: Some(CapabilityBinding {
+            provider: Some("leanctx".to_string()),
+            strategy: Some("structural".to_string()),
+            version: Some("1.0".to_string()),
+        }),
+        knowledge: Some(CapabilityBinding {
+            provider: Some("leanctx".to_string()),
+            strategy: Some("semantic".to_string()),
+            version: None,
+        }),
+        ..CapabilitiesConfig::default()
+    };
+    let mut child = builtin_exploration();
+    child.capabilities = CapabilitiesConfig {
+        code_context: Some(CapabilityBinding {
+            provider: None,
+            strategy: Some("adaptive".to_string()),
+            version: Some("2.0".to_string()),
+        }),
+        routing: Some(CapabilityBinding {
+            provider: Some("custom".to_string()),
+            strategy: None,
+            version: None,
+        }),
+        ..CapabilitiesConfig::default()
+    };
+
+    let merged = merge_profiles(parent, child);
+    let code_context = merged.capabilities.code_context.unwrap();
+
+    assert_eq!(code_context.provider.as_deref(), Some("leanctx"));
+    assert_eq!(code_context.strategy.as_deref(), Some("adaptive"));
+    assert_eq!(code_context.version.as_deref(), Some("2.0"));
+    assert_eq!(
+        merged
+            .capabilities
+            .knowledge
+            .as_ref()
+            .and_then(|binding| binding.strategy.as_deref()),
+        Some("semantic")
+    );
+    assert_eq!(
+        merged
+            .capabilities
+            .routing
+            .as_ref()
+            .and_then(|binding| binding.provider.as_deref()),
+        Some("custom")
+    );
+}
+
+#[test]
+fn constraints_effective_defaults_are_unbounded() {
+    let constraints = ConstraintsConfig::default();
+
+    assert_eq!(constraints.quality_floor_effective(), 0.95);
+    assert_eq!(constraints.max_cost_usd_effective(), f64::MAX);
+    assert_eq!(constraints.max_latency_ms_effective(), u64::MAX);
+    assert_eq!(constraints.max_context_tokens_effective(), usize::MAX);
+    assert!(!constraints.require_verification_effective());
+}
+
+#[test]
+fn builtin_constraints_match_profile_purpose() {
+    let builtins = builtin_profiles();
+
+    assert_eq!(
+        builtins["coder"].constraints.quality_floor_effective(),
+        0.95
+    );
+    assert_eq!(
+        builtins["exploration"]
+            .constraints
+            .quality_floor_effective(),
+        0.90
+    );
+    assert_eq!(
+        builtins["review"].constraints.quality_floor_effective(),
+        0.98
+    );
+    assert_eq!(builtins["coder"].constraints.max_cost_usd, None);
 }
