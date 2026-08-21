@@ -397,8 +397,6 @@ jobs:
         run: python benchmarks/run.py --turns 40 --needles 6 --context-length 2000 --base-url http://127.0.0.1:9 --no-write
 
   sdk-conformance:
-    # Disabled: depends on clients/python, archived in 106f90446 (#1497)
-    if: false
     # GL #395: every first-party SDK must prove the full /v1 contract against
     # a real engine build. Red when an SDK misses a route, mistypes a shape,
     # or the engine drifts from the frozen surface.
@@ -425,11 +423,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Python SDK
-        working-directory: clients/python
+        working-directory: packages/python-lean-ctx
         # langchain-core gives the adapter smoke a real framework round trip;
         # LlamaIndex/CrewAI skip cleanly (heavy dep trees, covered by the
         # framework-agnostic OpenAI adapter path).
-        run: pip install -e ".[dev]" langchain-core
+        run: pip install -e ".[test]" langchain-core
       - name: Run conformance kit (3 SDKs vs real server)
         run: ./scripts/sdk-conformance.sh
       - name: Upload conformance matrix
@@ -687,7 +685,7 @@ jobs:
       - embed-sdk
       - python-sdk
       - hermes-plugin
-      # - sdk-conformance  # disabled (#1497)
+      - sdk-conformance
       - coverage
       - deny
       - adversarial
@@ -715,4 +713,5 @@ jobs:
           PY
 
   # Security audit runs in security-check.yml workflow
+
 
