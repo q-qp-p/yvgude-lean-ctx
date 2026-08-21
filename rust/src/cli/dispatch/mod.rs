@@ -3,6 +3,7 @@ use crate::{
 };
 
 pub mod analytics;
+pub(crate) mod benchmark_run;
 pub(crate) mod calibrate;
 mod evidence;
 pub(crate) mod evidence_cost;
@@ -12,6 +13,7 @@ pub(crate) mod evidence_workflow;
 mod help;
 mod lifecycle;
 mod network;
+pub(crate) mod pair;
 mod server;
 pub(crate) mod suggest;
 pub mod verify;
@@ -489,8 +491,22 @@ pub fn run() {
                 }
                 return;
             }
+            "benchmark-run" | "bench-run" => {
+                let code = benchmark_run::cmd_benchmark_run(&rest);
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                return;
+            }
             "calibrate" => {
                 let code = calibrate::cmd_calibrate(&rest);
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                return;
+            }
+            "pair" => {
+                let code = pair::cmd_pair(&rest);
                 if code != 0 {
                     std::process::exit(code);
                 }

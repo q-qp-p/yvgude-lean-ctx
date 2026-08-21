@@ -36,6 +36,8 @@ pub mod json_crush;
 pub mod json_sample;
 pub(crate) mod markdown_compact;
 pub mod output_sanitizer;
+#[allow(dead_code)]
+pub(crate) mod pair_protocol;
 pub mod policy;
 pub mod pop_pruning;
 pub mod predictive_coding;
@@ -264,6 +266,8 @@ pub mod anomaly;
 pub(crate) mod benchmark;
 pub mod benchmark_compare;
 #[allow(dead_code)]
+pub(crate) mod benchmark_receipt;
+#[allow(dead_code)]
 pub(crate) mod benchmark_spec;
 pub(crate) mod benchmark_study;
 /// Commercial-plane billing substrate (`billing-plane-v1`): plans, entitlements,
@@ -279,6 +283,8 @@ pub mod contracts;
 pub mod cost_per_outcome;
 pub(crate) mod cyclomatic;
 pub mod degradation_policy;
+#[allow(dead_code)]
+pub(crate) mod local_runner;
 pub mod loop_detection;
 pub mod output_verification;
 pub mod quality;
