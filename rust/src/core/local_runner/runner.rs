@@ -3,11 +3,65 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::core::agent_connector::traits::{AgentConnector, TaskRequest, TaskResult};
+#[cfg(test)]
+use crate::core::agent_connector::traits::{AgentInfo, TokenUsage};
 use crate::core::benchmark_spec::types::{
     BenchmarkOutcome, BenchmarkResult, BenchmarkSpecV1, BenchmarkSummary, BenchmarkTask, TaskKind,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
+
+#[cfg(test)]
+pub(crate) struct MockConnector {
+    should_succeed: bool,
+}
+
+#[cfg(test)]
+impl MockConnector {
+    pub(crate) fn new(should_succeed: bool) -> Self {
+        Self { should_succeed }
+    }
+}
+
+#[cfg(test)]
+impl AgentConnector for MockConnector {
+    fn info(&self) -> AgentInfo {
+        AgentInfo {
+            name: "mock".into(),
+            version: Some("1.0.0".into()),
+            path: PathBuf::from("/usr/bin/mock"),
+            capabilities: vec!["execute".into()],
+            available: true,
+        }
+    }
+
+    fn health_check(&self) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn execute(&self, request: &TaskRequest) -> Result<TaskResult> {
+        Ok(TaskResult {
+            task_id: request.id.clone(),
+            agent: "mock".into(),
+            model: "test-model".into(),
+            success: self.should_succeed,
+            exit_code: i32::from(!self.should_succeed),
+            stdout: "task output".into(),
+            stderr: String::new(),
+            duration_ms: 1000,
+            tokens_used: Some(TokenUsage {
+                input_tokens: 500,
+                output_tokens: 200,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+            }),
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -179,53 +233,7 @@ fn current_unix_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::agent_connector::traits::{AgentInfo, TokenUsage};
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct MockConnector {
-        should_succeed: bool,
-    }
-    impl MockConnector {
-        fn new(should_succeed: bool) -> Self {
-            Self { should_succeed }
-        }
-    }
-
-    impl AgentConnector for MockConnector {
-        fn info(&self) -> AgentInfo {
-            AgentInfo {
-                name: "mock".into(),
-                version: Some("1.0.0".into()),
-                path: PathBuf::from("/usr/bin/mock"),
-                capabilities: vec!["execute".into()],
-                available: true,
-            }
-        }
-        fn health_check(&self) -> Result<bool> {
-            Ok(true)
-        }
-        fn execute(&self, request: &TaskRequest) -> Result<TaskResult> {
-            Ok(TaskResult {
-                task_id: request.id.clone(),
-                agent: "mock".into(),
-                model: "test-model".into(),
-                success: self.should_succeed,
-                exit_code: i32::from(!self.should_succeed),
-                stdout: "task output".into(),
-                stderr: String::new(),
-                duration_ms: 1000,
-                tokens_used: Some(TokenUsage {
-                    input_tokens: 500,
-                    output_tokens: 200,
-                    cache_read_tokens: 0,
-                    cache_write_tokens: 0,
-                }),
-            })
-        }
-        fn name(&self) -> &'static str {
-            "mock"
-        }
-    }
 
     fn test_spec() -> BenchmarkSpecV1 {
         use crate::core::benchmark_spec::types::{
@@ -280,6 +288,29 @@ mod tests {
         assert_eq!(result.outcomes.len(), 2);
         assert!(result.outcomes.iter().all(|o| o.passed));
         assert_eq!(result.summary.passed_tasks, 2);
+    }
+
+    #[test]
+    fn task_request_uses_task_timeout_then_default() {
+        let runner = LocalRunner::new(RunConfig::default(), Box::new(MockConnector::new(true)));
+        let spec = test_spec();
+
+        assert_eq!(
+            runner.task_request(&spec, &spec.suite.tasks[0]).timeout_ms,
+            60_000
+        );
+
+        let task_without_timeout = BenchmarkTask {
+            id: "default-timeout".into(),
+            name: "Default timeout".into(),
+            description: "Use the runner default".into(),
+            kind: TaskKind::Custom,
+            timeout_ms: None,
+        };
+        assert_eq!(
+            runner.task_request(&spec, &task_without_timeout).timeout_ms,
+            DEFAULT_TIMEOUT_MS
+        );
     }
 
     #[test]

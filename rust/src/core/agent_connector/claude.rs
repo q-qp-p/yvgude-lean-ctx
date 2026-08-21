@@ -1,3 +1,4 @@
+use super::timeout::run_with_timeout;
 use super::traits::{AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage};
 use std::process::Command;
 use std::time::Instant;
@@ -36,15 +37,24 @@ impl AgentConnector for ClaudeConnector {
         if let Some(turns) = request.max_turns {
             cmd.arg("--max-turns").arg(turns.to_string());
         }
-        let output = cmd.output()?;
+        let timed_output = run_with_timeout(&mut cmd, request.timeout_ms)?;
+        let output = timed_output.output;
+        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if timed_output.timed_out {
+            stderr.push_str(&format!("task timed out after {}ms", request.timeout_ms));
+        }
         Ok(TaskResult {
             task_id: request.id.clone(),
             agent: "claude-code".into(),
             model: request.model.clone().unwrap_or_default(),
-            success: output.status.success(),
-            exit_code: output.status.code().unwrap_or(-1),
+            success: !timed_output.timed_out && output.status.success(),
+            exit_code: if timed_output.timed_out {
+                -1
+            } else {
+                output.status.code().unwrap_or(-1)
+            },
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stderr,
             duration_ms: start.elapsed().as_millis() as u64,
             tokens_used: parse_claude_usage(&output.stdout),
         })
