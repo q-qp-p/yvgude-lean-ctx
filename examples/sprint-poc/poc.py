@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
 
 from agent import ReferenceCodeReviewAgent  # noqa: E402
 from quality import evaluate, load_expected  # noqa: E402
+from secret_guard import leaked_secret_path  # noqa: E402
 
 MANIFEST = json.loads((ROOT / "workload-manifest.json").read_text(encoding="utf-8"))
 
@@ -114,6 +115,10 @@ def cmd_run(arm: str, out_root: Path) -> int:
             json.dumps(receipt_payload, indent=2) + "\n", encoding="utf-8"
         )
 
+    leaked = leaked_secret_path(run_dir)
+    if leaked is not None:
+        print(f"error: provider secret leaked into {leaked}")
+        return 1
     print(f"RUN {arm}/{run_id}")
     print(f"  Quality: {'PASS' if quality['passed'] else 'FAIL'} "
           f"({quality['matched_count']}/{quality['required_count']})")

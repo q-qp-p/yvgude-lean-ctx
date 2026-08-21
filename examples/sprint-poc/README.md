@@ -1,6 +1,7 @@
 # Sprint POC — 15-minute evidence harness
 
 Pinned code-review fixture + `LeanCTX.wrap()` for the paid Agent Tuning Sprint.
+Operator script: [RUNBOOK.md](RUNBOOK.md). Live model run is GitLab #1270 and stays open.
 
 **Integrity:** no synthetic cost. A cheaper treatment is a win only if **both**
 arms pass `expected-findings-v1`.
