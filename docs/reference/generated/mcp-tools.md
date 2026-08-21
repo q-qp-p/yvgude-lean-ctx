@@ -4,7 +4,7 @@
 
 Source of truth: `rust/src/server/registry.rs` and the tool definitions it registers.
 
-lean-ctx registers **84 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
+lean-ctx registers **83 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
 
 ## `ctx_agent`
 
@@ -470,16 +470,6 @@ task=short English; budget=token limit (default 12000);
 profile=ultra_lean|balanced|forensic. Saves tokens by prioritizing relevant files.
 
 Parameters: `budget`, `profile`, `task`*
-
-## `ctx_plugins`
-
-WORKFLOW: list -> info/name -> enable/disable.
-ANTIPATTERN: NOT for tool listing (use ctx_discover_tools).
-Plugin management — list, enable, disable, info, hooks.
-name required for enable/disable/info. Extends tool functionality.
-Saves tokens: loads only needed plugins.
-
-Parameters: `action`*, `name`
 
 ## `ctx_prefetch`
 

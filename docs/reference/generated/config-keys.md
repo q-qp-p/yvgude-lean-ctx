@@ -101,20 +101,6 @@ Top-level configuration keys
 - `update_check_disabled` (bool, default `false` — env `LEAN_CTX_NO_UPDATE_CHECK`) — Disable the daily version check
 - `write_allow_paths` (string[], default `[]`) — Absolute paths allowed for ctx_shell redirects and tee output; empty = OS temp directories
 
-## `[addons]`
-
-Addon ecosystem security floor: install policy, signature requirement, per-addon capability sandbox (#863, P1). Global-only.
-
-- `allow_bootstrap` (bool, default `true`) — Allow `addon add` to install an addon's upstream package via a pinned manager (uv/pip/cargo/npm/brew/dotnet). Off = refuse bootstrap installs
-- `allowlist` (array, default `[]`) — Addon slugs permitted when policy = allowlist
-- `block_risky` (bool, default `true`) — Refuse to install an addon that has a high-risk (Danger) capability
-- `enforce_capabilities` (bool, default `true`) — Fail closed when an addon declares restricted [capabilities] but no OS sandbox launcher is available to enforce them
-- `grammar_auto_fetch` (bool, default `true`) — Zero-config grammar-addon fetch (#690): download a SHA-256-pinned grammar dylib on first use of a covered extension. Off = regex-signature fallback only (strict egress/DLP posture)
-- `metering` (bool, default `true`) — Record per-addon / per-tool gateway usage to <data_dir>/addons/usage.json (analytics + billing base)
-- `policy` (enum: open | verified_only | allowlist | locked, default `open`) — Addon install policy: open (any) | verified_only | allowlist | locked
-- `require_signature` (bool, default `false`) — Honour a user-override registry only if signed by a trusted org key
-- `sandbox` (enum: off | auto | strict, default `auto`) — Sandbox spawned addon stdio servers: off | auto (block network) | strict (read-only fs + refuse if no launcher)
-
 ## `[archive]`
 
 Settings for the zero-loss compression archive (large tool outputs saved to disk)
