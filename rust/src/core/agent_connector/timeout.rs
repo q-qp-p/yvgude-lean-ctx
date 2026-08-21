@@ -60,6 +60,7 @@ fn collect_output(handle: JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[cfg(unix)]
