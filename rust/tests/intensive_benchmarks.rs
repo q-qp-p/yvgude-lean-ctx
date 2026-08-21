@@ -1774,6 +1774,10 @@ fn bench_count_tokens_cache_effectiveness() {
     }
     eprintln!("{}", "=".repeat(70));
 
+    // Skip timing assertion in CI — shared runners have unpredictable scheduling
+    if std::env::var("CI").is_ok() {
+        return;
+    }
     let tolerance = if cfg!(windows) {
         cold_us / 2
     } else if cfg!(target_os = "macos") {
