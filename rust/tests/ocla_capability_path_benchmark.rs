@@ -56,8 +56,8 @@ fn compression_provider_uses_the_full_registry_capability_path() {
     ));
     fs::write(&path, &content).expect("write benchmark content");
 
-    let port = CompressionContentPort::new(tmp_dir.path())
-        .expect("port from tempdir should succeed");
+    let port =
+        CompressionContentPort::new(tmp_dir.path()).expect("port from tempdir should succeed");
 
     let input_tokens = count_tokens(&content) as u64;
     let provider = BuiltinCompressionProvider::new();
