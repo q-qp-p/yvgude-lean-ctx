@@ -8,7 +8,8 @@ use lean_ctx::core::ocla::reference_adapters::{
 };
 
 fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../benchmarks/capability-comparison/rtk-v1")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../_archive/benchmarks/capability-comparison/rtk-v1")
 }
 
 #[test]
