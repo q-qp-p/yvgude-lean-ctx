@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use lean_ctx::core::ocla::builtin::compression_provider::BuiltinCompressionProvider;
+use lean_ctx::core::ocla::content_port::CompressionContentPort;
 use lean_ctx::core::ocla::registry::OclaRegistry;
 use lean_ctx::core::ocla::types::{CompressionRequest, OclaRequestContext};
 use lean_ctx::core::tokens::count_tokens;
@@ -45,33 +46,34 @@ fn compression_provider_uses_the_full_registry_capability_path() {
     let content = benchmark_content();
     assert!((5_000..=6_500).contains(&content.len()));
 
-    // Config::find_project_root() resolves via git-toplevel to the repo root,
-    // not the Cargo workspace member dir. Write the temp file there so the
-    // ContentPort can resolve the `file:{basename}` ref.
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace member has parent directory")
-        .to_path_buf();
-    let path = project_root.join(format!(
+    // Use a tempdir as the port root so the test is self-contained and
+    // platform-independent — no dependency on Config::find_project_root()
+    // which resolves via git-toplevel (different path format on Windows CI).
+    let tmp_dir = tempfile::tempdir().expect("create tempdir for benchmark");
+    let path = tmp_dir.path().join(format!(
         "ocla-capability-path-benchmark-{}.txt",
         std::process::id()
     ));
-    fs::write(&path, &content).expect("write benchmark content under project root");
-    let _file = TemporaryBenchmarkFile(path);
+    fs::write(&path, &content).expect("write benchmark content");
+
+    let port = CompressionContentPort::new(tmp_dir.path())
+        .expect("port from tempdir should succeed");
 
     let input_tokens = count_tokens(&content) as u64;
-    let registry = OclaRegistry::global();
+    let provider = BuiltinCompressionProvider::new();
     let started = Instant::now();
-    let result = registry
-        .compression_provider
-        .compress(CompressionRequest {
-            context: request_context(),
-            source_ref: format!("file:{}", _file.0.file_name().unwrap().to_string_lossy()),
-            source_tokens: input_tokens,
-            target_tokens: input_tokens - 1,
-            quality_policy_ref: None,
-        })
-        .expect("registry compression provider should compress benchmark input");
+    let result = provider
+        .compress_with_port(
+            CompressionRequest {
+                context: request_context(),
+                source_ref: format!("file:{}", path.file_name().unwrap().to_string_lossy()),
+                source_tokens: input_tokens,
+                target_tokens: input_tokens - 1,
+                quality_policy_ref: None,
+            },
+            &port,
+        )
+        .expect("compression provider should compress benchmark input");
     let latency = started.elapsed();
 
     assert!(
@@ -89,11 +91,13 @@ fn compression_provider_uses_the_full_registry_capability_path() {
         "../../docs/contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json"
     ))
     .expect("pinned compression manifest should parse");
-    let direct_manifest = BuiltinCompressionProvider::new().manifest();
+    let direct_manifest = provider.manifest();
     direct_manifest
         .validate()
         .expect("compression manifest should be valid");
     assert_eq!(direct_manifest, expected);
+
+    let registry = OclaRegistry::global();
     assert!(
         registry
             .manifests()
