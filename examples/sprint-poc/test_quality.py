@@ -64,3 +64,9 @@ def test_keyword_match_without_canonical_id():
     }
     result = evaluate(review)
     assert result["passed"] is True
+
+
+def test_invalid_findings_fail_closed():
+    result = evaluate({"findings": {}})
+    assert result["passed"] is False
+    assert result["error"] == "review.findings must be a list"

@@ -1,0 +1,8 @@
+{
+  "evaluator": "expected-findings-v1",
+  "passed": false,
+  "matched": ["sql_injection"],
+  "missing": ["missing_authz", "discount_off_by_one"],
+  "required_count": 3,
+  "matched_count": 1
+}

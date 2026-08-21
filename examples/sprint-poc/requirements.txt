@@ -1,0 +1,2 @@
+openai
+-e ../../packages/python-lean-ctx

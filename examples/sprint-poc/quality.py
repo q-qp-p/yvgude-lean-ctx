@@ -21,7 +21,9 @@ def load_expected(path: Path = EXPECTED_PATH) -> dict[str, Any]:
 
 def evaluate(review: dict[str, Any], expected: dict[str, Any] | None = None) -> dict[str, Any]:
     spec = expected or load_expected()
-    findings = review.get("findings") or []
+    findings = review.get("findings")
+    if findings is None:
+        findings = []
     if not isinstance(findings, list):
         return {
             "evaluator": spec.get("evaluator"),
@@ -29,6 +31,8 @@ def evaluate(review: dict[str, Any], expected: dict[str, Any] | None = None) -> 
             "matched": [],
             "missing": [item["id"] for item in spec["required"]],
             "error": "review.findings must be a list",
+            "required_count": len(spec["required"]),
+            "matched_count": 0,
         }
 
     matched: list[str] = []

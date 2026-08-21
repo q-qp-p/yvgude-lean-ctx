@@ -49,34 +49,38 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def cmd_doctor() -> int:
-    checks: list[tuple[str, bool, str]] = []
-    checks.append(("python", True, sys.version.split()[0]))
-    checks.append(("fixture", (ROOT / "fixture" / "checkout.py").is_file(), "checkout.py"))
-    checks.append(("expected-findings", (ROOT / "expected-findings.json").is_file(), "json"))
-    checks.append(("kit", (REPO / "kits" / "code-review" / "kit.toml").is_file(), "kits/code-review"))
+    checks: list[tuple[str, bool, str, bool]] = []
+    checks.append(("python", True, sys.version.split()[0], True))
+    checks.append(("fixture", (ROOT / "fixture" / "checkout.py").is_file(), "checkout.py", True))
+    checks.append(("expected-findings", (ROOT / "expected-findings.json").is_file(), "json", True))
+    checks.append(("kit", (REPO / "kits" / "code-review" / "kit.toml").is_file(), "kits/code-review", True))
     key = bool(os.environ.get("OPENAI_API_KEY", "").strip())
-    checks.append(("OPENAI_API_KEY", key, "set" if key else "missing — run needs it"))
+    checks.append(("OPENAI_API_KEY", key, "set" if key else "missing — required only for run", False))
     proxy = _proxy_reachable()
-    checks.append(("lean-ctx proxy", proxy, "loopback" if proxy else "not reachable"))
+    checks.append(("lean-ctx proxy", proxy, "loopback" if proxy else "not reachable", False))
+    sdk_path = REPO / "packages" / "python-lean-ctx"
     try:
         import lean_ctx  # noqa: F401
 
-        checks.append(("lean-ctx-python", True, "import ok"))
+        checks.append(("lean-ctx-python", True, "import ok", True))
     except ImportError:
-        checks.append(("lean-ctx-python", False, "pip install lean-ctx-python"))
+        checks.append(
+            (
+                "lean-ctx-python",
+                False,
+                f"missing — set PYTHONPATH={sdk_path} or pip install -e {sdk_path}",
+                True,
+            )
+        )
 
     print("LeanCTX Sprint POC preflight")
     failed = 0
-    for name, ok, detail in checks:
-        mark = "ok" if ok else "FAIL"
+    for name, ok, detail, required in checks:
+        mark = "ok" if ok else "FAIL" if required else "WARN"
         print(f"  {mark:4}  {name}: {detail}")
-        if not ok and name != "OPENAI_API_KEY" and name != "lean-ctx proxy":
-            failed += 1
-    ready = failed == 0
-    print("READY" if ready else "NOT READY")
-    if not key:
-        print("  note: live run requires OPENAI_API_KEY; quality tests do not.")
-    return 0 if ready else 1
+        failed += int(required and not ok)
+    print("READY" if failed == 0 else "NOT READY")
+    return 0 if failed == 0 else 1
 
 
 def cmd_run(arm: str, out_root: Path) -> int:
@@ -175,7 +179,7 @@ def cmd_compare(out_root: Path) -> int:
     both_pass = bool(stock_q.get("passed") and treat_q.get("passed"))
     receipt_path = treatment / "execution-receipt.json"
     savings = None
-    if receipt_path.is_file():
+    if both_pass and receipt_path.is_file():
         savings = json.loads(receipt_path.read_text(encoding="utf-8")).get("savings")
     comparison = {
         "baseline": str(stock),

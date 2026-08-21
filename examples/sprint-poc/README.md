@@ -11,7 +11,7 @@ arms pass `expected-findings-v1`.
 cd examples/sprint-poc
 python3 -m venv .venv
 source .venv/bin/activate
-pip install openai lean-ctx-python
+pip install -r requirements.txt
 export OPENAI_API_KEY=...          # required for `run`, not for tests
 # lean-ctx proxy should already be running
 ```
