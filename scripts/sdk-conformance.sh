@@ -1,6 +1,3 @@
-sdk-conformance.sh 86L cognitive
-// /Users/yvesgugger/Documents/Privat/Projects/lean-ctx/scripts/sdk-conformance.sh
-§ block block (L1-L39)
 #!/usr/bin/env bash
 # SDK conformance matrix runner (GL #395).
 #
@@ -40,11 +37,50 @@ export LEANCTX_MATRIX_DIR="$MATRIX_DIR"
 echo "==> starting lean-ctx serve on $URL"
 "$BIN" serve --host 127.0.0.1 --port "$PORT" --project-root "$ROOT" --auth-token "$TOKEN" &
 SERVER_PID=$!
-§ function function (L40-L44)
 cleanup() {
   if [[ "${1:-}" != "--keep-server" ]]; then
     kill "$SERVER_PID" 2>/dev/null || true
   fi
 }
-2/3 chunks shown (498 tokens)
-[lean-ctx] full source: read "/Users/yvesgugger/Documents/Privat/Projects/lean-ctx/scripts/sdk-conformance.sh" directly (no MCP)  ·  or ctx_read("/Users/yvesgugger/Documents/Privat/Projects/lean-ctx/scripts/sdk-conformance.sh", mode="full")
+trap cleanup EXIT
+
+for _ in $(seq 1 100); do
+  if curl -fsS "$URL/health" >/dev/null 2>&1; then break; fi
+  sleep 0.1
+done
+curl -fsS "$URL/health" >/dev/null || { echo "server did not become healthy"; exit 1; }
+
+FAIL=0
+
+echo "==> Python SDK conformance"
+(cd packages/python-lean-ctx && python3 -m pytest tests/test_conformance_live.py -q) || FAIL=1
+
+echo "==> Python adapter smoke (OpenAI/LangChain/LlamaIndex/CrewAI; frameworks optional)"
+(cd packages/python-lean-ctx && python3 -m pytest tests/test_adapters_live.py -q) || FAIL=1
+
+echo "==> SDK release gate (versions + contract coupling)"
+python3 scripts/check-sdk-versions.py || FAIL=1
+
+echo "==> TypeScript SDK conformance"
+(cd cookbook && npm install --no-fund --no-audit >/dev/null \
+  && cd sdk && npx vitest run src/conformance.e2e.test.ts) || FAIL=1
+
+echo "==> Go SDK conformance"
+(
+  cd go-sdk
+  set +e
+  set -o pipefail
+  LEANCTX_CONFORMANCE_URL="$URL" go test -run TestConformanceLive -v ./... 2>&1 | tee "$MATRIX_DIR/go.log"
+  GO_EXIT=$?
+  echo "$GO_EXIT" > "$MATRIX_DIR/go.exit"
+  exit "$GO_EXIT"
+) || FAIL=1
+echo "==> Rust SDK conformance"
+(cd clients/rust/lean-ctx-client && cargo test --test conformance_live) || FAIL=1
+
+echo "==> generating matrix"
+python3 scripts/gen-sdk-matrix.py "$MATRIX_DIR" \
+  --engine-version "$("$BIN" --version | head -1)" \
+  --out docs/reference/sdk-conformance-matrix.md
+
+exit "$FAIL"
