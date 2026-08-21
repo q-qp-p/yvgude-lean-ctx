@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+/// Calibration bounds with conservative defaults for a representative, bounded search.
+///
+/// [`Default`] evaluates at most 20 profiles across 16k–128k token budgets,
+/// three compression levels, and reuse thresholds from 70% to 95%. The 95%
+/// quality floor favors profiles suitable for production use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CalibrationConfig {
     pub quality_floor: f64,
@@ -32,7 +37,10 @@ mod tests {
         let cfg = CalibrationConfig::default();
         assert!((cfg.quality_floor - 0.95).abs() < f64::EPSILON);
         assert_eq!(cfg.max_candidates, 20);
+        assert_eq!(cfg.budget_range, (16_000, 128_000));
         assert_eq!(cfg.compression_levels.len(), 3);
+        assert_eq!(cfg.reuse_range, (0.70, 0.95));
+        assert_eq!(cfg.capability_variants, ["leanctx"]);
     }
 
     #[test]

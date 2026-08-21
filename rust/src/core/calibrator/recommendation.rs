@@ -1,6 +1,7 @@
 use super::config::CalibrationConfig;
 use super::pareto::CalibratedResult;
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Recommendation {
@@ -33,11 +34,7 @@ pub(crate) fn recommend(
     config: &CalibrationConfig,
 ) -> Option<Recommendation> {
     let baseline = all_results.first()?;
-    if let Some(best) = frontier.iter().min_by(|a, b| {
-        a.cost_per_task
-            .partial_cmp(&b.cost_per_task)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }) {
+    if let Some(best) = frontier.iter().min_by(|a, b| compare_by_preference(a, b)) {
         let comparison = BaselineComparison {
             cost_delta_pct: if baseline.cost_per_task > 0.0 {
                 (best.cost_per_task - baseline.cost_per_task) / baseline.cost_per_task * 100.0
@@ -68,10 +65,12 @@ pub(crate) fn recommend(
     }
     all_results
         .iter()
+        .filter(|result| result.mean_quality.is_finite())
         .min_by(|a, b| {
-            let da = (a.mean_quality - config.quality_floor).abs();
-            let db = (b.mean_quality - config.quality_floor).abs();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            let distance_order = (a.mean_quality - config.quality_floor)
+                .abs()
+                .total_cmp(&(b.mean_quality - config.quality_floor).abs());
+            distance_order.then_with(|| compare_by_preference(a, b))
         })
         .map(|closest| Recommendation {
             candidate_id: closest.candidate.id.clone(),
@@ -82,6 +81,14 @@ pub(crate) fn recommend(
             reason: RecommendationReason::ClosestToFloor,
             vs_baseline: None,
         })
+}
+
+fn compare_by_preference(a: &CalibratedResult, b: &CalibratedResult) -> Ordering {
+    a.cost_per_task
+        .total_cmp(&b.cost_per_task)
+        .then_with(|| b.mean_quality.total_cmp(&a.mean_quality))
+        .then_with(|| a.mean_latency_ms.total_cmp(&b.mean_latency_ms))
+        .then_with(|| a.candidate.id.cmp(&b.candidate.id))
 }
 
 #[cfg(test)]
@@ -125,5 +132,29 @@ mod tests {
     #[test]
     fn empty_none() {
         assert!(recommend(&[], &[], &CalibrationConfig::default()).is_none());
+    }
+
+    #[test]
+    fn one_frontier_point_is_marked_as_the_only_candidate() {
+        let all = vec![result("baseline", 1.00, 0.90), result("only", 0.50, 0.96)];
+        let frontier = vec![result("only", 0.50, 0.96)];
+        let rec = recommend(&all, &frontier, &CalibrationConfig::default()).unwrap();
+        assert_eq!(rec.candidate_id, "only");
+        assert!(matches!(rec.reason, RecommendationReason::OnlyCandidate));
+    }
+
+    #[test]
+    fn ties_use_quality_latency_then_candidate_id() {
+        let mut faster = result("faster", 0.50, 0.96);
+        faster.mean_latency_ms = 90.0;
+        let mut slower = result("slower", 0.50, 0.96);
+        slower.mean_latency_ms = 100.0;
+        let all = vec![slower.clone(), faster.clone()];
+        let rec = recommend(&all, &[slower, faster], &CalibrationConfig::default()).unwrap();
+        assert_eq!(rec.candidate_id, "faster");
+
+        let all = vec![result("tie-b", 0.50, 0.96), result("tie-a", 0.50, 0.96)];
+        let rec = recommend(&all, &all, &CalibrationConfig::default()).unwrap();
+        assert_eq!(rec.candidate_id, "tie-a");
     }
 }

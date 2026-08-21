@@ -72,5 +72,31 @@ mod tests {
         let report = calibrate(results, &CalibrationConfig::default());
         assert!(report.frontier.is_empty());
         assert!(report.recommendation.is_some());
+        assert!(report.report_text.contains("RECOMMENDED"));
+        assert!(report.report_text.contains("closest to quality floor"));
+    }
+
+    #[test]
+    fn calibrate_single_candidate() {
+        let report = calibrate(
+            vec![result("only", 0.40, 0.96)],
+            &CalibrationConfig::default(),
+        );
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.frontier.len(), 1);
+        let recommendation = report.recommendation.expect("single candidate is eligible");
+        assert_eq!(recommendation.candidate_id, "only");
+        assert!(matches!(
+            recommendation.reason,
+            recommendation::RecommendationReason::OnlyCandidate
+        ));
+    }
+
+    #[test]
+    fn calibrate_empty_results_has_no_recommendation() {
+        let report = calibrate(Vec::new(), &CalibrationConfig::default());
+        assert!(report.frontier.is_empty());
+        assert!(report.recommendation.is_none());
+        assert!(report.report_text.contains("No recommendation"));
     }
 }

@@ -14,6 +14,15 @@ pub(crate) struct CandidateProfile {
 pub(crate) fn generate_candidates(config: &CalibrationConfig) -> Vec<CandidateProfile> {
     let budget_steps = distribute_steps(config.budget_range.0, config.budget_range.1, 4);
     let reuse_steps = distribute_reuse(config.reuse_range.0, config.reuse_range.1, 3);
+    if config.max_candidates == 0
+        || budget_steps.is_empty()
+        || reuse_steps.is_empty()
+        || config.compression_levels.is_empty()
+        || config.capability_variants.is_empty()
+    {
+        return Vec::new();
+    }
+
     let mut candidates = Vec::new();
     let mut count = 0usize;
     for &budget in &budget_steps {
@@ -44,14 +53,24 @@ pub(crate) fn generate_candidates(config: &CalibrationConfig) -> Vec<CandidatePr
 }
 
 fn distribute_steps(min: usize, max: usize, count: usize) -> Vec<usize> {
+    if min > max {
+        return Vec::new();
+    }
     if count <= 1 {
         return vec![min];
     }
-    let step = (max - min) / (count - 1);
-    (0..count).map(|i| min + step * i).collect()
+
+    let span = max - min;
+    let denominator = count - 1;
+    (0..count)
+        .map(|i| min + ((span as u128 * i as u128) / denominator as u128) as usize)
+        .collect()
 }
 
 fn distribute_reuse(min: f64, max: f64, count: usize) -> Vec<f64> {
+    if !min.is_finite() || !max.is_finite() || min > max {
+        return Vec::new();
+    }
     if count <= 1 {
         return vec![min];
     }
@@ -89,5 +108,48 @@ mod tests {
             assert!(c.budget_tokens >= config.budget_range.0);
             assert!(c.budget_tokens <= config.budget_range.1);
         }
+    }
+
+    #[test]
+    fn includes_both_budget_range_endpoints() {
+        let steps = distribute_steps(16_000, 128_000, 4);
+        assert_eq!(steps.first(), Some(&16_000));
+        assert_eq!(steps.last(), Some(&128_000));
+    }
+
+    #[test]
+    fn empty_candidate_dimensions_produce_no_candidates() {
+        let config = CalibrationConfig {
+            max_candidates: 0,
+            ..CalibrationConfig::default()
+        };
+        assert!(generate_candidates(&config).is_empty());
+
+        let config = CalibrationConfig {
+            compression_levels: Vec::new(),
+            ..CalibrationConfig::default()
+        };
+        assert!(generate_candidates(&config).is_empty());
+
+        let config = CalibrationConfig {
+            capability_variants: Vec::new(),
+            ..CalibrationConfig::default()
+        };
+        assert!(generate_candidates(&config).is_empty());
+    }
+
+    #[test]
+    fn invalid_ranges_produce_no_candidates() {
+        let config = CalibrationConfig {
+            budget_range: (128_000, 16_000),
+            ..CalibrationConfig::default()
+        };
+        assert!(generate_candidates(&config).is_empty());
+
+        let config = CalibrationConfig {
+            reuse_range: (0.95, 0.70),
+            ..CalibrationConfig::default()
+        };
+        assert!(generate_candidates(&config).is_empty());
     }
 }

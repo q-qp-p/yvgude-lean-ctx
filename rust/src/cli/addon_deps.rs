@@ -119,6 +119,15 @@ pub(super) fn install_declared_deps(
     }
 }
 
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| {
+            args.iter()
+                .find_map(|a| a.strip_prefix(&format!("{flag}=")).map(str::to_string))
+        })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,14 +158,4 @@ mod tests {
         // A bare slug is never returned, so the bug (bare root) is unreachable.
         assert_eq!(addon_self_ref("ctxpkg:demo"), None);
     }
-}
-
-fn flag_value(args: &[String], flag: &str) -> Option<String> {
-    args.iter()
-        .position(|a| a == flag)
-        .and_then(|i| args.get(i + 1).cloned())
-        .or_else(|| {
-            args.iter()
-                .find_map(|a| a.strip_prefix(&format!("{flag}=")).map(str::to_string))
-        })
 }

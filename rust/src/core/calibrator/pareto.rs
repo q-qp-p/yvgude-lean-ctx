@@ -1,4 +1,5 @@
 use super::candidate::CandidateProfile;
+use crate::core::benchmark_spec::types::BenchmarkResult;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,19 +12,40 @@ pub(crate) struct CalibratedResult {
     pub quality_floor_met: bool,
 }
 
+impl CalibratedResult {
+    pub(crate) fn from_benchmark_result(
+        candidate: CandidateProfile,
+        benchmark: &BenchmarkResult,
+    ) -> Self {
+        Self {
+            candidate,
+            cost_per_task: benchmark.summary.cost_per_task_usd,
+            mean_quality: benchmark.summary.mean_quality,
+            mean_latency_ms: benchmark.summary.mean_latency_ms,
+            pass_rate: benchmark.summary.pass_rate,
+            quality_floor_met: benchmark.summary.quality_floor_met,
+        }
+    }
+}
+
 pub(crate) fn compute_pareto_frontier(
     results: &[CalibratedResult],
     quality_floor: f64,
 ) -> Vec<CalibratedResult> {
     let mut eligible: Vec<_> = results
         .iter()
-        .filter(|r| r.mean_quality >= quality_floor)
+        .filter(|r| {
+            r.cost_per_task.is_finite()
+                && r.mean_quality.is_finite()
+                && r.mean_quality >= quality_floor
+        })
         .cloned()
         .collect();
     eligible.sort_by(|a, b| {
         a.cost_per_task
-            .partial_cmp(&b.cost_per_task)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .total_cmp(&b.cost_per_task)
+            .then_with(|| b.mean_quality.total_cmp(&a.mean_quality))
+            .then_with(|| a.candidate.id.cmp(&b.candidate.id))
     });
     let mut frontier = Vec::new();
     let mut best_quality = f64::NEG_INFINITY;
@@ -39,6 +61,7 @@ pub(crate) fn compute_pareto_frontier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::benchmark_spec::types::{BenchmarkOutcome, BenchmarkResult, BenchmarkSummary};
 
     fn result(id: &str, cost: f64, quality: f64) -> CalibratedResult {
         CalibratedResult {
@@ -78,5 +101,87 @@ mod tests {
     fn all_below_floor() {
         let results = vec![result("a", 0.10, 0.80), result("b", 0.20, 0.85)];
         assert!(compute_pareto_frontier(&results, 0.95).is_empty());
+    }
+
+    #[test]
+    fn converts_benchmark_summary_to_calibrated_result() {
+        let outcomes = vec![
+            BenchmarkOutcome {
+                task_id: "passed".into(),
+                passed: true,
+                cost_usd: 0.03,
+                quality_score: 1.0,
+                latency_ms: 100,
+                tokens_input: 100,
+                tokens_output: 10,
+                error: None,
+            },
+            BenchmarkOutcome {
+                task_id: "failed".into(),
+                passed: false,
+                cost_usd: 0.01,
+                quality_score: 0.5,
+                latency_ms: 300,
+                tokens_input: 100,
+                tokens_output: 10,
+                error: Some("failed".into()),
+            },
+        ];
+        let benchmark = BenchmarkResult {
+            spec_id: "spec".into(),
+            spec_version: "1.0.0".into(),
+            profile_hash: "hash".into(),
+            agent: "mock".into(),
+            model: "test".into(),
+            runtime_version: "test".into(),
+            summary: BenchmarkSummary::from_outcomes(&outcomes, 0.70),
+            outcomes,
+            completed_at: "0".into(),
+        };
+
+        let calibrated = CalibratedResult::from_benchmark_result(
+            result("candidate", 0.0, 0.0).candidate,
+            &benchmark,
+        );
+
+        assert!((calibrated.cost_per_task - 0.02).abs() < f64::EPSILON);
+        assert!((calibrated.mean_quality - 0.75).abs() < f64::EPSILON);
+        assert!((calibrated.mean_latency_ms - 200.0).abs() < f64::EPSILON);
+        assert!((calibrated.pass_rate - 0.5).abs() < f64::EPSILON);
+        assert!(calibrated.quality_floor_met);
+    }
+
+    #[test]
+    fn keeps_every_non_dominated_candidate() {
+        let results = vec![
+            result("low", 0.20, 0.95),
+            result("medium", 0.40, 0.97),
+            result("high", 0.60, 0.99),
+        ];
+        let frontier = compute_pareto_frontier(&results, 0.95);
+        let ids: Vec<_> = frontier.iter().map(|r| r.candidate.id.as_str()).collect();
+        assert_eq!(ids, ["low", "medium", "high"]);
+    }
+
+    #[test]
+    fn equal_cost_prefers_higher_quality() {
+        let results = vec![
+            result("lower-quality", 0.40, 0.96),
+            result("higher-quality", 0.40, 0.98),
+        ];
+        let frontier = compute_pareto_frontier(&results, 0.95);
+        assert_eq!(frontier.len(), 1);
+        assert_eq!(frontier[0].candidate.id, "higher-quality");
+    }
+
+    #[test]
+    fn identical_objectives_keep_a_deterministic_representative() {
+        let results = vec![
+            result("duplicate-b", 0.40, 0.96),
+            result("duplicate-a", 0.40, 0.96),
+        ];
+        let frontier = compute_pareto_frontier(&results, 0.95);
+        assert_eq!(frontier.len(), 1);
+        assert_eq!(frontier[0].candidate.id, "duplicate-a");
     }
 }

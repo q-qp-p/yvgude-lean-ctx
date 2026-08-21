@@ -24,7 +24,7 @@ pub(crate) fn format_calibration_report(
         };
         out.push(format!(
             "  {:<30} {:>9.4}$ {:>9.1}% {:>8.0}ms {:>10}",
-            &r.candidate.label[..r.candidate.label.len().min(30)],
+            truncate_label(&r.candidate.label, 30),
             r.cost_per_task,
             r.mean_quality * 100.0,
             r.mean_latency_ms,
@@ -49,6 +49,13 @@ pub(crate) fn format_calibration_report(
     }
     out.push(format!("  {sep}"));
     out.join("\n")
+}
+
+fn truncate_label(label: &str, max_chars: usize) -> &str {
+    label
+        .char_indices()
+        .nth(max_chars)
+        .map_or(label, |(byte_index, _)| &label[..byte_index])
 }
 
 #[cfg(test)]
@@ -90,5 +97,35 @@ mod tests {
         });
         let report = format_calibration_report(&results, rec.as_ref());
         assert!(report.contains("RECOMMENDED"));
+    }
+
+    #[test]
+    fn empty_results_without_recommendation_are_reported() {
+        let report = format_calibration_report(&[], None);
+        assert!(report.contains("CALIBRATION REPORT"));
+        assert!(report.contains("No recommendation"));
+    }
+
+    #[test]
+    fn unicode_labels_are_truncated_at_character_boundaries() {
+        let label = "é".repeat(31);
+        let results = vec![CalibratedResult {
+            candidate: CandidateProfile {
+                id: "unicode".into(),
+                label: label.clone(),
+                budget_tokens: 32_000,
+                compression: "balanced".into(),
+                reuse_threshold: 0.85,
+                capability_variant: "leanctx".into(),
+            },
+            cost_per_task: 0.40,
+            mean_quality: 0.96,
+            mean_latency_ms: 100.0,
+            pass_rate: 1.0,
+            quality_floor_met: true,
+        }];
+        let report = format_calibration_report(&results, None);
+        assert!(report.contains(&"é".repeat(30)));
+        assert!(!report.contains(&label));
     }
 }
