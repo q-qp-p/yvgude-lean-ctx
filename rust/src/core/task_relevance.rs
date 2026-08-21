@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use super::graph_provider::{EdgeInfo, GraphProvider};
-use super::neural::attention_learned::LearnedAttention;
 
 #[derive(Debug, Clone)]
 pub struct RelevanceScore {
@@ -551,7 +550,6 @@ pub fn information_bottleneck_filter_typed(
 
     let n = lines.len();
     let kw_lower: Vec<String> = task_keywords.iter().map(|k| k.to_lowercase()).collect();
-    let attention = LearnedAttention::with_defaults();
 
     let mut global_token_freq: HashMap<&str, usize> = HashMap::new();
     for line in &lines {
@@ -641,7 +639,7 @@ pub fn information_bottleneck_filter_typed(
             let information = (token_diversity * 0.4 + (avg_idf.min(3.0) / 3.0) * 0.6).min(1.0);
 
             let pos = i as f64 / n.max(1) as f64;
-            let attn_weight = attention.weight(pos);
+            let attn_weight = 1.0 - (pos - 0.5).abs() * 0.5;
 
             let score = (relevance * 0.6 + 0.05)
                 * (information * 0.25 + 0.05)

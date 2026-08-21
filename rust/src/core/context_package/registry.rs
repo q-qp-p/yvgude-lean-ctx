@@ -706,36 +706,4 @@ mod tests {
         std::fs::write(&bad_path, "{}").unwrap();
         assert!(reg.import_from_file(&bad_path).is_err());
     }
-
-    /// A `kind=addon` pack must not enter the context registry (GH #726) —
-    /// it would bypass the addon trust chain (consent, sandbox, binhash).
-    #[test]
-    fn import_refuses_addon_kind_packs() {
-        let dir = tempfile::tempdir().unwrap();
-        let toml_path = dir.path().join("lean-ctx-addon.toml");
-        std::fs::write(
-            &toml_path,
-            r#"
-[addon]
-name = "gate-check"
-version = "1.0.0"
-description = "import gate test"
-
-[mcp]
-transport = "stdio"
-command = "gate-check"
-args = ["serve"]
-"#,
-        )
-        .unwrap();
-        let plan = crate::core::addons::publish::build_addon_pack(&toml_path, "acme")
-            .expect("build addon pack");
-
-        let pkg_path = dir.path().join("gate-check.ctxpkg");
-        std::fs::write(&pkg_path, &plan.bundle_json).unwrap();
-
-        let reg = LocalRegistry::open_at(dir.path()).unwrap();
-        let err = reg.import_from_file(&pkg_path).expect_err("must refuse");
-        assert!(err.contains("addon add"), "got: {err}");
-    }
 }

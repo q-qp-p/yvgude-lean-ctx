@@ -30,11 +30,7 @@ pub(super) fn handle(
             let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
             Some(("200 OK", "application/json", json))
         }
-        "/api/buddy" => {
-            let buddy = crate::core::buddy::BuddyState::compute();
-            let json = serde_json::to_string(&buddy).unwrap_or_else(|_| "{}".to_string());
-            Some(("200 OK", "application/json", json))
-        }
+        "/api/buddy" => Some(("200 OK", "application/json", "{}".to_string())),
         "/api/version" => {
             // Self-healing freshness (#563): the dashboard used to only read
             // the 24h cache, so long-running daemons displayed a frozen

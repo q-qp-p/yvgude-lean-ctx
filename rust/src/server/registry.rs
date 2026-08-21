@@ -175,7 +175,6 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Box::new(registered::ctx_smells::CtxSmellsTool));
     registry.register(Box::new(registered::ctx_quality::CtxQualityTool));
     registry.register(Box::new(registered::ctx_pack::CtxPackTool));
-    registry.register(Box::new(registered::ctx_plugins::CtxPluginsTool));
     registry.register(Box::new(registered::ctx_rules::CtxRulesTool));
     registry.register(Box::new(registered::ctx_index::CtxIndexTool));
     registry.register(Box::new(registered::ctx_artifacts::CtxArtifactsTool));
@@ -250,29 +249,8 @@ pub fn build_registry() -> ToolRegistry {
     ));
     registry.register(Box::new(registered::ctx_symbol::CtxSymbolTool));
     registry.register(Box::new(registered::ctx_optimize::CtxOptimizeTool));
-    register_plugin_tools(&mut registry);
 
     registry
-}
-
-/// Append manifest-declared plugin tools (EPIC 12.11) without forking the
-/// registry. Only enabled plugins contribute; a tool whose name collides with a
-/// native tool is skipped (native tools win) so a plugin can never shadow core
-/// behavior. No-op when no plugins are installed.
-fn register_plugin_tools(registry: &mut ToolRegistry) {
-    for spec in crate::core::plugins::PluginManager::tool_specs() {
-        if registry.contains(&spec.name) {
-            tracing::warn!(
-                "plugin '{}' tool '{}' collides with a native tool; skipping",
-                spec.plugin_name,
-                spec.name
-            );
-            continue;
-        }
-        registry.register(Box::new(
-            crate::tools::registered::plugin_tool::PluginTool::from_spec(spec),
-        ));
-    }
 }
 
 #[cfg(test)]

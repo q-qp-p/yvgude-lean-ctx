@@ -360,15 +360,6 @@ fn sync_personal_cloud(store: &core::stats::StatsStore) -> CloudSyncOutcome {
         }
     }
 
-    println!("Syncing buddy...");
-    let buddy = core::buddy::BuddyState::compute();
-    let buddy_data = serde_json::to_value(&buddy).unwrap_or_default();
-    match cloud_client::push_buddy(&buddy_data) {
-        Ok(_) => println!("  Buddy: synced"),
-        Err(e) if pro_gate_hit(&e) => return CloudSyncOutcome::Gated,
-        Err(e) => tracing::error!("Buddy sync failed: {e}"),
-    }
-
     println!("Syncing feedback thresholds...");
     let feedback_entries = collect_feedback_entries();
     if feedback_entries.is_empty() {
@@ -971,34 +962,8 @@ pub fn cmd_gotchas(args: &[String]) {
     }
 }
 
-pub fn cmd_buddy(args: &[String]) {
-    let cfg = core::config::Config::load();
-    if !cfg.buddy_enabled {
-        println!("Buddy is disabled. Enable with: lean-ctx config buddy_enabled true");
-        return;
-    }
-
-    let action = args.first().map_or("show", std::string::String::as_str);
-    let buddy = core::buddy::BuddyState::compute();
-    let theme = core::theme::load_theme(&cfg.theme);
-
-    match action {
-        "show" | "status" | "stats" => {
-            println!("{}", core::buddy::format_buddy_full(&buddy, &theme));
-        }
-        "ascii" => {
-            for line in &buddy.ascii_art {
-                println!("  {line}");
-            }
-        }
-        "json" => match serde_json::to_string_pretty(&buddy) {
-            Ok(json) => println!("{json}"),
-            Err(e) => tracing::error!("JSON error: {e}"),
-        },
-        _ => {
-            println!("Usage: lean-ctx buddy [show|stats|ascii|json]");
-        }
-    }
+pub fn cmd_buddy(_args: &[String]) {
+    println!("Buddy has been removed.");
 }
 
 pub fn cmd_upgrade() {

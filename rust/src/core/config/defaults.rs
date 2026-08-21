@@ -179,7 +179,6 @@ impl Default for Config {
             gateway: crate::core::mcp_catalog::GatewayConfig::default(),
             gateway_server: GatewayServerConfig::default(),
             enterprise: EnterpriseConfig::default(),
-            addons: crate::core::addons::AddonsConfig::default(),
             allow_auto_reroot: true,
             hook_binary: None,
             path_jail: None,

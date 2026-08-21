@@ -51,7 +51,6 @@ pub mod ctx_package;
 pub mod ctx_patch;
 pub mod ctx_perf;
 pub mod ctx_plan;
-pub mod ctx_plugins;
 pub mod ctx_prefetch;
 pub mod ctx_preload;
 pub mod ctx_proof;
@@ -84,7 +83,6 @@ pub mod ctx_tree;
 pub mod ctx_url_read;
 pub mod ctx_verify;
 pub mod ctx_workflow;
-pub mod plugin_tool;
 pub mod shell_alias;
 
 #[cfg(test)]

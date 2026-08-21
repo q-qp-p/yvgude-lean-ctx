@@ -275,7 +275,7 @@ impl EmbeddingEngine {
             .and_then(|v| v.parse().ok())
             .filter(|&v| v >= 1)
             .unwrap_or_else(|| {
-                #[cfg(any(feature = "embeddings", feature = "neural"))]
+                #[cfg(feature = "embeddings")]
                 if crate::core::ort_execution_providers::gpu_active() {
                     return 256;
                 }

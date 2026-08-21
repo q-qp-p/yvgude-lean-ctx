@@ -3,7 +3,6 @@
 // ---------------------------------------------------------------------------
 pub mod adaptive_chunking;
 pub mod adaptive_compression;
-pub mod addons;
 pub(crate) mod aggressiveness;
 pub mod attention_context;
 pub(crate) mod auto_capture;
@@ -30,14 +29,12 @@ pub mod html_crush;
 #[allow(unused_imports)]
 pub mod ib;
 pub mod import;
-pub mod information_bottleneck;
 pub mod integration_proof;
 pub mod json_crush;
 pub mod json_sample;
 pub(crate) mod markdown_compact;
 pub mod output_sanitizer;
 #[allow(dead_code)]
-pub(crate) mod pair_protocol;
 pub mod policy;
 pub mod pop_pruning;
 pub mod predictive_coding;
@@ -104,7 +101,6 @@ pub(crate) mod graph_analysis;
 pub mod graph_context;
 pub(crate) mod graph_coordinator;
 pub(crate) mod graph_enricher;
-pub mod graph_expand;
 pub mod graph_export;
 pub mod graph_features;
 pub mod graph_index;
@@ -202,16 +198,15 @@ pub mod attention_placement;
 pub mod litm;
 
 // ---------------------------------------------------------------------------
-// Domain: Neural / ML
+// Domain: Embeddings / ML
 // ---------------------------------------------------------------------------
-pub mod neural;
 // ORT runtime glue links against the `ort` crate, which is only pulled in by the
-// `embeddings` or `neural` features. On platforms ORT does not support (e.g.
+// `embeddings` feature. On platforms ORT does not support (e.g.
 // FreeBSD, see #586) these features are disabled, so the modules must be gated
 // to keep the build clean without them.
-#[cfg(any(feature = "embeddings", feature = "neural"))]
+#[cfg(feature = "embeddings")]
 pub(crate) mod ort_environment;
-#[cfg(any(feature = "embeddings", feature = "neural"))]
+#[cfg(feature = "embeddings")]
 pub(crate) mod ort_execution_providers;
 
 // ---------------------------------------------------------------------------
@@ -230,7 +225,6 @@ pub(crate) mod agents;
 pub(crate) mod autonomy;
 pub mod autonomy_drivers;
 pub mod canonical;
-pub mod stigmergy;
 pub(crate) mod wordlist;
 
 // ---------------------------------------------------------------------------
@@ -358,7 +352,6 @@ pub mod extractors;
 pub mod feedback;
 pub(crate) mod fep_prefetch;
 pub(crate) mod filters;
-pub mod free_energy_budget;
 pub mod gain;
 pub(crate) mod git;
 pub mod git_cache;
@@ -449,7 +442,6 @@ pub mod paths;
 pub mod pathutil;
 pub mod persona;
 pub mod pipeline;
-pub mod plugins;
 pub(crate) mod portable_binary;
 pub(crate) mod profile_suggest;
 pub mod profiles;
@@ -536,7 +528,6 @@ pub mod archive_fts;
 pub(crate) mod artifact_index;
 pub(crate) mod artifacts;
 pub(crate) mod ast_walk;
-pub(crate) mod buddy;
 #[cfg(feature = "tree-sitter")]
 pub(crate) mod chunks_ts;
 pub(crate) mod context_gc;
@@ -554,11 +545,3 @@ pub mod storage_maintenance;
 pub(crate) mod structured_compact;
 pub(crate) mod type_ref_edges;
 pub(crate) mod workspace_trust;
-
-#[cfg(test)]
-mod science_integration;
-#[cfg(test)]
-mod science_props;
-
-#[cfg(test)]
-mod science_benchmark;

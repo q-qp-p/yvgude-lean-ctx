@@ -241,10 +241,6 @@ fn auto_sync_personal_cloud() -> AutoSyncOutcome {
     if !gotchas.is_empty() {
         push("gotchas", crate::cloud_client::push_gotchas(&gotchas));
     }
-    let buddy = crate::core::buddy::BuddyState::compute();
-    if let Ok(buddy_data) = serde_json::to_value(&buddy) {
-        push("buddy", crate::cloud_client::push_buddy(&buddy_data));
-    }
     let feedback = collect_feedback_entries();
     if !feedback.is_empty() {
         push("feedback", crate::cloud_client::push_feedback(&feedback));

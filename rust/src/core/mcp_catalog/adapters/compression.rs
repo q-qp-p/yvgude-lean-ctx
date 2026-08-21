@@ -76,7 +76,7 @@ fn try_compress(server: &str, input: &str) -> Option<String> {
     let transport = srv.resolve().ok()?;
     let timeout = Duration::from_secs(gw.call_timeout_secs.max(1));
     let input = input.to_string();
-    let server = server.to_string();
+    let _server = server.to_string();
 
     run_blocking(async move {
         let tools = client::fetch_tools(&transport, timeout).await.ok()?;
@@ -92,10 +92,7 @@ fn try_compress(server: &str, input: &str) -> Option<String> {
         let result = client::proxy_call(&transport, &tool.name, args, timeout)
             .await
             .ok()?;
-        Some(crate::core::addons::runtime::scrub_output(
-            &server,
-            &client::result_to_text(&result),
-        ))
+        Some(client::result_to_text(&result))
     })
 }
 

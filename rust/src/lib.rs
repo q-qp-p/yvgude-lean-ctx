@@ -40,7 +40,6 @@ pub mod terminal_ui;
 pub mod token_report;
 pub mod tool_defs;
 pub mod tools;
-pub mod tui;
 
 #[cfg(feature = "http-server")]
 #[allow(dead_code)]

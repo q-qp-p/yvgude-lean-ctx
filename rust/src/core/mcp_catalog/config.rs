@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::core::addons::capabilities::AddonCapabilities;
 use crate::core::mcp_catalog::memento::{SecretMementoStore, fingerprint};
 
 /// Which transport a downstream MCP server speaks.
@@ -107,14 +106,6 @@ pub struct GatewayServer {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secret_headers: BTreeMap<String, SecretMementoRef>,
 
-    /// Declared capabilities (P1). `None` keeps the legacy `addons.sandbox`
-    /// behaviour; `Some` enforces a per-server OS sandbox + env allowlist
-    /// derived from the declared permissions at the spawn point. Carried here so
-    /// the live `[[gateway.servers]]` config — the single source of truth for
-    /// what runs — also records what each server is allowed to do.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<AddonCapabilities>,
-
     /// Typed-integration adapter override (#1096, L4). Empty = *auto*: derive the
     /// adapter from the owning addon's category in the installed store. An
     /// explicit value forces a specific adapter and bypasses the lookup:
@@ -138,7 +129,6 @@ impl Default for GatewayServer {
             url: String::new(),
             headers: BTreeMap::new(),
             secret_headers: BTreeMap::new(),
-            capabilities: None,
             integration: String::new(),
         }
     }
@@ -153,8 +143,6 @@ pub enum ResolvedTransport {
         env: BTreeMap<String, String>,
         /// SHA-256 pin of `command` to verify before spawn (empty = unpinned).
         binary_sha256: String,
-        /// Declared capabilities to enforce at spawn (`None` = legacy path).
-        capabilities: Option<AddonCapabilities>,
     },
     Http {
         url: String,
@@ -171,14 +159,12 @@ impl fmt::Debug for ResolvedTransport {
                 args,
                 env,
                 binary_sha256,
-                capabilities,
             } => formatter
                 .debug_struct("Stdio")
                 .field("command", command)
                 .field("args", args)
                 .field("env", &redacted_stdio_env(env))
                 .field("binary_sha256", binary_sha256)
-                .field("capabilities", capabilities)
                 .finish(),
             Self::Http {
                 url,
@@ -262,7 +248,6 @@ impl GatewayServer {
                     args: self.args.clone(),
                     env,
                     binary_sha256: self.binary_sha256.clone(),
-                    capabilities: self.capabilities.clone(),
                 })
             }
             TransportKind::Http => {
@@ -456,7 +441,6 @@ integration = "codebase-pack"
                 args: vec!["/tmp".into()],
                 env: BTreeMap::new(),
                 binary_sha256: String::new(),
-                capabilities: None,
             }
         );
     }

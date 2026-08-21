@@ -59,9 +59,8 @@ fn pool_identity(transport: &ResolvedTransport) -> String {
             args,
             env,
             binary_sha256,
-            capabilities,
         } => format!(
-            "stdio|command={command:?}|args={args:?}|env={env:?}|binary_sha256={binary_sha256:?}|capabilities={capabilities:?}"
+            "stdio|command={command:?}|args={args:?}|env={env:?}|binary_sha256={binary_sha256:?}"
         ),
         ResolvedTransport::Http {
             url,
@@ -173,7 +172,6 @@ mod tests {
             args: vec![],
             env: BTreeMap::new(),
             binary_sha256: String::new(),
-            capabilities: None,
         }
     }
 

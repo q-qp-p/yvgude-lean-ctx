@@ -621,11 +621,6 @@ pub struct Config {
     /// a LeanCTX Enterprise Gateway for economics tracking and model routing.
     #[serde(default)]
     pub enterprise: EnterpriseConfig,
-    /// Addon ecosystem security floor (#863): install policy, registry-signature
-    /// requirement and sandboxing for spawned addon servers. Global-only (never
-    /// merged from project-local config) and fully permissive by default.
-    #[serde(default)]
-    pub addons: crate::core::addons::AddonsConfig,
     /// Deprecated: auto-reroot is now always active when the jail root is
     /// suspicious, None, or has no project marker. Kept for config-file
     /// backward compatibility but no longer controls behavior.

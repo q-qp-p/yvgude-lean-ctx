@@ -12,11 +12,11 @@
 
 ```text
 WS-1: CODEBASE CLEANUP          ██████████  DONE (2026-08-20)
-WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; paid sprint is sales, not an engineering gate
+WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; paid sprint **ON HOLD** (#1254 sales/pilot)
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
 WS-4: OCLA + COMPOSABLE (B)     ████████░░  Engineering dogfood allowed; no public claim until #1254
 WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
-WS-6: BENCHMARK + CALIBRATOR    ████░░░░░░  6.1–6.4 + 6.6 + 6.8 code landed; 23 tests pass
+WS-6: BENCHMARK + CALIBRATOR    █████░░░░░  Current engineering: Gap 4 LocalRunner wiring (#1275)
 ```
 
 ---
@@ -66,7 +66,7 @@ cargo fmt --check
 | 2.7 | Implement offline Receipt verification | **done** (verify() local+Ed25519) |
 | 2.8 | Write Quickstart documentation | **done** (README 342 LOC) |
 | 2.9 | Publish v1.0 on PyPI | **done** (lean-ctx-python 1.0.0) |
-| 2.10 | Run first Thinkery Agent Tuning Sprint (CHF 7,500) | pending |
+| 2.10 | Run first Thinkery Agent Tuning Sprint (CHF 7,500) | **ON HOLD** (sales/pilot; #1254) |
 
 ---
 
@@ -157,7 +157,7 @@ entwickelt.
 | 6.6 | Implement Calibrator v0: fixed candidate set, Pareto frontier, recommendation | **done** (calibrator module: config, candidate, pareto, recommendation, report; 13 tests) |
 | 6.7 | Implement calibrate CLI command | done |
 | 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | **done** (AgentConnector trait + Codex/Claude/Cursor connectors + detection; 3 tests) |
-| 6.9 | Local Runner + pair WebSocket protocol | pending |
+| 6.9 | LocalRunner wiring for `benchmark-run` | **in progress** (#1275, Gap 4) |
 | 6.10 | Simple verified ranking (web result page) | pending |
 
 **Anti-scope:** No gamification, social profiles, achievements, badges, community platform, marketplace. V1 = one agent, two profiles, controlled benchmark, Receipt, recommendation.
@@ -177,7 +177,7 @@ entwickelt.
 |---|---|---|
 | WS-1 Codebase Cleanup | #1242–#1244 | **closed** + milestone closed |
 | WS-2 SDK v1 + Evidence | #1245–#1253 | **closed** (code + PyPI 1.0.0) |
-| WS-2 | #1254 first paid pilot | **open** — current exit criterion |
+| WS-2 | #1254 first paid pilot | **open — ON HOLD** (sales/pilot) |
 | WS-3 Website Rebuild | #1255–#1259 | **closed** (v2 pages on `deploy`) |
 | WS-3 | #1260 old pages / nav / footer / SEO | **open** |
 | WS-3 | #1261 production deploy | **open** |

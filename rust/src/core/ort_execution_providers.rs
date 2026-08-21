@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! ONNX Runtime execution provider selection: CPU default, opt-in GPU providers.
 //!
 //! Each GPU EP is gated behind its own Cargo feature (`ort-cuda`, `ort-rocm`, etc.).

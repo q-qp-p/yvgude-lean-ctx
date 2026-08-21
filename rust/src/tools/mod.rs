@@ -46,7 +46,6 @@ pub mod ctx_pack;
 pub mod ctx_package;
 pub mod ctx_patch;
 pub mod ctx_plan;
-pub mod ctx_plugins;
 pub mod ctx_prefetch;
 pub mod ctx_preload;
 pub mod ctx_proof;

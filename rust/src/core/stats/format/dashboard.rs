@@ -433,16 +433,7 @@ fn render_gain_dashboard_for_store(
     // -- COMPANION section --
     {
         let cfg = crate::core::config::Config::load();
-        if cfg.buddy_enabled {
-            out.push(String::new());
-            out.push(format!("  {}", t.box_top_labeled(w, "YOUR COMPANION")));
-            let buddy = crate::core::buddy::BuddyState::compute();
-            let block = crate::core::buddy::format_buddy_block_at(&buddy, t, tick);
-            for line in block.lines() {
-                out.push(sec_line(line));
-            }
-            out.push(format!("  {}", t.box_bottom_square(w)));
-        }
+        let _ = (cfg.buddy_enabled, tick);
     }
 
     out.push(String::new());

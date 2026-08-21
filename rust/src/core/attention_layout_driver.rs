@@ -41,12 +41,11 @@ pub fn maybe_reorder_for_attention(
         };
     }
 
-    let output = crate::core::neural::context_reorder::reorder_for_lcurve(content, task_keywords);
     LayoutApplyResultV1 {
-        changed: output != content,
-        output,
-        skipped: false,
-        reason_code: "reordered".to_string(),
+        output: content.to_string(),
+        changed: false,
+        skipped: true,
+        reason_code: "disabled".to_string(),
     }
 }
 
@@ -85,7 +84,7 @@ pub mod tests {
         };
         let content = "let x = 1;\nuse std::io;\n}\nreturn Err(e);\npub struct Foo {\nfn main() {";
         let r = maybe_reorder_for_attention(content, &["err".to_string()], &cfg);
-        assert!(!r.skipped);
-        assert!(r.output.starts_with("return Err(") || r.output.starts_with("use "));
+        assert!(r.skipped);
+        assert_eq!(r.reason_code, "disabled");
     }
 }

@@ -85,10 +85,6 @@ name = "locomo_bench"
 path = "src/bin/locomo_bench.rs"
 required-features = ["dev-tools"]
 
-[[example]]
-name = "seed_observatory"
-path = "src/bin/seed_observatory.rs"
-required-features = ["dev-tools"]
 
 [[example]]
 name = "bench_cross_agent_cache"
@@ -119,7 +115,6 @@ dev-tools = []
 no-jail = []
 onnx = ["dep:ort", "dep:ndarray", "dep:libloading"]
 # Backwards-compatible feature name for existing local builds.
-neural = ["onnx"]
 embeddings = ["dep:ort", "dep:ndarray", "dep:libloading"]
 ort-cuda = ["ort?/cuda"]
 ort-webgpu = ["ort?/webgpu"]
@@ -317,8 +312,6 @@ hkdf = "0.13"
 chacha20poly1305 = "0.10"
 glob = "0.3"
 urlencoding = "2.1"
-ratatui = "0.30"
-crossterm = "0.29"
 rpassword = "7.5"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 getrandom = "0.4"

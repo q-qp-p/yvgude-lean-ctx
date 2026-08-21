@@ -130,33 +130,14 @@ fn features() -> Value {
 /// read-modes / compressors / chunkers (EPIC 12.9). The sandboxed extension
 /// runtime (EPIC 12.8) expands what registers here.
 fn extensions() -> Value {
-    let plugins = crate::core::plugins::PluginManager::with_registry(|reg| {
-        reg.enabled_plugins()
-            .iter()
-            .map(|p| {
-                json!({
-                    "name": p.manifest.plugin.name,
-                    "version": p.manifest.plugin.version,
-                    "permissions": p.manifest.trust.policy().declared_permissions(),
-                })
-            })
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
-
     let (read_modes, compressors, chunkers) = crate::core::extension_registry::global()
         .read()
         .map(|r| (r.read_mode_names(), r.compressor_names(), r.chunker_names()))
         .unwrap_or_default();
 
-    let tools: Vec<Value> = crate::core::plugins::PluginManager::tool_specs()
-        .iter()
-        .map(|t| json!({ "name": t.name, "plugin": t.plugin_name }))
-        .collect();
-
     json!({
-        "plugins": plugins,
-        "tools": tools,
+        "plugins": [],
+        "tools": [],
         "read_modes": read_modes,
         "compressors": compressors,
         "chunkers": chunkers,

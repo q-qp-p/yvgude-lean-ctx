@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Dependency resolution and installation for the addon `add`/`update` paths
 //! (GH #727): a declared depth-1 dependency is part of the install consent
 //! surface, so it must be previewed before the user is asked and installed
@@ -33,7 +35,7 @@ pub(super) fn refresh_pack_dependencies(
         return;
     }
     let base = crate::core::context_package::remote::registry_base(
-        super::addon_cmd::flag_value(args, "--registry").as_deref(),
+        flag_value(args, "--registry").as_deref(),
     );
     let token = crate::core::context_package::remote::publish_token(None);
     let project_root = super::common::detect_project_root(args);
@@ -69,7 +71,7 @@ pub(super) fn resolve_declared_deps(
         return Vec::new();
     }
     let base = crate::core::context_package::remote::registry_base(
-        super::addon_cmd::flag_value(args, "--registry").as_deref(),
+        flag_value(args, "--registry").as_deref(),
     );
     let token = crate::core::context_package::remote::publish_token(None);
     match crate::core::context_package::deps::resolve_dependencies(
@@ -97,7 +99,7 @@ pub(super) fn install_declared_deps(
     args: &[String],
 ) -> Vec<crate::core::context_package::deps::ResolvedDep> {
     let base = crate::core::context_package::remote::registry_base(
-        super::addon_cmd::flag_value(args, "--registry").as_deref(),
+        flag_value(args, "--registry").as_deref(),
     );
     let token = crate::core::context_package::remote::publish_token(None);
     let project_root = super::common::detect_project_root(args);
@@ -147,4 +149,14 @@ mod tests {
         // A bare slug is never returned, so the bug (bare root) is unreachable.
         assert_eq!(addon_self_ref("ctxpkg:demo"), None);
     }
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| {
+            args.iter()
+                .find_map(|a| a.strip_prefix(&format!("{flag}=")).map(str::to_string))
+        })
 }

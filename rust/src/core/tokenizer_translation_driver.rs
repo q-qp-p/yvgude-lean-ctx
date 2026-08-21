@@ -193,50 +193,13 @@ fn translate_ascii(text: &str) -> String {
         }
     }
 
-    // Apply TokenOptimizer only on synthetic TDD signature lines (verifier-safe).
-    let opt = crate::core::neural::token_optimizer::TokenOptimizer::with_defaults();
-    let mut changed = false;
-    let mut lines: Vec<String> = Vec::new();
-    for line in out.lines() {
-        if is_synthetic_tdd_signature_line(line) {
-            let optimized = opt.optimize_line(line);
-            if optimized != line {
-                changed = true;
-            }
-            lines.push(optimized);
-        } else {
-            lines.push(line.to_string());
-        }
-    }
+    let changed = false;
+    let lines: Vec<String> = out.lines().map(str::to_string).collect();
     if changed {
         out = lines.join("\n");
     }
 
     out
-}
-
-fn is_synthetic_tdd_signature_line(line: &str) -> bool {
-    let mut t = line.trim_start();
-    if let Some(rest) = t.strip_prefix('~') {
-        t = rest;
-    }
-
-    // Unicode TDD signature markers: λ/§/∂/τ/ε/ν + visibility +/-.
-    if let Some(first) = t.chars().next()
-        && matches!(first, 'λ' | '§' | '∂' | 'τ' | 'ε' | 'ν')
-    {
-        let mut it = t.chars();
-        let _ = it.next();
-        if matches!(it.next(), Some('+' | '-')) {
-            return true;
-        }
-    }
-
-    // ASCII translated variants (after symbol mapping).
-    let ascii_prefixes = [
-        "fn+", "fn-", "cl+", "cl-", "if+", "if-", "ty+", "ty-", "en+", "en-", "val+", "val-",
-    ];
-    ascii_prefixes.iter().any(|p| t.starts_with(p))
 }
 
 #[cfg(test)]

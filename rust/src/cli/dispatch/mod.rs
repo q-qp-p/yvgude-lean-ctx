@@ -165,16 +165,9 @@ pub fn run() {
                 crate::cli::cmd_policy(&rest);
                 return;
             }
-            "plugin" | "plugins" => {
-                crate::cli::plugin_cmd::cmd_plugin(&rest);
-                return;
-            }
-            "addon" | "addons" => {
-                let code = crate::cli::addon_cmd::cmd_addon(&rest);
-                if code != 0 {
-                    std::process::exit(code);
-                }
-                return;
+            "plugin" | "plugins" | "addon" | "addons" => {
+                eprintln!("Addon and plugin commands have been removed.");
+                std::process::exit(1);
             }
             "embeddings" => {
                 crate::cli::embeddings_cmd::cmd_embeddings(&rest);

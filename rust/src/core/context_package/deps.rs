@@ -20,7 +20,8 @@ use super::remote::{self, VersionInfo};
 
 /// One resolved direct dependency, ready to download.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedDep {
+#[allow(dead_code)]
+pub(crate) struct ResolvedDep {
     /// Scoped name as declared (`@ns/name`).
     pub name: String,
     /// Registry namespace (without `@`).
@@ -47,6 +48,7 @@ pub struct ResolvedDep {
 /// local `lean-ctx-addon.toml` carries its `[[dependencies]]` in
 /// [`crate::core::addons::manifest::AddonManifest`], with no hosted
 /// `PackageManifest` to key off (GH #727, Finding A).
+#[allow(dead_code)]
 pub(crate) fn resolve_dependencies(
     deps: &[PackageDependency],
     root_name: Option<&str>,

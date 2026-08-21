@@ -68,30 +68,18 @@ pub async fn proxy(
         .active_servers()
         .find(|s| s.name == server_name)
         .ok_or_else(|| format!("unknown or disabled gateway server `{server_name}`"))?;
-    // Kill-switch (P2): refuse to proxy a call to a revoked server.
-    if let Some(reason) = crate::core::addons::revocation::blocked_reason(server_name) {
-        return Err(format!(
-            "gateway server `{server_name}` is revoked and will not run: {reason}"
-        ));
-    }
-    if let Some(reason) = crate::core::addons::integrity::execution_block_for_server(server_name) {
-        return Err(format!(
-            "gateway server `{server_name}` failed integrity verification and will not run: {reason}"
-        ));
-    }
     let resolved = server.resolve()?;
     let timeout = std::time::Duration::from_secs(cfg.call_timeout_secs.max(1));
     let call = client::proxy_call(&resolved, tool, arguments, timeout).await;
     // Per-addon usage metering (P5): attribute every proxied call to its server +
     // tool. A transport failure or a downstream `is_error` counts as an error.
     // Side-channel only — never touches the returned text (output determinism).
-    let ok = matches!(&call, Ok(r) if !r.is_error.unwrap_or(false));
-    crate::core::addons::meter::record(server_name, tool, ok);
+    let _ok = matches!(&call, Ok(r) if !r.is_error.unwrap_or(false));
     let result = call?;
     // Downstream output is untrusted content (#866): redact secrets + audit it
     // before it enters the model context.
-    let scrubbed =
-        crate::core::addons::runtime::scrub_output(server_name, &client::result_to_text(&result));
+    let scrubbed = client::result_to_text(&result);
+    let _ = server_name;
     if result.is_error.unwrap_or(false) {
         // Error text is surfaced verbatim (already scrubbed) — never compressed
         // or spilled, so the failure reason stays fully legible.

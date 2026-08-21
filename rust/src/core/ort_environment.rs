@@ -166,14 +166,6 @@ fn resolve_ort_dylib() -> anyhow::Result<PathBuf> {
         anyhow::bail!("ORT_DYLIB_PATH={p} set but file does not exist");
     }
 
-    // 2. Managed runtime (GH #732) — installed by `lean-ctx embeddings
-    //    provision`, SHA-256 pinned to the official release and version-
-    //    matched to this build's ort API level. After ORT_DYLIB_PATH so an
-    //    operator override always wins.
-    if let Some(found) = crate::core::addons::ort_provision::managed_dylib_path() {
-        return Ok(found);
-    }
-
     // 3. Nix profile paths (Linux) — system & user profiles always point to
     //    the currently activated version.
     #[cfg(target_os = "linux")]

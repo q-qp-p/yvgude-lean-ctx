@@ -146,48 +146,10 @@ pub(crate) fn validate_kind_coherence(
 ) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     match manifest.kind {
-        PackageKind::Addon => match &content.addon {
-            None => errors.push("kind=addon requires a content.addon payload".into()),
-            Some(payload) => {
-                match crate::core::addons::manifest::AddonManifest::from_toml(
-                    &payload.manifest_toml,
-                ) {
-                    Err(e) => errors.push(format!("embedded addon manifest does not parse: {e}")),
-                    Ok(addon) => {
-                        if let Err(e) = addon.validate() {
-                            errors.push(format!("embedded addon manifest is invalid: {e}"));
-                        }
-                        // The pack is @ns/<slug>; the embedded manifest is the
-                        // slug's source of truth — they must agree, as must the
-                        // versions, or resolve-by-name breaks after install.
-                        let slug = manifest
-                            .name
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(manifest.name.as_str());
-                        if addon.addon.name != slug {
-                            errors.push(format!(
-                                "embedded addon name `{}` does not match the package name \
-                                 `{slug}`",
-                                addon.addon.name
-                            ));
-                        }
-                        if addon.addon.version != manifest.version {
-                            errors.push(format!(
-                                "embedded addon version `{}` does not match the package \
-                                 version `{}`",
-                                addon.addon.version, manifest.version
-                            ));
-                        }
-                        if !addon.is_installable() {
-                            errors.push(
-                                "embedded addon manifest has no runnable [mcp] endpoint".into(),
-                            );
-                        }
-                    }
-                }
-            }
-        },
+        PackageKind::Addon => {
+            errors.push("kind=addon packages are no longer supported".into());
+        }
+
         PackageKind::Skills => {
             if content.addon.is_some() {
                 errors.push("content.addon payload requires kind=addon".into());
@@ -659,41 +621,10 @@ args = ["serve"]
     }
 
     #[test]
-    fn coherent_addon_pack_passes() {
-        let manifest = kinded_manifest(super::PackageKind::Addon, "@acme/lean-md", "1.2.0");
-        assert!(validate_kind_coherence(&manifest, &addon_content(COHERENT_ADDON_TOML)).is_ok());
-    }
-
-    #[test]
-    fn addon_kind_without_payload_fails() {
-        let manifest = kinded_manifest(super::PackageKind::Addon, "@acme/lean-md", "1.2.0");
-        let errs =
-            validate_kind_coherence(&manifest, &PackageContent::default()).expect_err("must fail");
-        assert!(errs[0].contains("requires a content.addon"), "{errs:?}");
-    }
-
-    #[test]
     fn context_pack_with_addon_payload_fails() {
         let manifest = kinded_manifest(super::PackageKind::Context, "plain-pack", "1.0.0");
         let errs = validate_kind_coherence(&manifest, &addon_content(COHERENT_ADDON_TOML))
             .expect_err("must fail");
         assert!(errs[0].contains("requires kind=addon"), "{errs:?}");
-    }
-
-    #[test]
-    fn addon_name_and_version_must_match_the_pack() {
-        let manifest = kinded_manifest(super::PackageKind::Addon, "@acme/other-name", "9.9.9");
-        let errs = validate_kind_coherence(&manifest, &addon_content(COHERENT_ADDON_TOML))
-            .expect_err("must fail");
-        assert!(
-            errs.iter()
-                .any(|e| e.contains("does not match the package name")),
-            "{errs:?}"
-        );
-        assert!(
-            errs.iter()
-                .any(|e| e.contains("does not match the package version")),
-            "{errs:?}"
-        );
     }
 }

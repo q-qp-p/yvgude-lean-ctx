@@ -1,4 +1,4 @@
-use crate::{core, dashboard, tui};
+use crate::{core, dashboard};
 
 mod provider;
 pub(crate) use provider::*;
@@ -214,10 +214,8 @@ pub(super) fn cmd_watch(rest: &[String]) {
         println!("  Live TUI dashboard (real-time event stream).");
         return;
     }
-    if let Err(e) = tui::run() {
-        tracing::error!("TUI error: {e}");
-        std::process::exit(1);
-    }
+    eprintln!("The live TUI dashboard has been removed.");
+    std::process::exit(1);
 }
 
 /// True when the args ask for help anywhere (`--help`/`-h`/`help`).

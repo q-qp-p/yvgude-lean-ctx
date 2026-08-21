@@ -18,6 +18,19 @@ fn data_source_flag(args: &[String]) -> String {
         .unwrap_or_else(|| "jira".to_string())
 }
 
+fn slugify_id(raw: &str) -> Option<String> {
+    let id: String = raw
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if id.is_empty() { None } else { Some(id) }
+}
+
 fn provider_usage() {
     eprintln!(
         "Usage: lean-ctx provider <command>\n\n\
@@ -48,7 +61,7 @@ fn provider_init(args: &[String]) {
         std::process::exit(1);
     };
     // Provider ids share the addon slug shape (`[a-z0-9-]`).
-    let Some(id) = crate::core::addons::scaffold::slugify(raw) else {
+    let Some(id) = slugify_id(raw) else {
         eprintln!("`{raw}` has no usable id characters ([a-z0-9-]).");
         std::process::exit(1);
     };

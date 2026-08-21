@@ -1,6 +1,6 @@
 use super::{
-    CrpMode, HookPoint, PluginManager, ReadMode, ReadOutput, ReadTuning, SessionCache,
-    count_tokens, dedup_hook, handle_with_options_inner, kernel, protocol,
+    CrpMode, ReadMode, ReadOutput, ReadTuning, SessionCache, count_tokens, dedup_hook,
+    handle_with_options_inner, kernel, protocol,
 };
 const MAX_RELAY_CONTENT_BYTES: usize = 8192;
 
@@ -371,12 +371,6 @@ fn handle_with_options_resolved_preread(
         }
     }
 
-    if PluginManager::has_listener("pre_read") {
-        PluginManager::fire_hook_background(HookPoint::PreRead {
-            path: path.to_string(),
-        });
-    }
-
     if let Ok(mut bt) = crate::core::bounce_tracker::global().lock() {
         bt.next_seq();
     }
@@ -494,16 +488,6 @@ fn handle_with_options_resolved_preread(
         }
     }
 
-    // Plugin seam: emit the realized compression stats. Same zero-cost guard.
-    if PluginManager::has_listener("post_compress") {
-        let original_tokens = cache.get(path).map_or(0, |e| e.original_tokens);
-        PluginManager::fire_hook_background(HookPoint::PostCompress {
-            path: path.to_string(),
-            original_tokens,
-            compressed_tokens: result.output_tokens,
-        });
-    }
-
     // Stigmergy (#540): deposit a Hot scent for this read in the background
     // (the field file lock may briefly block; never stall the read path). The
     // foreign-claim hint is intentionally NOT appended to the body: it carries a
@@ -520,27 +504,6 @@ fn handle_with_options_resolved_preread(
                 &scent_path,
                 0.3,
             );
-        });
-    }
-
-    if crate::core::cognitive_gate::full_science_enabled() {
-        let agent_id = crate::core::scent_field::scent_agent_id();
-        let agent_id = if agent_id.is_empty() {
-            "default-agent".to_string()
-        } else {
-            agent_id.to_string()
-        };
-        let signal_path = crate::core::pathutil::normalize_tool_path(path);
-        std::thread::spawn(move || {
-            crate::core::stigmergy::deposit_signal(crate::core::stigmergy::PheromoneSignal {
-                agent_id,
-                kind: crate::core::stigmergy::SignalKind::Exploration,
-                path: signal_path,
-                symbol: None,
-                strength: 0.8,
-                deposited_at: chrono::Utc::now(),
-                note: None,
-            });
         });
     }
 
