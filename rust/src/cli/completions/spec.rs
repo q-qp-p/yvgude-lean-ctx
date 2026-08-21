@@ -2,7 +2,6 @@
 //!
 //! Every top-level command, its subcommands, flags and dynamic value kinds
 //! live here so the completion engine has a single source of truth.
-
 /// Describes a dynamic value set resolved at completion time.
 #[derive(Clone, Copy)]
 pub enum DynamicKind {
@@ -13,7 +12,6 @@ pub enum DynamicKind {
     Profiles,
     TerseLevel,
 }
-
 /// A flag/option accepted by a command.
 pub struct FlagSpec {
     pub long: &'static str,
@@ -22,7 +20,6 @@ pub struct FlagSpec {
     pub takes_value: bool,
     pub value_kind: Option<DynamicKind>,
 }
-
 /// A command or subcommand node in the tree.
 pub struct CommandNode {
     pub name: &'static str,
@@ -33,7 +30,6 @@ pub struct CommandNode {
     pub positional: Option<DynamicKind>,
     pub hidden: bool,
 }
-
 pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "model",
@@ -1187,6 +1183,30 @@ pub static COMMAND_TREE: &[CommandNode] = &[
         hidden: false,
     },
     CommandNode {
+        name: "calibrate",
+        aliases: &[],
+        description: "Run profile calibration against a workload",
+        subcommands: &[],
+        flags: &[
+            FlagSpec {
+                long: "--quality-floor",
+                short: None,
+                description: "Minimum quality threshold (0.0-1.0)",
+                takes_value: true,
+                value_kind: None,
+            },
+            FlagSpec {
+                long: "--max-candidates",
+                short: None,
+                description: "Maximum number of candidate profiles",
+                takes_value: true,
+                value_kind: None,
+            },
+        ],
+        positional: Some(DynamicKind::Profiles),
+        hidden: false,
+    },
+    CommandNode {
         name: "benchmark",
         aliases: &[],
         description: "Run compression benchmarks",
@@ -1452,11 +1472,9 @@ pub static COMMAND_TREE: &[CommandNode] = &[
         hidden: true,
     },
 ];
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn no_duplicate_names_at_top_level() {
         let mut seen = std::collections::HashSet::new();
@@ -1464,7 +1482,6 @@ mod tests {
             assert!(seen.insert(node.name), "duplicate: {}", node.name);
         }
     }
-
     #[test]
     fn visible_count_exceeds_50() {
         let visible = COMMAND_TREE.iter().filter(|n| !n.hidden).count();
@@ -1473,7 +1490,6 @@ mod tests {
             "expected at least 30 visible commands, got {visible}"
         );
     }
-
     #[test]
     fn command_tree_covers_known_commands() {
         let known = crate::cli::dispatch::suggest::KNOWN_COMMANDS;
@@ -1481,7 +1497,6 @@ mod tests {
             .iter()
             .flat_map(|n| std::iter::once(n.name).chain(n.aliases.iter().copied()))
             .collect();
-
         let mut missing = Vec::new();
         for cmd in known {
             if !tree_names.contains(cmd) {
@@ -1493,7 +1508,6 @@ mod tests {
             "KNOWN_COMMANDS entries missing from COMMAND_TREE: {missing:?}"
         );
     }
-
     #[test]
     fn benchmark_real_is_registered_for_completion() {
         assert!(crate::cli::dispatch::suggest::KNOWN_COMMANDS.contains(&"benchmark"));
