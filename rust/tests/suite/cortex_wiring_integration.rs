@@ -341,7 +341,6 @@ fn mcp_handler_flow_provider_then_read_hints() {
     }
 }
 
-
 /// ECS saliency ranking respects task relevance.
 #[test]
 fn saliency_ranks_relevant_chunks_higher() {

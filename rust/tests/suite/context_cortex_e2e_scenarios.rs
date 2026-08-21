@@ -354,7 +354,6 @@ fn scenario_bug_investigation_full_pipeline() {
         predictions.iter().any(|p| p.provider_id == "github"),
         "Should predict GitHub"
     );
-
 }
 
 // ---------------------------------------------------------------------------

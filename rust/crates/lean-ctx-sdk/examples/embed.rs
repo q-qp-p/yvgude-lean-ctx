@@ -35,11 +35,5 @@ fn main() -> Result<(), lean_ctx_sdk::Error> {
         again.saved_pct()
     );
 
-    // ── Author + audit an addon entirely in-process ──
-    let slug = lean_ctx_sdk::addon::slugify("My Plan Runner").unwrap();
-    let manifest = lean_ctx_sdk::addon::scaffold(&slug, lean_ctx_sdk::addon::Transport::Stdio);
-    let report = lean_ctx_sdk::addon::audit(&manifest).expect("audit");
-    println!("addon `{slug}` audit verdict = {:?}", report.verdict);
-
     Ok(())
 }
