@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Sprint POC harness: doctor, stock/treatment run, compare, verify.
 
-Does not invent savings. Failed quality on either arm blocks a win.
+Does not invent savings. A claim requires both quality gates and a
+re-verifiable persisted receipt.
 """
 
 from __future__ import annotations
@@ -144,14 +145,23 @@ def _run_wrapped(agent: ReferenceCodeReviewAgent, task: str) -> tuple[dict[str, 
     if not isinstance(review, dict):
         raise TypeError("wrapped agent must return ReviewResult dict")
     receipt = run.receipt
+    canonical_json = getattr(receipt, "_canonical_json", b"")
+    if isinstance(canonical_json, bytes):
+        canonical_json = canonical_json.decode("utf-8", errors="strict")
+    if not isinstance(canonical_json, str):
+        canonical_json = ""
     payload = {
         "receipt_id": getattr(receipt, "receipt_id", None),
-        "verified": bool(receipt.verify()) if hasattr(receipt, "verify") else False,
+        "canonical_json": canonical_json,
+        "canonical_hash": getattr(receipt, "canonical_hash", None),
+        "signature": getattr(receipt, "signature", None),
+        "signer_public_key": getattr(receipt, "_public_key", None),
         "savings": _savings_dict(receipt),
         "degradations": list(getattr(receipt, "degradations", ()) or ()),
         "coverage": getattr(receipt, "coverage", None),
         "integrity_status": getattr(receipt, "integrity_status", None),
     }
+    payload["verified"] = _verify_persisted_receipt(payload)
     return review, payload
 
 
@@ -183,23 +193,37 @@ def cmd_compare(out_root: Path) -> int:
     treat_q = json.loads((treatment / "quality-result.json").read_text(encoding="utf-8"))
     both_pass = bool(stock_q.get("passed") and treat_q.get("passed"))
     receipt_path = treatment / "execution-receipt.json"
+    receipt_verified = False
     savings = None
-    if both_pass and receipt_path.is_file():
-        savings = json.loads(receipt_path.read_text(encoding="utf-8")).get("savings")
+    if receipt_path.is_file():
+        try:
+            receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            receipt_payload = None
+        if isinstance(receipt_payload, dict):
+            receipt_verified = _verify_persisted_receipt(receipt_payload)
+            if receipt_verified:
+                savings = receipt_payload.get("savings")
+    savings_claim_allowed = both_pass and receipt_verified
+    if not both_pass:
+        note = "Quality gate failed on at least one arm. No savings claim."
+    elif not receipt_verified:
+        note = "Treatment receipt is missing, malformed, or failed re-verification. No savings claim."
+    else:
+        note = None
     comparison = {
         "baseline": str(stock),
         "treatment": str(treatment),
         "quality_both_passed": both_pass,
-        "savings_claim_allowed": both_pass,
-        "savings": savings if both_pass else None,
-        "note": None
-        if both_pass
-        else "Quality gate failed on at least one arm. No savings claim.",
+        "treatment_receipt_verified": receipt_verified,
+        "savings_claim_allowed": savings_claim_allowed,
+        "savings": savings if savings_claim_allowed else None,
+        "note": note,
     }
     dest = out_root / "comparison.json"
     dest.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(comparison, indent=2))
-    return 0 if both_pass else 2
+    return 0 if savings_claim_allowed else 2
 
 
 def cmd_verify(out_root: Path) -> int:
@@ -212,17 +236,60 @@ def cmd_verify(out_root: Path) -> int:
     if not receipt.is_file():
         print("error: treatment receipt missing")
         return 1
-    payload = json.loads(receipt.read_text(encoding="utf-8"))
-    verified = bool(payload.get("verified"))
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        print("error: treatment receipt is malformed")
+        return 2
+    if not isinstance(payload, dict):
+        print("error: treatment receipt must be a JSON object")
+        return 2
+    verified = _verify_persisted_receipt(payload)
     print(f"treatment receipt verified: {verified}")
+    tampered = _tamper_canonical_payload(payload)
+    if tampered is None:
+        print("error: treatment receipt has no canonical payload to tamper-check")
+        return 2
     copy = receipt.with_name("execution-receipt.tampered.json")
-    tampered = dict(payload)
-    tampered["receipt_id"] = "tampered"
     copy.write_text(json.dumps(tampered, indent=2) + "\n", encoding="utf-8")
+    tampered_rejected = not _verify_persisted_receipt(tampered)
     print(f"wrote tampered copy: {copy}")
-    print("Tamper check is structural: original verified flag vs altered id.")
-    print("Use lean-ctx / SDK verify on a sealed receipt for Ed25519 rejection.")
-    return 0 if verified else 2
+    print(f"tampered receipt rejected: {tampered_rejected}")
+    return 0 if verified and tampered_rejected else 2
+
+
+def _verify_persisted_receipt(payload: dict[str, Any]) -> bool:
+    """Re-parse persisted receipt material; never trust a stored boolean."""
+    receipt_id = payload.get("receipt_id")
+    if not isinstance(receipt_id, str) or not receipt_id:
+        return False
+    try:
+        from lean_ctx.receipt import parse_execution_receipt
+
+        receipt = parse_execution_receipt(payload)
+    except Exception:
+        return False
+    return receipt.receipt_id == receipt_id and receipt.verify()
+
+
+def _tamper_canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    canonical_json = payload.get("canonical_json")
+    if not isinstance(canonical_json, str):
+        return None
+    try:
+        canonical = json.loads(canonical_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(canonical, dict):
+        return None
+    canonical["outcome"] = "tampered"
+    tampered = dict(payload)
+    tampered["canonical_json"] = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return tampered
 
 
 def _latest(runs: list[Path], arm: str) -> Path | None:

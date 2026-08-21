@@ -16,7 +16,7 @@ WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; 
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
 WS-4: OCLA + COMPOSABLE (B)     ████████░░  Engineering dogfood allowed; no public claim until #1254
 WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
-WS-6: BENCHMARK + CALIBRATOR    █████░░░░░  Current engineering: Gap 4 LocalRunner wiring (#1275)
+WS-6: BENCHMARK + CALIBRATOR    ███████░░░  LocalRunner + named-profile comparison implemented; next: quality evaluator + Receipt linkage
 ```
 
 ---
@@ -157,8 +157,8 @@ entwickelt.
 | 6.6 | Implement Calibrator v0: fixed candidate set, Pareto frontier, recommendation | **done** (calibrator module: config, candidate, pareto, recommendation, report; 13 tests) |
 | 6.7 | Implement calibrate CLI command | done |
 | 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | **done** (AgentConnector trait + Codex/Claude/Cursor connectors + detection; 3 tests) |
-| 6.9 | LocalRunner wiring for `benchmark-run` | **in progress** (#1275, Gap 4) |
-| 6.10 | Simple verified ranking (web result page) | pending |
+| 6.9 | LocalRunner wiring and named-profile propagation for live calibration | **done** (LocalRunner, timeout, and `LEAN_CTX_PROFILE` propagation) |
+| 6.10 | Local verified comparison artifact: explicit quality evaluator + Receipt linkage | next |
 
 **Anti-scope:** No gamification, social profiles, achievements, badges, community platform, marketplace. V1 = one agent, two profiles, controlled benchmark, Receipt, recommendation.
 
