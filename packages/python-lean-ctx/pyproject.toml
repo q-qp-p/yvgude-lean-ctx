@@ -36,11 +36,13 @@ Issues = "https://github.com/yvgude/lean-ctx/issues"
 langchain = ["langchain-core>=0.2"]
 llamaindex = ["llama-index-core>=0.10"]
 litellm = ["litellm>=1.0"]
+openai-agents = ["openai-agents>=0.19.4,<0.20.0"]
 verify = ["cryptography>=42.0"]
 all = [
   "langchain-core>=0.2",
   "llama-index-core>=0.10",
   "litellm>=1.0",
+  "openai-agents>=0.19.4,<0.20.0",
   "cryptography>=42.0",
 ]
 test = ["pytest>=8.0"]

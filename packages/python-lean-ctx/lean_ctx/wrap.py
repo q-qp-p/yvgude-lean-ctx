@@ -147,7 +147,37 @@ class _RunOnlyAdapter(_Adapter):
         return self.agent.run(task)
 
 
+class _OpenAIAgentsAdapter(_Adapter):
+    name = "openai_agents"
+
+    def __init__(self, agent: object) -> None:
+        from .agents import make_agents_sdk_adapter
+
+        self._adapter = make_agents_sdk_adapter(agent)
+        self.runner_agent = self._adapter.runner_agent
+
+    def set_runtime(self, ctx: "LeanCTX", kit: object, profile: object, agent_id: str) -> None:
+        self._adapter.set_runtime(ctx, kit, profile, agent_id)
+
+    @property
+    def receipt(self):
+        return self._adapter.receipt
+
+    def configure(self, transport: RunTransport):
+        return self._adapter.configure(transport)
+
+    def invoke(self, task: str, transport: RunTransport):
+        return self._adapter.invoke(task, transport)
+
+    def invoke_unbound(self, task: str):
+        return self._adapter.invoke_unbound(task)
+
+
 def _select_adapter(agent: object) -> _Adapter:
+    from .agents import is_agents_sdk_agent
+
+    if is_agents_sdk_agent(agent):
+        return _OpenAIAgentsAdapter(agent)
     signature = _run_signature(agent)
     if not _takes_task(signature):
         raise LeanCtxError("agent run must accept a task positional argument")
@@ -184,6 +214,21 @@ class WrappedAgent:
         self._profile = selected_profile
         self._agent_id = ctx._agent_id_for(agent)
         self._last_metrics: Optional[RunMetrics] = None
+        configure_runtime = getattr(self._adapter, "set_runtime", None)
+        if callable(configure_runtime):
+            configure_runtime(ctx, self._kit, self._profile, self._agent_id)
+
+    @property
+    def receipt(self):
+        """Return receipt from a direct OpenAI Agents SDK Runner call, if any."""
+        return getattr(self._adapter, "receipt", None)
+
+    def __getattr__(self, name: str):
+        """Expose the cloned SDK Agent surface to Runner without global hooks."""
+        runner_agent = getattr(self._adapter, "runner_agent", None)
+        if runner_agent is not None:
+            return getattr(runner_agent, name)
+        raise AttributeError(name)
 
     @property
     def metrics(self) -> Optional[RunMetrics]:

@@ -37,6 +37,7 @@ Optional extras (install only what you need):
 pip install "lean-ctx-python[langchain]"    # LangChain message compression + retriever
 pip install "lean-ctx-python[litellm]"      # LiteLLM pre-call hook
 pip install "lean-ctx-python[llamaindex]"   # LlamaIndex node parser
+pip install "lean-ctx-python[openai-agents]" # OpenAI Agents SDK adapter (Python 3.10+)
 pip install "lean-ctx-python[verify]"       # Ed25519 receipt signature verification (cryptography>=42.0)
 pip install "lean-ctx-python[all]"          # all optional integrations + verify
 pip install "lean-ctx-python[test]"         # pytest (development only)
@@ -283,6 +284,22 @@ nodes = parser.get_nodes_from_documents(documents)
 ```
 
 Compresses file-backed documents using the lean-ctx CLI `read` command with the chosen mode.
+
+### OpenAI Agents SDK
+
+Requires Python 3.10+ and `pip install "lean-ctx-python[openai-agents]"`.
+
+```python
+from agents import Agent, Runner
+from lean_ctx import LeanCTX
+
+agent = Agent(name="Assistant", instructions="Be concise and helpful.")
+task = "Summarize the deployment plan."
+result = Runner.run_sync(LeanCTX().wrap(agent), task)
+print(result.final_output)
+```
+
+The `wrap()` path is available for the OpenAI Agents SDK. Running a live model still requires a provider key; for OpenAI, set `OPENAI_API_KEY`.
 
 ## Error Handling
 
