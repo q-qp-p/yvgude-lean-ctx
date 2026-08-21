@@ -953,7 +953,10 @@ fn reformat_command_path_reports_changed_and_invalidates_single_file() {
 }
 
 #[test]
-#[cfg_attr(target_os = "windows", ignore = "path normalization difference on Windows")]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "path normalization difference on Windows"
+)]
 fn reformat_jetbrains_scope_invalidates_all_changed_paths() {
     // B2: the Jetbrains arm must keep every changed path, invalidate ALL of them,
     // and report the true count. This test observes the REAL cache effect rather
