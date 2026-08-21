@@ -758,6 +758,11 @@ export default async function (pi: ExtensionAPI) {
         const msg = (result.stderr || result.stdout || `lean-ctx grep failed: ${params.pattern}`).trim();
         throw new Error(msg);
       }
+      // #1499: exit code 1 with non-empty stderr means a real failure (e.g.
+      // "rg not recognized") — not a clean "no matches" from ripgrep.
+      if (result.code === 1 && result.stderr && result.stderr.trim().length > 0) {
+        throw new Error(result.stderr.trim());
+      }
       const MAX_OUTPUT_BYTES = 512 * 1024;
       let output = result.code === 1 ? "(no matches)" : result.stdout;
       if (output.length > MAX_OUTPUT_BYTES) {
