@@ -3,6 +3,7 @@ use crate::{
 };
 
 pub mod analytics;
+pub(crate) mod calibrate;
 mod evidence;
 pub(crate) mod evidence_cost;
 pub(crate) mod evidence_realworld;
@@ -485,6 +486,13 @@ pub fn run() {
                     super::cmd_benchmark_real(&rest);
                 } else {
                     super::cmd_benchmark(&rest);
+                }
+                return;
+            }
+            "calibrate" => {
+                let code = calibrate::cmd_calibrate(&rest);
+                if code != 0 {
+                    std::process::exit(code);
                 }
                 return;
             }

@@ -93,6 +93,7 @@ pub(crate) const KNOWN_COMMANDS: &[&str] = &[
     "compress",
     "wrapped",
     "benchmark",
+    "calibrate",
     "compact",
     "profile",
     "tools",
