@@ -258,13 +258,19 @@ pub mod token_calibration;
 // ---------------------------------------------------------------------------
 // Domain: Diagnostics & Quality
 // ---------------------------------------------------------------------------
+#[allow(dead_code)]
+pub(crate) mod agent_connector;
 pub mod anomaly;
 pub(crate) mod benchmark;
 pub mod benchmark_compare;
+#[allow(dead_code)]
+pub(crate) mod benchmark_spec;
 pub(crate) mod benchmark_study;
 /// Commercial-plane billing substrate (`billing-plane-v1`): plans, entitlements,
 /// and usage metering derived from the signed savings ledger. Never gates local.
 pub mod billing;
+#[allow(dead_code)]
+pub(crate) mod calibrator;
 pub mod code_health;
 pub(crate) mod cognitive_gate;
 pub mod cognitive_load;

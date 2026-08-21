@@ -16,7 +16,7 @@ WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; 
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
 WS-4: OCLA + COMPOSABLE (B)     ████████░░  Engineering dogfood allowed; no public claim until #1254
 WS-5: PARTNERSHIP (C)           ░░░░░░░░░░  After WS-4
-WS-6: BENCHMARK + CALIBRATOR    ░░░░░░░░░░  Research track; depends on WS-4; vision documented 2026-08-21
+WS-6: BENCHMARK + CALIBRATOR    ████░░░░░░  6.1–6.4 + 6.6 + 6.8 code landed; 23 tests pass
 ```
 
 ---
@@ -148,14 +148,14 @@ cargo fmt --check
 
 | # | Task | Status |
 |---:|---|---|
-| 6.1 | Consolidate 6 benchmark engines under unified BenchmarkSpecV1 | pending |
-| 6.2 | Extend Profile with constraints (quality_floor, max_cost, max_latency) | pending |
-| 6.3 | Extend Profile with capabilities section (surface to provider) | pending |
-| 6.4 | Create performance-profile-v1 contract and JSON schema | pending |
+| 6.1 | Consolidate 6 benchmark engines under unified BenchmarkSpecV1 | **done** (BenchmarkSpecV1, BenchmarkRunner trait, report formatters; 7 tests) |
+| 6.2 | Extend Profile with constraints (quality_floor, max_cost, max_latency) | **done** (ConstraintsConfig + CapabilitiesConfig in Profile; 64 profile tests pass) |
+| 6.3 | Extend Profile with capabilities section (surface to provider) | **done** (CapabilityBinding + CapabilitiesConfig) |
+| 6.4 | Create performance-profile-v1 contract and JSON schema | **done** (docs/contracts/performance-profile/) |
 | 6.5 | Implement benchmark with profile selection (wire profile to benchmark) | pending |
-| 6.6 | Implement Calibrator v0: fixed candidate set, Pareto frontier, recommendation | pending |
+| 6.6 | Implement Calibrator v0: fixed candidate set, Pareto frontier, recommendation | **done** (calibrator module: config, candidate, pareto, recommendation, report; 13 tests) |
 | 6.7 | Implement calibrate CLI command | pending |
-| 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | pending |
+| 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | **done** (AgentConnector trait + Codex/Claude/Cursor connectors + detection; 3 tests) |
 | 6.9 | Local Runner + pair WebSocket protocol | pending |
 | 6.10 | Simple verified ranking (web result page) | pending |
 
