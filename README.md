@@ -40,7 +40,6 @@ Local-first.
   <a href="https://crates.io/crates/lean-ctx"><img src="https://img.shields.io/crates/d/lean-ctx?color=%23e6522c" alt="Downloads"></a>
   <a href="https://www.npmjs.com/package/lean-ctx-bin"><img src="https://img.shields.io/npm/v/lean-ctx-bin?label=npm&color=%23cb3837" alt="npm"></a>
   <a href="https://aur.archlinux.org/packages/lean-ctx"><img src="https://img.shields.io/aur/version/lean-ctx?color=%231793d1" alt="AUR"></a>
-  <a href="https://pi.dev/packages/pi-lean-ctx"><img src="https://img.shields.io/badge/Pi.dev-pi--lean--ctx-6366f1?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJ3aGl0ZSI+PHRleHQgeD0iNCIgeT0iMTgiIGZvbnQtc2l6ZT0iMTYiIGZvbnQtZmFtaWx5PSJzZXJpZiI+z4A8L3RleHQ+PC9zdmc+" alt="Pi.dev"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
   <a href="https://discord.gg/pTHkG9Hew9"><img src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://x.com/leanctx"><img src="https://img.shields.io/badge/𝕏-Follow-000000?logo=x&logoColor=white" alt="X/Twitter"></a>
@@ -269,7 +268,6 @@ curl -fsSL https://leanctx.com/install.sh | sh      # universal (no Rust needed)
 brew tap yvgude/lean-ctx && brew install lean-ctx    # macOS / Linux
 npm install -g lean-ctx-bin                          # Node.js
 cargo install lean-ctx                               # Rust
-pi install npm:pi-lean-ctx                           # Pi Coding Agent
 
 # 2) One-command setup for your agent
 lean-ctx wrap cursor      # or: wrap claude / wrap codex / wrap vscode
@@ -706,7 +704,6 @@ tells you the one command to finish removing the binary:
 brew uninstall lean-ctx        # Homebrew
 cargo uninstall lean-ctx       # cargo install
 npm uninstall -g lean-ctx-bin  # npm
-pi uninstall npm:pi-lean-ctx   # Pi Coding Agent
 ```
 
 ## Star History
