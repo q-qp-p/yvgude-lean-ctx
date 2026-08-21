@@ -342,6 +342,14 @@ fn wait_with_timeout(
             Ok(None) => {
                 if std::time::Instant::now() > deadline {
                     let _ = child.kill();
+                    // GH #1504: drain partial output before returning.
+                    if let Ok(mut output) = child.wait_with_output() {
+                        output.stderr.extend_from_slice(
+                            format!("\n[lean-ctx] Execution timed out after {timeout_secs}s")
+                                .as_bytes(),
+                        );
+                        return Ok(output);
+                    }
                     return Err(format!("Execution timed out after {timeout_secs}s"));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));

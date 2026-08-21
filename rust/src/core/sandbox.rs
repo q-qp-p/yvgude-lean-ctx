@@ -544,10 +544,17 @@ fn wait_with_timeout(
             Ok(Some(_)) => return child.wait_with_output().map_err(|e| e.to_string()),
             Ok(None) => {
                 if std::time::Instant::now() > deadline {
-                    // GH #1347: kill the entire process group, not just the
-                    // direct child, so grandchildren (interactive shells etc.)
-                    // are cleaned up too.
                     kill_process_tree(&mut child);
+                    // GH #1504: after killing, drain whatever the child wrote
+                    // before the timeout so partial output is preserved instead
+                    // of being silently discarded.
+                    if let Ok(mut output) = child.wait_with_output() {
+                        output.stderr.extend_from_slice(
+                            format!("\n[lean-ctx] Execution timed out after {timeout_secs}s")
+                                .as_bytes(),
+                        );
+                        return Ok(output);
+                    }
                     return Err(format!("Execution timed out after {timeout_secs}s"));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -718,6 +725,35 @@ pub mod tests {
         }
         let result = execute("python", "import time; time.sleep(60)", Some(1));
         assert_ne!(result.exit_code, 0);
+        assert!(
+            result.stderr.contains("timed out"),
+            "stderr should mention timeout: {}",
+            result.stderr
+        );
+    }
+
+    /// GH #1504: partial stdout emitted before a timeout must be preserved.
+    #[test]
+    fn timeout_preserves_partial_output() {
+        if !python_available() {
+            return;
+        }
+        let result = execute(
+            "python",
+            "import sys; sys.stdout.write('PARTIAL_1504'); sys.stdout.flush(); import time; time.sleep(60)",
+            Some(2),
+        );
+        assert_ne!(result.exit_code, 0);
+        assert!(
+            result.stdout.contains("PARTIAL_1504"),
+            "partial stdout before timeout must be preserved, got: {:?}",
+            result.stdout
+        );
+        assert!(
+            result.stderr.contains("timed out"),
+            "stderr should mention timeout: {}",
+            result.stderr
+        );
     }
 
     #[test]

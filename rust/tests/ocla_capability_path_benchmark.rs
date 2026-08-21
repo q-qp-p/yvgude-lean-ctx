@@ -45,7 +45,13 @@ fn compression_provider_uses_the_full_registry_capability_path() {
     let content = benchmark_content();
     assert!((5_000..=6_500).contains(&content.len()));
 
-    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Config::find_project_root() resolves via git-toplevel to the repo root,
+    // not the Cargo workspace member dir. Write the temp file there so the
+    // ContentPort can resolve the `file:{basename}` ref.
+    let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace member has parent directory")
+        .to_path_buf();
     let path = project_root.join(format!(
         "ocla-capability-path-benchmark-{}.txt",
         std::process::id()

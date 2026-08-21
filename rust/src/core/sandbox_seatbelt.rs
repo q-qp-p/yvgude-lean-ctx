@@ -108,14 +108,19 @@ fn wait_with_timeout(
                     #[cfg(unix)]
                     {
                         let pid = child.id() as i32;
-                        // SAFETY: libc::kill with negative pid targets the process group
-                        // created by process_group(0). The pid is valid because we just
-                        // checked the child is still running via try_wait.
                         unsafe { libc::kill(-pid, libc::SIGKILL) };
                     }
                     #[cfg(not(unix))]
                     {
                         let _ = child.kill();
+                    }
+                    // GH #1504: drain partial output before returning.
+                    if let Ok(mut output) = child.wait_with_output() {
+                        output.stderr.extend_from_slice(
+                            format!("\n[lean-ctx] Execution timed out after {timeout_secs}s")
+                                .as_bytes(),
+                        );
+                        return Ok(output);
                     }
                     return Err(format!("Execution timed out after {timeout_secs}s"));
                 }
