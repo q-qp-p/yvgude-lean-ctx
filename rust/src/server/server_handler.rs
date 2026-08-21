@@ -495,6 +495,28 @@ impl ServerHandler for LeanCtxServer {
                 tools
             };
 
+            // Plan mode: restrict advertised tools to the curated read-only set.
+            let tools = {
+                use crate::tools::InteractionMode;
+                let mode = InteractionMode::from_u8(
+                    self.interaction_mode
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                );
+                if mode == InteractionMode::Plan {
+                    let plan_set =
+                        crate::core::editor_registry::plan_mode::plan_mode_tools();
+                    tools
+                        .into_iter()
+                        .filter(|t| {
+                            let n = t.name.as_ref();
+                            plan_set.contains(&n) || n == "ctx_call"
+                        })
+                        .collect()
+                } else {
+                    tools
+                }
+            };
+
             Ok(ListToolsResult {
                 tools,
                 ..Default::default()

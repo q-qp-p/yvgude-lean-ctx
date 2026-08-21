@@ -100,6 +100,13 @@ impl LeanCtxServer {
         elicitation::increment_call();
 
         let original_name = request.name.as_ref().to_string();
+        // Plan mode: extract interactionMode before arguments are consumed.
+        let meta_interaction_mode = request
+            .meta
+            .as_ref()
+            .and_then(|m| m.0.get("interactionMode"))
+            .and_then(|v| v.as_str())
+            .and_then(crate::tools::InteractionMode::from_meta_str);
         let (resolved_name, resolved_args) = if original_name == "ctx" {
             let sub = request
                 .arguments
@@ -180,6 +187,41 @@ impl LeanCtxServer {
             Some((n, a)) => (n.as_str(), a.as_ref()),
             None => (name, args),
         };
+
+        // Plan mode enforcement: update session state and notify on transitions.
+        if let Some(mode) = meta_interaction_mode {
+            let prev = self
+                .interaction_mode
+                .swap(mode as u8, std::sync::atomic::Ordering::Relaxed);
+            if prev != mode as u8 {
+                tracing::info!(
+                    ?mode,
+                    "interaction mode changed — sending tools/list_changed"
+                );
+                if let Some(peer) = self.peer.read().await.as_ref() {
+                    crate::server::notifications::send_tools_list_changed(peer).await;
+                }
+            }
+        }
+
+        // Plan mode guard: block non-readonly tools (including via ctx_call).
+        {
+            use crate::tools::InteractionMode;
+            let current = InteractionMode::from_u8(
+                self.interaction_mode
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            if current == InteractionMode::Plan {
+                let plan_tools = crate::core::editor_registry::plan_mode::plan_mode_tools();
+                if !plan_tools.contains(&guard_name) {
+                    let result = CallToolResult::error(vec![ContentBlock::text(format!(
+                        "[PLAN MODE] Tool '{guard_name}' is not available in plan/readonly mode.                          Switch to agent/edit mode to use this tool."
+                    ))]);
+                    finish_decision_loop(decision_context.as_ref(), args, &result);
+                    return Ok(result);
+                }
+            }
+        }
 
         if let Some(blocked) = Self::guard_egress(guard_name, guard_args) {
             finish_decision_loop(decision_context.as_ref(), args, &blocked);
@@ -466,5 +508,46 @@ mod tests {
         for tool_name in ["ctx_search", "ctx_tree", "ctx_glob"] {
             assert!(response_cache_key(tool_name, None, "/project").is_some());
         }
+    }
+
+    #[test]
+    fn plan_mode_blocks_destructive_tools() {
+        let plan_tools = crate::core::editor_registry::plan_mode::plan_mode_tools();
+        for tool in crate::tool_defs::DESTRUCTIVE_TOOL_NAMES {
+            assert!(
+                !plan_tools.contains(tool),
+                "destructive tool '{tool}' must not be in plan_mode_tools"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_mode_allows_read_only_tools() {
+        let plan_tools = crate::core::editor_registry::plan_mode::plan_mode_tools();
+        for tool in ["ctx_read", "ctx_search", "ctx_tree", "ctx_overview"] {
+            assert!(
+                plan_tools.contains(&tool),
+                "read-only tool '{tool}' must be in plan_mode_tools"
+            );
+        }
+    }
+
+    #[test]
+    fn interaction_mode_atomic_swap() {
+        use crate::tools::InteractionMode;
+        let mode = std::sync::atomic::AtomicU8::new(InteractionMode::Agent as u8);
+        assert_eq!(
+            InteractionMode::from_u8(mode.load(std::sync::atomic::Ordering::Relaxed)),
+            InteractionMode::Agent,
+        );
+        let prev = mode.swap(
+            InteractionMode::Plan as u8,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        assert_eq!(prev, InteractionMode::Agent as u8);
+        assert_eq!(
+            InteractionMode::from_u8(mode.load(std::sync::atomic::Ordering::Relaxed)),
+            InteractionMode::Plan,
+        );
     }
 }

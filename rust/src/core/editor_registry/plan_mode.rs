@@ -515,6 +515,24 @@ mod tests {
     }
 
     #[test]
+    fn plan_mode_excludes_all_destructive_tools() {
+        for tool in crate::tool_defs::DESTRUCTIVE_TOOL_NAMES {
+            assert!(
+                !plan_mode_tools().contains(tool),
+                "destructive tool '{tool}' leaked into plan_mode_tools"
+            );
+        }
+    }
+
+    #[test]
+    fn ctx_call_not_in_plan_mode_tools() {
+        assert!(
+            !plan_mode_tools().contains(&"ctx_call"),
+            "ctx_call must be handled separately in list_tools, not curated here"
+        );
+    }
+
+    #[test]
     fn check_status_detects_configured_claude() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");

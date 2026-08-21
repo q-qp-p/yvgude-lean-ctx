@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use crate::core::cache::SessionCache;
 use crate::core::session::SessionState;
 
-use super::server::{LeanCtxServer, SessionMode};
+use super::server::{InteractionMode, LeanCtxServer, SessionMode};
 use super::startup::detect_startup_context;
 
 const MAX_WARM_SESSIONS: usize = 8;
@@ -248,6 +248,9 @@ impl LeanCtxServer {
             _eviction_target: eviction_target,
             last_tools_config_hash: Arc::new(std::sync::atomic::AtomicU64::new(
                 crate::server::tools_config_watch::current_hash(),
+            )),
+            interaction_mode: Arc::new(std::sync::atomic::AtomicU8::new(
+                InteractionMode::Agent as u8,
             )),
         }
     }

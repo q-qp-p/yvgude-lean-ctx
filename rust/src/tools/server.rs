@@ -67,6 +67,35 @@ pub enum SessionMode {
     Shared,
 }
 
+/// IDE interaction mode communicated via `_meta.interactionMode` in MCP requests.
+/// Controls which tools are advertised and callable — Plan mode restricts to
+/// read-only tools (see `plan_mode_tools()`), Agent mode exposes the full set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum InteractionMode {
+    Agent = 0,
+    Plan = 1,
+}
+
+impl InteractionMode {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Plan,
+            _ => Self::Agent,
+        }
+    }
+
+    /// Parse the string value from `_meta.interactionMode`.
+    /// Accepts multiple conventions across IDEs (OpenCode, Cursor, Claude Code).
+    pub fn from_meta_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "plan" | "readonly" | "read-only" => Some(Self::Plan),
+            "agent" | "normal" | "edit" | "act" => Some(Self::Agent),
+            _ => None,
+        }
+    }
+}
+
 /// Central MCP server state: cache, session, metrics, and autonomy runtime.
 #[derive(Clone)]
 pub struct LeanCtxServer {
@@ -107,6 +136,58 @@ pub struct LeanCtxServer {
     pub(crate) _eviction_target: Arc<crate::core::eviction_orchestrator::EvictionOrchestrator>,
     pub(crate) progress_sender: crate::server::progress::SharedProgressSender,
     pub(crate) last_tools_config_hash: Arc<std::sync::atomic::AtomicU64>,
+    /// Current IDE interaction mode (Agent/Plan). Updated from `_meta.interactionMode`
+    /// on each tool call; controls tool visibility and destructive-tool guards.
+    pub(crate) interaction_mode: Arc<std::sync::atomic::AtomicU8>,
 }
 
 pub use crate::core::protocol::ToolCallRecord;
+
+#[cfg(test)]
+mod tests {
+    use super::InteractionMode;
+
+    #[test]
+    fn from_u8_round_trips() {
+        assert_eq!(InteractionMode::from_u8(0), InteractionMode::Agent);
+        assert_eq!(InteractionMode::from_u8(1), InteractionMode::Plan);
+        assert_eq!(InteractionMode::from_u8(42), InteractionMode::Agent);
+    }
+
+    #[test]
+    fn from_meta_str_plan_variants() {
+        for s in ["plan", "Plan", "PLAN", "readonly", "read-only"] {
+            assert_eq!(
+                InteractionMode::from_meta_str(s),
+                Some(InteractionMode::Plan),
+                "failed for: {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_meta_str_agent_variants() {
+        for s in ["agent", "Agent", "normal", "edit", "act"] {
+            assert_eq!(
+                InteractionMode::from_meta_str(s),
+                Some(InteractionMode::Agent),
+                "failed for: {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_meta_str_unknown_returns_none() {
+        assert_eq!(InteractionMode::from_meta_str("debug"), None);
+        assert_eq!(InteractionMode::from_meta_str(""), None);
+    }
+
+    #[test]
+    fn default_mode_is_agent() {
+        let mode = std::sync::atomic::AtomicU8::new(InteractionMode::Agent as u8);
+        assert_eq!(
+            InteractionMode::from_u8(mode.load(std::sync::atomic::Ordering::Relaxed)),
+            InteractionMode::Agent,
+        );
+    }
+}
