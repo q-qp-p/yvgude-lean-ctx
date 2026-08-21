@@ -24,8 +24,8 @@ flowchart TB
         BudgetGate["Budget / SLO Gate — exhaustion blocking, throttling"]
         DegradationEval["Degradation Policy — evaluate_v1_for_tool"]
         ContextGate["Context Gate — pre: bounce/intent/graph/knowledge; post: ledger, overlays, eviction, elicitation"]
-        HybridDispatch["Hybrid Dispatch — Context Server (84 tools)"]
-        ToolRegistry["ToolRegistry — 84 trait-based tools (McpTool)"]
+        HybridDispatch["Hybrid Dispatch — Context Server (83 tools)"]
+        ToolRegistry["ToolRegistry — 83 trait-based tools (McpTool)"]
         DispatchRegistry["Registry dispatch — dispatch/mod.rs (majority of tools)"]
         PostPipeline["Post-Pipeline — Context IR, tokens, archive, density, translation, verify, enrich, auto-response, evidence, sandbox routing"]
     end
@@ -220,7 +220,7 @@ flowchart TB
     DegradationEval --> ContextGate
     ContextGate --> HybridDispatch
 
-    HybridDispatch -->|"registry (84 tools)"| ToolRegistry
+    HybridDispatch -->|"registry (83 tools)"| ToolRegistry
     HybridDispatch -->|"legacy (6 tools)"| DispatchRegistry
 
     ToolRegistry --> PostPipeline
@@ -409,7 +409,7 @@ flowchart TD
     SLOBlockMsg["Return: SLO BLOCK"]
     SLOThrottle["Sleep throttle_ms"]
     ShellBudget["BudgetTracker::record_shell if shell tool"]
-    DispatchCall["dispatch_inner — ToolRegistry lookup (84 tools)"]
+    DispatchCall["dispatch_inner — ToolRegistry lookup (83 tools)"]
     TokenCount["count_tokens + BudgetTracker::record_tokens"]
     IRRecord["Context IR record — lineage, tokens, duration, compression ratio"]
     AnomalyRecord["anomaly::record_metric"]
@@ -596,8 +596,8 @@ flowchart LR
 |:---|:---|
 | `server/mod.rs` | `LeanCtxServer` — MCP server state, `call_tool` pipeline (dispatch + post-processing + Context IR recording) |
 | `server/tool_trait.rs` | `McpTool` trait, `ToolOutput`, `ToolContext` — interface for self-contained tools |
-| `server/registry.rs` | `ToolRegistry` — HashMap-based tool lookup, `build_registry()` registers all 84 trait-based tools |
-| `server/dispatch/mod.rs` | Registry dispatch — `dispatch_inner` resolves every tool through the `ToolRegistry` (84 tools); `ctx_call` routes meta-invocations back through it |
+| `server/registry.rs` | `ToolRegistry` — HashMap-based tool lookup, `build_registry()` registers all 83 trait-based tools |
+| `server/dispatch/mod.rs` | Registry dispatch — `dispatch_inner` resolves every tool through the `ToolRegistry` (83 tools); `ctx_call` routes meta-invocations back through it |
 | `server/context_gate.rs` | Context Gate — post-dispatch for ctx_read: ledger recording, eviction/elicitation hints, pressure tracking |
 | `server/resources.rs` | MCP Resources — 5 URI-addressable subscribe-capable resources (`lean-ctx://context/*`) |
 | `server/prompts.rs` | MCP Prompts — 5 slash commands for context manipulation |

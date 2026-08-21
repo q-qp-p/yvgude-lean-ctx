@@ -40,7 +40,6 @@ const ALLOWLIST: &[&str] = &[
     "core/providers/config_provider/discovery.rs",
     "cli/wrapped_publish.rs",
     "cli/dispatch/analytics/gain.rs",
-    "tui/event_reader.rs",
     "dashboard/routes/agents.rs",
     "tools/ctx_provider.rs",
 ];
