@@ -108,6 +108,8 @@ fn wait_with_timeout(
                     #[cfg(unix)]
                     {
                         let pid = child.id() as i32;
+                        // SAFETY: libc::kill with negative pid targets the process group
+                        // created by process_group(0).
                         unsafe { libc::kill(-pid, libc::SIGKILL) };
                     }
                     #[cfg(not(unix))]
