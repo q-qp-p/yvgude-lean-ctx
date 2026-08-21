@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "capability_id": "capability://example/word-count-optimizer",
+  "provider": "example",
+  "kind": "tool",
+  "version": "1.0.0",
+  "surfaces": ["cli"],
+  "support_matrix": {
+    "cli": {
+      "supported": true,
+      "input_schema_ref": "schema://example/word-count-optimizer/input/v1",
+      "output_schema_ref": "schema://example/word-count-optimizer/output/v1"
+    }
+  },
+  "local": true,
+  "remote": false,
+  "reversibility": "reversible",
+  "determinism": "deterministic",
+  "data_movement": "local_only",
+  "supported_classifications": ["Public", "Internal", "Confidential", "Restricted"],
+  "measurement_support": {
+    "latency": true,
+    "tokens": false,
+    "quality": false
+  },
+  "input_schema_ref": "schema://example/word-count-optimizer/input/v1",
+  "output_schema_ref": "schema://example/word-count-optimizer/output/v1",
+  "conformance_version": 1,
+  "execution": "local_process",
+  "entrypoint": "word-count-optimizer",
+  "schemas": {
+    "schema://example/word-count-optimizer/input/v1": {
+      "type": "string"
+    },
+    "schema://example/word-count-optimizer/output/v1": {
+      "type": "object",
+      "required": ["word_count", "char_count", "line_count"],
+      "properties": {
+        "word_count": {"type": "integer", "minimum": 0},
+        "char_count": {"type": "integer", "minimum": 0},
+        "line_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}
