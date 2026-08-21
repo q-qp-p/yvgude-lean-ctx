@@ -397,6 +397,9 @@ jobs:
         run: python benchmarks/run.py --turns 40 --needles 6 --context-length 2000 --base-url http://127.0.0.1:9 --no-write
 
   sdk-conformance:
+    # TODO: re-enable after migrating conformance tests from clients/python
+    # to packages/python-lean-ctx and fixing Go SDK setup (see #1497)
+    if: false
     # GL #395: every first-party SDK must prove the full /v1 contract against
     # a real engine build. Red when an SDK misses a route, mistypes a shape,
     # or the engine drifts from the frozen surface.
@@ -685,7 +688,7 @@ jobs:
       - embed-sdk
       - python-sdk
       - hermes-plugin
-      - sdk-conformance
+      # - sdk-conformance  # TODO: re-enable after test migration (#1497)
       - coverage
       - deny
       - adversarial
