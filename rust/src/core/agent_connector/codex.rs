@@ -1,5 +1,7 @@
 use super::timeout::run_with_timeout;
-use super::traits::{AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage};
+use super::traits::{
+    AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage, apply_profile_environment,
+};
 use std::process::Command;
 use std::time::Instant;
 
@@ -36,6 +38,7 @@ impl AgentConnector for CodexConnector {
         if let Some(model) = &request.model {
             cmd.arg("-m").arg(model);
         }
+        apply_profile_environment(&mut cmd, request);
         let timed_output = run_with_timeout(&mut cmd, request.timeout_ms)?;
         let output = timed_output.output;
         let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();

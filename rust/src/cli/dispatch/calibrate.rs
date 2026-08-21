@@ -8,6 +8,11 @@ use crate::core::local_runner::runner::{LocalRunner, RunConfig};
 use crate::core::profiles;
 use std::path::PathBuf;
 
+struct LiveCandidate {
+    candidate: CandidateProfile,
+    profile_name: String,
+}
+
 pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print_help();
@@ -57,7 +62,29 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
     };
 
     let candidates = crate::core::calibrator::candidate::generate_candidates(&config);
-    eprintln!("  Generated {} candidates", candidates.len());
+    let live_candidates = if live {
+        match build_live_candidates(args, max_candidates) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 2;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if live {
+        eprintln!(
+            "  Comparing profiles: {}",
+            live_candidates
+                .iter()
+                .map(|candidate| candidate.profile_name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    } else {
+        eprintln!("  Generated {} simulated candidates", candidates.len());
+    }
     eprintln!();
 
     let results = if live {
@@ -85,8 +112,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
 
         eprintln!("  Using agent:    {}", connector.name());
         eprintln!();
-        match run_live_benchmark_results(&candidates, profile_name, &config, working_dir, connector)
-        {
+        match run_live_benchmark_results(&live_candidates, &config, working_dir, connector) {
             Ok(results) => results,
             Err(error) => {
                 eprintln!("error: live calibration failed: {error}");
@@ -171,8 +197,7 @@ fn simulate_benchmark_results(
 }
 
 fn run_live_benchmark_results(
-    candidates: &[CandidateProfile],
-    profile_name: &str,
+    candidates: &[LiveCandidate],
     calibration_config: &CalibrationConfig,
     working_dir: PathBuf,
     connector: Box<dyn AgentConnector>,
@@ -181,7 +206,10 @@ fn run_live_benchmark_results(
     let runner = LocalRunner::new(
         RunConfig {
             agent_name,
-            profile_name: profile_name.to_owned(),
+            profile_name: candidates
+                .first()
+                .map(|candidate| candidate.profile_name.clone())
+                .unwrap_or_default(),
             suite_name: Some("coding-v1".into()),
             timeout_override_ms: None,
             working_dir,
@@ -198,21 +226,92 @@ fn run_live_benchmark_results(
                 "Running candidate {}/{}: {}...",
                 index + 1,
                 candidates.len(),
-                candidate.label
+                candidate.candidate.label
             );
-            let mut spec =
-                profile_bridge::create_spec(profile_name, profile_bridge::default_coding_suite())?;
-            spec.id = format!("{}-{}", spec.id, candidate.id);
-            spec.name = format!("{} ({})", spec.name, candidate.label);
+            let mut spec = profile_bridge::create_spec(
+                &candidate.profile_name,
+                profile_bridge::default_coding_suite(),
+            )?;
+            spec.id = format!("{}-{}", spec.id, candidate.candidate.id);
+            spec.name = format!("{} ({})", spec.name, candidate.candidate.label);
             spec.configuration.quality_floor = calibration_config.quality_floor;
 
-            let benchmark = runner.run(&spec)?;
+            let benchmark = runner.run_with_profile(&spec, &candidate.profile_name)?;
             Ok(CalibratedResult::from_benchmark_result(
-                candidate.clone(),
+                candidate.candidate.clone(),
                 &benchmark,
             ))
         })
         .collect()
+}
+
+fn build_live_candidates(
+    args: &[String],
+    max_candidates: usize,
+) -> Result<Vec<LiveCandidate>, String> {
+    let Some(raw_profiles) = parse_flag_str(args, "--profiles") else {
+        return Err(
+            "live calibration requires --profiles PROFILE_A,PROFILE_B (at least two existing profiles)"
+                .into(),
+        );
+    };
+    let profile_names = parse_profile_names(&raw_profiles)?;
+    if profile_names.len() < 2 {
+        return Err("live calibration requires at least two distinct profiles".into());
+    }
+    if profile_names.len() > max_candidates {
+        return Err(format!(
+            "{} profiles exceed --max-candidates {max_candidates}",
+            profile_names.len()
+        ));
+    }
+
+    profile_names
+        .into_iter()
+        .map(|profile_name| {
+            let profile = profiles::load_profile(&profile_name)
+                .ok_or_else(|| format!("profile '{profile_name}' not found"))?;
+            let capability_variant = profile
+                .capabilities
+                .compression
+                .as_ref()
+                .and_then(|binding| binding.provider.clone())
+                .unwrap_or_else(|| "leanctx".into());
+            let candidate = CandidateProfile {
+                id: format!("profile-{profile_name}"),
+                label: profile_name.clone(),
+                budget_tokens: profile
+                    .budget
+                    .max_context_tokens_effective()
+                    .min(profile.constraints.max_context_tokens_effective()),
+                compression: profile.compression.crp_mode_effective().to_owned(),
+                // Reuse threshold is not a named Profile field; live measurements
+                // come from the selected profile rather than this display record.
+                reuse_threshold: 0.0,
+                capability_variant,
+            };
+            Ok(LiveCandidate {
+                candidate,
+                profile_name,
+            })
+        })
+        .collect()
+}
+
+fn parse_profile_names(raw_profiles: &str) -> Result<Vec<String>, String> {
+    let mut profile_names = Vec::new();
+    for profile_name in raw_profiles.split(',').map(str::trim) {
+        if profile_name.is_empty() {
+            return Err("--profiles cannot contain an empty profile name".into());
+        }
+        if profile_names.iter().any(|known| known == profile_name) {
+            return Err(format!(
+                "--profiles contains duplicate profile '{profile_name}'"
+            ));
+        }
+        profile_names.push(profile_name.to_owned());
+    }
+    Ok(profile_names)
 }
 
 fn parse_flag_f64(args: &[String], flag: &str) -> Option<f64> {
@@ -272,7 +371,8 @@ ARGS:
 OPTIONS:
     --quality-floor N   Minimum quality score 0.0-1.0 (default: 0.95)
     --max-candidates N  Maximum candidate profiles to test (default: 12)
-    --live              Run each candidate against a detected local agent
+    --live              Compare named profiles against a detected local agent
+    --profiles A,B      Existing profiles to compare with --live (at least two)
     --agent NAME        Agent to use with --live (default: first detected)
     --working-dir PATH  Agent working directory with --live (default: current directory)
     --export-spec       Print BenchmarkSpec JSON to stdout
@@ -281,10 +381,11 @@ OPTIONS:
 EXAMPLES:
     lean-ctx calibrate
     lean-ctx calibrate coder --quality-floor 0.90
-    lean-ctx calibrate coder --live --agent codex --working-dir .
+    lean-ctx calibrate --live --profiles coder,exploration --agent codex --working-dir .
     lean-ctx calibrate monorepo --max-candidates 20 --export-spec > spec.json
 
 NOTE:
+    Live calibration applies each selected profile through LEAN_CTX_PROFILE.
     Without --live, calibration uses simulated benchmark results."
     );
 }
@@ -309,8 +410,10 @@ mod tests {
     fn live_calibration_runs_mock_connector_for_each_candidate() {
         let config = CalibrationConfig::default();
         let results = run_live_benchmark_results(
-            &[candidate()],
-            "coder",
+            &[LiveCandidate {
+                candidate: candidate(),
+                profile_name: "coder".into(),
+            }],
             &config,
             std::env::current_dir().expect("test working directory"),
             Box::new(MockConnector::new(true)),
@@ -321,5 +424,23 @@ mod tests {
         assert_eq!(results[0].candidate.id, "candidate-001");
         assert_eq!(results[0].pass_rate, 1.0);
         assert!(results[0].quality_floor_met);
+    }
+
+    #[test]
+    fn live_profiles_require_distinct_named_profiles() {
+        assert!(parse_profile_names("coder,exploration").is_ok());
+        assert!(parse_profile_names("coder,coder").is_err());
+        assert!(parse_profile_names("coder,").is_err());
+    }
+
+    #[test]
+    fn live_candidates_resolve_each_selected_profile() {
+        let args = vec!["--profiles".into(), "coder,exploration".into()];
+        let candidates = build_live_candidates(&args, 12).expect("built-in profiles resolve");
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].profile_name, "coder");
+        assert_eq!(candidates[1].profile_name, "exploration");
+        assert_eq!(candidates[0].candidate.label, "coder");
     }
 }

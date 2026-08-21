@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AgentInfo {
@@ -18,7 +19,23 @@ pub(crate) struct TaskRequest {
     pub timeout_ms: u64,
     pub model: Option<String>,
     pub max_turns: Option<u32>,
+    /// Profile selected for this isolated agent invocation.
+    ///
+    /// Connectors pass this through as `LEAN_CTX_PROFILE` so the child agent
+    /// and every LeanCTX tool it launches resolve the same profile.
+    #[serde(default)]
+    pub profile_name: Option<String>,
     pub profile_hash: Option<String>,
+}
+
+pub(crate) fn apply_profile_environment(command: &mut Command, request: &TaskRequest) {
+    if let Some(profile_name) = request
+        .profile_name
+        .as_deref()
+        .filter(|profile_name| !profile_name.trim().is_empty())
+    {
+        command.env("LEAN_CTX_PROFILE", profile_name);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,11 +79,38 @@ mod tests {
             timeout_ms: 60_000,
             model: Some("gpt-4".into()),
             max_turns: Some(10),
+            profile_name: Some("benchmark-candidate".into()),
             profile_hash: Some("abc".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let restored: TaskRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, "t1");
+        assert_eq!(
+            restored.profile_name.as_deref(),
+            Some("benchmark-candidate")
+        );
+    }
+
+    #[test]
+    fn profile_environment_is_set_only_for_named_profiles() {
+        let mut command = Command::new("echo");
+        let request = TaskRequest {
+            id: "t1".into(),
+            prompt: "Explore codebase".into(),
+            working_dir: PathBuf::from("/tmp/test"),
+            timeout_ms: 60_000,
+            model: None,
+            max_turns: None,
+            profile_name: Some("benchmark-candidate".into()),
+            profile_hash: None,
+        };
+
+        apply_profile_environment(&mut command, &request);
+        let profile = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("LEAN_CTX_PROFILE"))
+            .and_then(|(_, value)| value);
+        assert_eq!(profile, Some(std::ffi::OsStr::new("benchmark-candidate")));
     }
 
     #[test]

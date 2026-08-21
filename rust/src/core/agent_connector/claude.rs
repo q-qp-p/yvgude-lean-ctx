@@ -1,5 +1,7 @@
 use super::timeout::run_with_timeout;
-use super::traits::{AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage};
+use super::traits::{
+    AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage, apply_profile_environment,
+};
 use std::process::Command;
 use std::time::Instant;
 
@@ -37,6 +39,7 @@ impl AgentConnector for ClaudeConnector {
         if let Some(turns) = request.max_turns {
             cmd.arg("--max-turns").arg(turns.to_string());
         }
+        apply_profile_environment(&mut cmd, request);
         let timed_output = run_with_timeout(&mut cmd, request.timeout_ms)?;
         let output = timed_output.output;
         let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();

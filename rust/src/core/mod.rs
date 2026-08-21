@@ -58,7 +58,6 @@ pub(crate) mod rules_sections;
 pub(crate) mod rules_validation;
 pub(crate) mod runtime_flags;
 pub mod shared_context;
-pub mod sidecar_transport;
 pub mod solution_auto_capture;
 pub mod solution_commercial;
 pub mod solution_rules;
@@ -260,8 +259,6 @@ pub mod anomaly;
 pub(crate) mod benchmark;
 pub mod benchmark_compare;
 #[allow(dead_code)]
-pub(crate) mod benchmark_receipt;
-#[allow(dead_code)]
 pub(crate) mod benchmark_spec;
 pub(crate) mod benchmark_study;
 /// Commercial-plane billing substrate (`billing-plane-v1`): plans, entitlements,
@@ -424,7 +421,6 @@ pub(crate) mod levenshtein;
 pub(crate) mod limits;
 pub mod llm_enhance;
 pub(crate) mod llm_feedback;
-pub mod locomo;
 pub(crate) mod logging;
 pub mod mcp_manifest;
 pub mod mdl_mode;

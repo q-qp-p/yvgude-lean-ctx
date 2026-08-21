@@ -118,12 +118,32 @@ impl LocalRunner {
     }
 
     pub(crate) fn run(&self, spec: &BenchmarkSpecV1) -> Result<BenchmarkResult> {
-        self.run_with_progress(spec, |_| {})
+        self.run_with_profile(spec, &self.config.profile_name)
+    }
+
+    pub(crate) fn run_with_profile(
+        &self,
+        spec: &BenchmarkSpecV1,
+        profile_name: &str,
+    ) -> Result<BenchmarkResult> {
+        self.run_with_profile_progress(spec, profile_name, |_| {})
     }
 
     pub(crate) fn run_with_progress<F>(
         &self,
         spec: &BenchmarkSpecV1,
+        on_progress: F,
+    ) -> Result<BenchmarkResult>
+    where
+        F: Fn(RunProgress),
+    {
+        self.run_with_profile_progress(spec, &self.config.profile_name, on_progress)
+    }
+
+    fn run_with_profile_progress<F>(
+        &self,
+        spec: &BenchmarkSpecV1,
+        profile_name: &str,
         on_progress: F,
     ) -> Result<BenchmarkResult>
     where
@@ -140,7 +160,7 @@ impl LocalRunner {
                     total: total * self.config.repeats as usize,
                     task_id: task.id.clone(),
                 });
-                let request = self.task_request(spec, task);
+                let request = self.task_request_for_profile(spec, task, profile_name);
                 let result = self.connector.execute(&request)?;
                 let passed = result.success;
                 let outcome = outcome_from_task_result(task, &result);
@@ -173,6 +193,15 @@ impl LocalRunner {
     }
 
     fn task_request(&self, spec: &BenchmarkSpecV1, task: &BenchmarkTask) -> TaskRequest {
+        self.task_request_for_profile(spec, task, &self.config.profile_name)
+    }
+
+    fn task_request_for_profile(
+        &self,
+        spec: &BenchmarkSpecV1,
+        task: &BenchmarkTask,
+        profile_name: &str,
+    ) -> TaskRequest {
         TaskRequest {
             id: task.id.clone(),
             prompt: task_to_prompt(task),
@@ -184,6 +213,7 @@ impl LocalRunner {
                 .unwrap_or(DEFAULT_TIMEOUT_MS),
             model: spec.configuration.model.clone(),
             max_turns: None,
+            profile_name: Some(profile_name.to_owned()),
             profile_hash: spec.configuration.profile_hash.clone(),
         }
     }
@@ -311,6 +341,15 @@ mod tests {
             runner.task_request(&spec, &task_without_timeout).timeout_ms,
             DEFAULT_TIMEOUT_MS
         );
+    }
+
+    #[test]
+    fn task_request_uses_explicit_run_profile() {
+        let runner = LocalRunner::new(RunConfig::default(), Box::new(MockConnector::new(true)));
+        let spec = test_spec();
+        let request = runner.task_request_for_profile(&spec, &spec.suite.tasks[0], "benchmark-a");
+
+        assert_eq!(request.profile_name.as_deref(), Some("benchmark-a"));
     }
 
     #[test]
