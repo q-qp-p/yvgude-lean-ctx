@@ -40,8 +40,6 @@
 //! - [`compress`] — compress shell/tool output with the proxy's pattern engine.
 //! - [`tokens`] — token counting for budgeting.
 //! - [`hash`] — fast content hashing (BLAKE3).
-//! - [`addon`] — author + statically audit addons in-process (scaffold, audit,
-//!   capability/malware gate) — the building blocks for tools that ship addons.
 //!
 //! Every function here delegates to a real engine implementation — no stubs.
 
@@ -49,7 +47,6 @@
 // Token/percent math operates on small counts; f64 precision loss is irrelevant.
 #![allow(clippy::cast_precision_loss)]
 
-pub mod addon;
 pub mod compress;
 pub mod engine;
 pub mod error;

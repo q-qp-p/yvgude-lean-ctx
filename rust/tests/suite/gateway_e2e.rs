@@ -200,7 +200,6 @@ fn fixture_transport() -> ResolvedTransport {
         args: vec![fixture.to_string()],
         env: BTreeMap::new(),
         binary_sha256: String::new(),
-        capabilities: None,
     }
 }
 

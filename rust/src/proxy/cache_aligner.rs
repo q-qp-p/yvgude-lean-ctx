@@ -14,7 +14,7 @@
 //!    relocated values. The cacheable prefix then stays byte-stable turn-to-turn
 //!    and finally caches; only the small, reprocessed tail changes. Follows the
 //!    same stable-first ordering as
-//!    `crate::core::neural::cache_alignment::CacheAlignedOutput`.
+//!    the cache-alignment output type.
 //!
 //! ## Determinism (#498) & cache-safety (#448)
 //! Both stages are pure functions of the text: matches come from the

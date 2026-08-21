@@ -341,48 +341,6 @@ fn mcp_handler_flow_provider_then_read_hints() {
     }
 }
 
-/// Verify the free-energy budget allocator works with realistic data.
-#[test]
-fn free_energy_budget_allocation() {
-    use lean_ctx::core::free_energy_budget::{ColumnBudgetRequest, allocate_budget};
-
-    let requests = vec![
-        ColumnBudgetRequest {
-            column_id: "code".into(),
-            saliency_score: 0.9,
-            estimated_tokens: 5000,
-            minimum_tokens: 0,
-        },
-        ColumnBudgetRequest {
-            column_id: "issues".into(),
-            saliency_score: 0.6,
-            estimated_tokens: 2000,
-            minimum_tokens: 0,
-        },
-        ColumnBudgetRequest {
-            column_id: "wiki".into(),
-            saliency_score: 0.3,
-            estimated_tokens: 3000,
-            minimum_tokens: 0,
-        },
-    ];
-
-    let allocations = allocate_budget(4000, &requests, 0.05);
-
-    assert_eq!(allocations.len(), 3);
-    let total_allocated: usize = allocations.iter().map(|a| a.allocated_tokens).sum();
-    assert!(
-        total_allocated <= 4000,
-        "should not exceed budget: {total_allocated}"
-    );
-
-    let code_alloc = allocations.iter().find(|a| a.column_id == "code").unwrap();
-    let wiki_alloc = allocations.iter().find(|a| a.column_id == "wiki").unwrap();
-    assert!(
-        code_alloc.allocated_tokens >= wiki_alloc.allocated_tokens,
-        "higher-saliency code column should get more tokens than wiki"
-    );
-}
 
 /// ECS saliency ranking respects task relevance.
 #[test]

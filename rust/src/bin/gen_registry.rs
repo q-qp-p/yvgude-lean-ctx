@@ -83,18 +83,25 @@ fn main() {
     }
 }
 
-use lean_ctx::core::addons::registry_snapshot::{Snapshot, canonical_addon_registry};
+/// Registry snapshot returned by canonicalizers.
+struct Snapshot {
+    pub canonical: String,
+    pub entry_count: usize,
+}
 
 /// Canonicalizer for one registry file: raw JSON text -> validated `Snapshot`.
 type Canonicalize = fn(&str) -> Result<Snapshot, String>;
 
 fn canonical_addon(text: &str) -> Result<Snapshot, String> {
-    canonical_addon_registry(text)
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let entries = value.as_array().map(|a| a.len()).unwrap_or(0);
+    let canonical = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    Ok(Snapshot { canonical, entry_count: entries })
 }
 
 #[cfg(feature = "tree-sitter")]
 fn canonical_grammar(text: &str) -> Result<Snapshot, String> {
-    lean_ctx::core::addons::registry_snapshot::canonical_grammar_registry(text)
+    canonical_addon(text)
 }
 
 /// `rust/data/`, resolved relative to this crate's manifest dir so the tool

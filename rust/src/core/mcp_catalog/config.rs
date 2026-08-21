@@ -93,7 +93,7 @@ pub struct GatewayServer {
     /// spawn point ([`crate::core::mcp_catalog::client`]) verifies the resolved
     /// binary's hash and refuses to launch a swapped executable. Empty =
     /// unpinned (legacy behaviour). Part of the wiring, so it is covered by the
-    /// install-time integrity hash ([`crate::core::addons::integrity`]).
+    /// install-time integrity hash.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub binary_sha256: String,
 

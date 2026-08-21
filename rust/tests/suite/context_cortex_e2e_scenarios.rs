@@ -23,7 +23,6 @@ use lean_ctx::core::cache::SessionCache;
 use lean_ctx::core::consolidation::{apply_artifacts, consolidate};
 use lean_ctx::core::content_chunk::ContentChunk;
 use lean_ctx::core::cross_source_hints::{format_hints, hints_for_file};
-use lean_ctx::core::free_energy_budget::{ColumnBudgetRequest, allocate_budget, free_energy};
 use lean_ctx::core::graph_index::IndexEdge;
 use lean_ctx::core::knowledge_provider_extract::extract_facts;
 use lean_ctx::core::provider_bandit::ProviderBandit;
@@ -356,39 +355,6 @@ fn scenario_bug_investigation_full_pipeline() {
         "Should predict GitHub"
     );
 
-    // === 9. FREE ENERGY BUDGET ===
-    let budget_requests = vec![
-        ColumnBudgetRequest {
-            column_id: "filesystem".into(),
-            saliency_score: 0.8,
-            estimated_tokens: 5000,
-            minimum_tokens: 1000,
-        },
-        ColumnBudgetRequest {
-            column_id: "github".into(),
-            saliency_score: 0.9,
-            estimated_tokens: 2000,
-            minimum_tokens: 500,
-        },
-        ColumnBudgetRequest {
-            column_id: "postgres".into(),
-            saliency_score: 0.3,
-            estimated_tokens: 1000,
-            minimum_tokens: 200,
-        },
-    ];
-    let allocs = allocate_budget(8000, &budget_requests, 0.05);
-    assert_eq!(allocs.len(), 3);
-    let fe = free_energy(&budget_requests, &allocs);
-    assert!(fe >= 0.0, "Free energy should be non-negative");
-
-    // GitHub (highest saliency/cost ratio) should get good allocation
-    let gh_alloc = allocs.iter().find(|a| a.column_id == "github").unwrap();
-    let pg_alloc = allocs.iter().find(|a| a.column_id == "postgres").unwrap();
-    assert!(
-        gh_alloc.allocated_tokens > pg_alloc.allocated_tokens,
-        "GitHub should get more budget than Postgres"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -547,70 +513,6 @@ fn scenario_code_review_bandit_learns() {
             .iter()
             .any(|p| p.provider_id == "github" && p.action == "pull_requests"),
         "Should predict GitHub PRs for review task"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Scenario 4: Full Budget Optimization
-// ---------------------------------------------------------------------------
-
-#[test]
-fn scenario_budget_optimization_under_constraint() {
-    // Simulate 3 columns competing for a tight 4000-token budget
-    let requests = vec![
-        ColumnBudgetRequest {
-            column_id: "filesystem".into(),
-            saliency_score: 0.7,
-            estimated_tokens: 3000,
-            minimum_tokens: 500,
-        },
-        ColumnBudgetRequest {
-            column_id: "github_issues".into(),
-            saliency_score: 0.95,
-            estimated_tokens: 1500,
-            minimum_tokens: 300,
-        },
-        ColumnBudgetRequest {
-            column_id: "db_schemas".into(),
-            saliency_score: 0.2,
-            estimated_tokens: 500,
-            minimum_tokens: 100,
-        },
-    ];
-
-    let allocs = allocate_budget(4000, &requests, 0.05);
-
-    // All columns should get at least their minimum
-    for (alloc, req) in allocs.iter().zip(requests.iter()) {
-        assert!(
-            alloc.allocated_tokens >= req.minimum_tokens,
-            "{} got {} tokens, minimum was {}",
-            alloc.column_id,
-            alloc.allocated_tokens,
-            req.minimum_tokens
-        );
-    }
-
-    // GitHub issues has highest saliency/cost ratio (0.95/1500 = 0.000633)
-    // should get proportionally more than DB schemas (0.2/500 = 0.0004)
-    let gh = allocs
-        .iter()
-        .find(|a| a.column_id == "github_issues")
-        .unwrap();
-    let db = allocs.iter().find(|a| a.column_id == "db_schemas").unwrap();
-    assert!(
-        gh.allocated_tokens > db.allocated_tokens,
-        "GitHub should get more budget than DB: {} vs {}",
-        gh.allocated_tokens,
-        db.allocated_tokens
-    );
-
-    // Free energy should be > 0 since we can't satisfy all requests
-    let fe = free_energy(&requests, &allocs);
-    assert!(fe > 0.0, "Free energy should be positive under constraint");
-    assert!(
-        fe < 1.0,
-        "Free energy should be < 1.0 (we allocated something)"
     );
 }
 

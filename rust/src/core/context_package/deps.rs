@@ -46,7 +46,7 @@ pub(crate) struct ResolvedDep {
 /// Takes the dependency slice + root name directly (rather than a
 /// `PackageManifest`) so every install source can resolve the same way — a
 /// local `lean-ctx-addon.toml` carries its `[[dependencies]]` in
-/// [`crate::core::addons::manifest::AddonManifest`], with no hosted
+/// the addon manifest, with no hosted
 /// `PackageManifest` to key off (GH #727, Finding A).
 #[allow(dead_code)]
 pub(crate) fn resolve_dependencies(

@@ -1,6 +1,6 @@
 //! Lua grammar addon (#690): exports the Lua grammar's raw `LanguageFn`
 //! pointer under a name lean-ctx controls (`GRAMMAR_SYMBOL` in
-//! `core::addons::grammar_manifest`), sidestepping whether the underlying
+//! the grammar manifest), sidestepping whether the underlying
 //! `tree_sitter_lua` C symbol (compiled from vendored C via a dependency's
 //! `build.rs`) would survive Windows' DLL export-table generation. This
 //! function is a first-class item in this cdylib crate, so rustc exports it
