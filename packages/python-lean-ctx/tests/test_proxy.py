@@ -60,6 +60,10 @@ class _CompressHandler(BaseHTTPRequestHandler):
         )
 
     def do_GET(self):  # noqa: N802 (BaseHTTPRequestHandler API)
+        if self.path == "/health":
+            self.server.last_health_headers = dict(self.headers)
+            self._text(200, "ok")
+            return
         if not self.path.startswith("/v1/references/"):
             self.send_error(404)
             return
@@ -94,6 +98,7 @@ def server():
     httpd = HTTPServer(("127.0.0.1", 0), _CompressHandler)
     httpd.require_token = False
     httpd.last_request = None
+    httpd.last_health_headers = None
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
@@ -147,6 +152,24 @@ def test_connection_error_when_daemon_down():
             base_url="http://127.0.0.1:1",
             token="t",
         )
+
+
+def test_health_probes_runtime_endpoint(server):
+    _, base_url = server
+    assert ProxyClient(base_url=base_url, timeout=1).health() is True
+
+
+def test_health_omits_all_auth_material(server):
+    httpd, base_url = server
+    client = ProxyClient(base_url=base_url, token=EXPECTED_TOKEN, timeout=1)
+
+    assert client.health() is True
+    sensitive = {"authorization", "proxy-authorization", "cookie", "x-api-key"}
+    assert not sensitive.intersection(name.lower() for name in httpd.last_health_headers)
+
+
+def test_health_returns_false_when_runtime_is_unreachable():
+    assert ProxyClient(base_url="http://127.0.0.1:1", timeout=1).health() is False
 
 
 def test_non_list_messages_rejected():

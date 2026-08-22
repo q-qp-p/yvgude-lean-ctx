@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from lean_ctx import ContextKit, LeanCTX, LeanCTXConfig
@@ -11,8 +13,45 @@ def test_construction_is_local_and_mapping_normalizes(v1_proxy):
     assert state.requests == []
 
 
-def test_wrapper_defaults_to_the_local_proxy():
-    assert LeanCTX()._proxy.base_url == "http://localhost:8077"
+def test_wrapper_defaults_to_the_discovered_runtime(monkeypatch, tmp_path):
+    for key in (
+        "LEAN_CTX_PROXY_URL",
+        "LEAN_CTX_PROXY_PORT",
+        "LEAN_CTX_DATA_DIR",
+        "LEAN_CTX_CONFIG_DIR",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+
+    assert LeanCTX()._proxy.base_url == "http://127.0.0.1:4444"
+
+
+def test_wrapper_uses_env_config_default_precedence(monkeypatch, tmp_path):
+    for key in (
+        "LEAN_CTX_PROXY_URL",
+        "LEAN_CTX_PROXY_PORT",
+        "LEAN_CTX_DATA_DIR",
+        "LEAN_CTX_CONFIG_DIR",
+        "XDG_DATA_HOME",
+        "XDG_CONFIG_HOME",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LEAN_CTX_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(os, "getuid", lambda: 1000, raising=False)
+    (tmp_path / "config.toml").write_text("proxy_port = 4500\n", encoding="utf-8")
+
+    assert LeanCTX()._proxy.base_url == "http://127.0.0.1:4500"
+
+    monkeypatch.setenv("LEAN_CTX_PROXY_PORT", "5005")
+    assert LeanCTX()._proxy.base_url == "http://127.0.0.1:5005"
+
+    monkeypatch.delenv("LEAN_CTX_PROXY_PORT")
+    (tmp_path / "config.toml").unlink()
+    assert LeanCTX()._proxy.base_url == "http://127.0.0.1:4444"
 
 
 def test_invalid_config_rejected_locally():

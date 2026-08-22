@@ -11,11 +11,11 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent.parent
@@ -58,8 +58,16 @@ def cmd_doctor() -> int:
     checks.append(("kit", (REPO / "kits" / "code-review" / "kit.toml").is_file(), "kits/code-review", True))
     key = bool(os.environ.get("OPENAI_API_KEY", "").strip())
     checks.append(("OPENAI_API_KEY", key, "set" if key else "missing — required only for run", False))
-    proxy = _proxy_reachable()
-    checks.append(("lean-ctx proxy", proxy, "loopback" if proxy else "not reachable", False))
+    try:
+        proxy, endpoint = _proxy_probe()
+        proxy_detail = _proxy_detail(endpoint, proxy)
+    except ImportError:
+        proxy = False
+        proxy_detail = "unavailable — lean_ctx import failed"
+    except ValueError:
+        proxy = False
+        proxy_detail = "unavailable — invalid proxy endpoint"
+    checks.append(("lean-ctx proxy", proxy, proxy_detail, False))
     sdk_path = REPO / "packages" / "python-lean-ctx"
     try:
         import lean_ctx  # noqa: F401
@@ -299,16 +307,33 @@ def _latest(runs: list[Path], arm: str) -> Path | None:
 
 def _proxy_reachable() -> bool:
     try:
-        result = subprocess.run(
-            ["lean-ctx", "status"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        return _proxy_probe()[0]
+    except (ImportError, ValueError):
         return False
-    return result.returncode == 0
+
+
+def _proxy_probe() -> tuple[bool, str]:
+    from lean_ctx import ProxyClient
+    from lean_ctx.errors import LeanCtxError
+
+    client = ProxyClient(timeout=5)
+    endpoint = client.base_url
+    try:
+        return client.health(), endpoint
+    except (LeanCtxError, ValueError):
+        return False, endpoint
+
+
+def _proxy_detail(endpoint: str, reachable: bool) -> str:
+    if not reachable:
+        return f"not reachable ({endpoint})"
+    try:
+        host = urlsplit(endpoint).hostname
+    except ValueError:
+        host = None
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return f"loopback ({endpoint})"
+    return endpoint
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ description = "Preview SDK for LeanCTX — context selection, shaping, reuse, re
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
-dependencies = []
+dependencies = ["tomli>=2.0; python_version < '3.11'"]
 keywords = ["llm", "context", "compression", "evidence", "ai", "mcp"]
 authors = [{name = "Yves Gugger", email = "yves@thinkery.ai"}]
 classifiers = [

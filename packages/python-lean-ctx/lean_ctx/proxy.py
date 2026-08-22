@@ -255,6 +255,14 @@ class ProxyClient:
         request = self._request(f"/v1/references/{quoted}", method="GET")
         return self._send(request).body.decode("utf-8")
 
+    def health(self) -> bool:
+        """Return whether the resolved Runtime responds successfully to ``/health``."""
+        try:
+            response = self._send(self._request("/health", method="GET", include_auth=False))
+        except LeanCtxError:
+            return False
+        return 200 <= response.status < 300
+
     def _request(
         self,
         path: str,
@@ -262,11 +270,12 @@ class ProxyClient:
         method: str,
         data: Optional[bytes] = None,
         headers: Optional[Mapping[str, str]] = None,
+        include_auth: bool = True,
     ) -> urllib.request.Request:
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, method=method)
         if data is not None:
             request.add_header("Content-Type", "application/json")
-        if self.token:
+        if include_auth and self.token:
             request.add_header("Authorization", f"Bearer {self.token}")
         if headers:
             for name, value in headers.items():
