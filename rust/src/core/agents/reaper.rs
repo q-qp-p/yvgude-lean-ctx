@@ -19,6 +19,13 @@ fn load_config() -> crate::core::config::AgentsConfig {
 /// Spawn the background reaper thread. Safe to call multiple times -- only the
 /// first call starts the thread; subsequent calls are no-ops.
 pub(crate) fn spawn_reaper() {
+    // A unit-test binary must be able to terminate deterministically. Its
+    // reaper would otherwise sleep for ten minutes in a background thread and
+    // retain shared registry state after the test that created it has ended.
+    // Reaping behavior itself is covered through `reap_cycle` below.
+    if cfg!(test) {
+        return;
+    }
     let flag = RUNNING.get_or_init(|| AtomicBool::new(false));
     if flag.swap(true, Ordering::SeqCst) {
         return;

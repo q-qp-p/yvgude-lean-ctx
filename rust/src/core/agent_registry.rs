@@ -103,6 +103,11 @@ fn with_registry<T>(
     f: impl FnOnce(&mut BTreeMap<String, AgentRecord>) -> Result<T, String>,
 ) -> Result<T, String> {
     use fs2::FileExt;
+    use std::io::ErrorKind;
+    use std::time::{Duration, Instant};
+
+    const LOCK_TIMEOUT: Duration = Duration::from_millis(750);
+    const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
     let path = registry_path()?;
     let lock_path = path.with_extension("lock");
     let lock = std::fs::OpenOptions::new()
@@ -111,8 +116,22 @@ fn with_registry<T>(
         .write(true)
         .open(&lock_path)
         .map_err(|e| format!("registry lock: {e}"))?;
-    lock.lock_exclusive()
-        .map_err(|e| format!("registry lock: {e}"))?;
+    let deadline = Instant::now() + LOCK_TIMEOUT;
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                return Err(format!(
+                    "registry lock timed out after {}ms; another agent operation is still active",
+                    LOCK_TIMEOUT.as_millis()
+                ));
+            }
+            Err(error) => return Err(format!("registry lock: {error}")),
+        }
+    }
 
     let mut registry = load_registry(&path);
     let result = f(&mut registry);

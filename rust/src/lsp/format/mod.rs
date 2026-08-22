@@ -65,14 +65,34 @@ pub fn run_command_formatter(
     abs_path: &str,
     project_root: &str,
 ) -> Result<(), String> {
+    run_command_formatter_with_timeout(
+        template,
+        abs_path,
+        project_root,
+        std::time::Duration::from_secs(30),
+    )
+}
+
+fn run_command_formatter_with_timeout(
+    template: &str,
+    abs_path: &str,
+    project_root: &str,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
     let argv = build_argv(template, abs_path);
     let (bin, rest) = argv
         .split_first()
         .ok_or_else(|| "INVALID_TARGET: empty formatter template".to_string())?;
-    let output = std::process::Command::new(bin)
+    let mut child = Command::new(bin)
         .args(rest)
         .current_dir(project_root)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 format!("formatter '{bin}' not found in PATH")
@@ -80,12 +100,64 @@ pub fn run_command_formatter(
                 format!("failed to run '{bin}': {e}")
             }
         })?;
-    if !output.status.success() {
-        let code = output
-            .status
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("failed to capture formatter '{bin}' stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("failed to capture formatter '{bin}' stderr"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stdout).read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = std::io::BufReader::new(stderr).read_to_end(&mut bytes);
+        bytes
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|e| format!("failed to wait for '{bin}': {e}"))?
+        {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                timed_out = true;
+                child
+                    .kill()
+                    .map_err(|e| format!("failed to stop timed-out formatter '{bin}': {e}"))?;
+                break child
+                    .wait()
+                    .map_err(|e| format!("failed to reap timed-out formatter '{bin}': {e}"))?;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    };
+    let _stdout = stdout_reader
+        .join()
+        .map_err(|_| format!("formatter '{bin}' stdout reader panicked"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| format!("formatter '{bin}' stderr reader panicked"))?;
+
+    if timed_out {
+        return Err(format!(
+            "formatter '{bin}' timed out after {}s",
+            timeout.as_secs()
+        ));
+    }
+    if !status.success() {
+        let code = status
             .code()
             .map_or_else(|| "signal".to_string(), |c| c.to_string());
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(&stderr);
         return Err(format!("{bin} exited {code}: {}", stderr.trim()));
     }
     Ok(())
@@ -217,6 +289,34 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("exited"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_formatter_times_out_and_reaps_a_stalled_child() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().unwrap();
+        let formatter = dir.path().join("stall-formatter");
+        std::fs::write(&formatter, "#!/bin/sh\nsleep 30\n").unwrap();
+        let mut permissions = std::fs::metadata(&formatter).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&formatter, permissions).unwrap();
+        let source = dir.path().join("a.rs");
+        std::fs::write(&source, "fn x() {}\n").unwrap();
+
+        let started = Instant::now();
+        let error = run_command_formatter_with_timeout(
+            &format!("{} {{file}}", formatter.display()),
+            source.to_str().unwrap(),
+            dir.path().to_str().unwrap(),
+            Duration::from_millis(25),
+        )
+        .expect_err("stalled formatter must fail closed");
+
+        assert!(error.contains("timed out"), "unexpected error: {error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

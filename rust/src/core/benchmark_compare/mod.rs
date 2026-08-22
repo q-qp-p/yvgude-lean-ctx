@@ -52,7 +52,7 @@ mod tests {
         assert!(out_path.exists());
 
         let content = std::fs::read_to_string(&out_path).unwrap();
-        assert!(content.contains("Head-to-Head"));
+        assert!(content.contains("Research-only representation comparison"));
         assert!(report.metrics.project_benchmark.files_measured > 0);
     }
 }

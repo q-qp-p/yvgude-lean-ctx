@@ -1,8 +1,10 @@
 use super::{
     AgentRecord, AgentStatus, check, decommission, get, heartbeat, list, list_active, register,
-    resume, spiffe_id, suspend, suspend_agents_for_owner,
+    registry_path, resume, spiffe_id, suspend, suspend_agents_for_owner, with_registry,
 };
+use fs2::FileExt;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 fn isolated() -> crate::core::data_dir::IsolatedDataDir {
     crate::core::data_dir::isolated_data_dir()
@@ -161,4 +163,27 @@ fn list_active_excludes_historical_identities() {
         vec!["active"]
     );
     assert_eq!(list().len(), 3);
+}
+
+#[test]
+fn registry_lock_contention_times_out_instead_of_blocking_indefinitely() {
+    let _iso = isolated();
+    let path = registry_path().expect("registry path");
+    let lock_path = path.with_extension("lock");
+    let held_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)
+        .expect("lock file");
+    held_lock.lock_exclusive().expect("hold lock");
+
+    let started = Instant::now();
+    let error = with_registry(|_| Ok(())).expect_err("contention must fail closed");
+
+    assert!(error.contains("timed out"), "unexpected error: {error}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "bounded lock exceeded two seconds"
+    );
 }
