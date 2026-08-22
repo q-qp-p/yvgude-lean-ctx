@@ -15,7 +15,7 @@ impl McpTool for CtxPerfTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_perf",
-            "Current-session proxy compression performance, agent budget, and triage profile.",
+            "Current-session local context metrics, agent budget, and triage profile. These observations are not a matched-workload benchmark.",
             json!({
                 "type": "object",
                 "properties": {},
@@ -30,18 +30,12 @@ impl McpTool for CtxPerfTool {
         ctx: &ToolContext,
     ) -> Result<ToolOutput, ErrorData> {
         let metrics = crate::proxy::value_gate_proxy::session_metrics();
-        let leaderboard = crate::proxy::leaderboard::compute_current_rank();
-        let leaderboard_message = crate::proxy::leaderboard::format_rank_message(&leaderboard);
         let result = json!({
             "request_count": metrics.request_count,
             "tokens_saved_total": metrics.total_tokens_pruned,
             "avg_compression_ratio": crate::proxy::value_gate_proxy::compression_ratio(),
             "turn_budget_remaining": turn_budget_remaining(ctx),
             "triage_profile": triage_profile(ctx),
-            "leaderboard": {
-                "entry": leaderboard,
-                "message": leaderboard_message,
-            },
         });
 
         Ok(ToolOutput::simple(result.to_string()))

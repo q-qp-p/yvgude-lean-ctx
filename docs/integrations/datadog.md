@@ -1,4 +1,8 @@
-# LeanCTX + Datadog — Agentic FinOps in 30 Minutes
+# Historical LeanCTX + Datadog integration proposal
+
+> **Status: historical research — not an available integration, FinOps product,
+> or savings claim.** LeanCTX is **The Context SDK for AI Agents**; current scope
+> and status are governed by [`docs/internal/README.md`](../internal/README.md).
 
 See your agents' token economy next to the rest of your AI spend: what they
 *would* have consumed without lean-ctx, what they actually consumed, and the

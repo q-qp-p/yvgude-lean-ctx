@@ -1,11 +1,16 @@
 # Persona Spec — v1
 
-Status: **stable (v1)** · Module: `core::persona` · EPIC 12.15
+> **Status: Research contract — not a supported public product surface.** This
+> document records experimental non-coding persona work. LeanCTX currently
+> positions its local Runtime around existing coding agents; personas do not
+> announce a general workflow platform. Current product scope and status are
+> governed by [`docs/internal/README.md`](../internal/README.md).
 
-A **persona** is a declarative bundle that shapes the whole context surface for a
-domain — not just coding. It lets a developer point lean-ctx at any workflow
-(research, lead-gen, support, data analysis, …) by selecting or shipping a
-persona, instead of forking behavior.
+Historical implementation status: stable · Module: `core::persona` · EPIC 12.15
+
+A **persona** is an experimental declarative bundle that can shape a context
+surface for a domain. The non-coding examples below are design material, not a
+supported product promise.
 
 ## What a persona controls
 

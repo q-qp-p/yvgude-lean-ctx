@@ -1,7 +1,7 @@
 use crate::core::config::Config;
 use crate::kits;
 
-/// Manages task-specific Context Kits.
+/// Manages the available local TOML/`.ctxpkg` kit substrate.
 pub(crate) fn cmd_kit(args: &[String]) {
     match args.first().map(String::as_str) {
         None | Some("list" | "ls") => list_kits(),
@@ -29,11 +29,11 @@ pub(crate) fn cmd_kit(args: &[String]) {
 }
 
 fn list_kits() {
-    println!("Context Kits:");
+    println!("Available local kit substrate:");
     for name in kits::list() {
         println!("  {name}");
     }
-    println!("\nLoad one with: lean-ctx kit load <name>");
+    println!("\nLoad one locally with: lean-ctx kit load <name>");
 }
 
 fn load_kit(name: &str) {
@@ -48,7 +48,7 @@ fn load_kit(name: &str) {
             std::process::exit(1);
         });
 
-    println!("Loaded Context Kit: {canonical_name}");
+    println!("Loaded local kit substrate: {canonical_name}");
     println!("  Source: {}", loaded.source);
     println!("  Priority: {}", loaded.kit.priority.description);
     println!(
@@ -71,7 +71,10 @@ fn show_kit(name: &str) {
         std::process::exit(1);
     });
     let kit = loaded.kit;
-    println!("Context Kit: {} ({})", kit.kit.name, kit.kit.version);
+    println!(
+        "Local kit substrate: {} ({})",
+        kit.kit.name, kit.kit.version
+    );
     println!("Source: {}", loaded.source);
     println!("{}", kit.kit.description);
     println!("\nRead plan:");
@@ -90,11 +93,11 @@ fn unload_kit() {
         eprintln!("kit: could not clear active kit: {error}");
         std::process::exit(1);
     });
-    println!("Unloaded active Context Kit.");
+    println!("Unloaded active local kit substrate.");
 }
 
 fn print_help() {
     eprintln!(
-        "Usage: lean-ctx kit <list|load|show|unload> [name]\n\n  lean-ctx kit load code-review"
+        "Usage: lean-ctx kit <list|load|show|unload> [name]\n\nAvailable local TOML/.ctxpkg substrate; first-class Context Kit semantics are Research.\n  lean-ctx kit load code-review"
     );
 }

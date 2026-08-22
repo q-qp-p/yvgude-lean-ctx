@@ -97,7 +97,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "bool",
             serde_json::json!(cfg.buddy_enabled),
-            "Enable the buddy system for multi-agent coordination",
+            "Enable the experimental local buddy helper. It does not enable a public multi-agent product or MCP surface.",
         ),
     );
     root.insert(
@@ -137,7 +137,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             key(
                 "string[]",
                 serde_json::json!(cfg.default_tool_categories),
-                "Tool categories active by default (core, arch, debug, memory, metrics, session). Override via LCTX_DEFAULT_CATEGORIES",
+                "Tool categories active by default. `core` is the default; `session` enables experimental local collaboration tools only when explicitly listed. Override via LCTX_DEFAULT_CATEGORIES",
             ),
         );
     root.insert(
@@ -385,7 +385,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "string?",
             serde_json::json!(cfg.team_url),
-            "Team server base URL for the opt-in savings roll-up (push/pull)",
+            "Research-only organization roll-up URL. Inactive in the public local Runtime.",
         ),
     );
     root.insert(
@@ -393,7 +393,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "string?",
             serde_json::json!(cfg.team_token),
-            "Bearer token for the team server (push needs a member token; pull/auto-push needs the configured team token)",
+            "Research-only organization roll-up credential. Inactive in the public local Runtime.",
         ),
     );
     root.insert(
@@ -401,7 +401,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "bool",
             serde_json::json!(cfg.team_auto_push),
-            "Opt-in: daemon periodically pushes your signed savings batch to team_url (off by default; requires team_url + team_token)",
+            "Research-only organization roll-up switch. Off by default and inactive in the public local Runtime.",
         ),
     );
     root.insert(

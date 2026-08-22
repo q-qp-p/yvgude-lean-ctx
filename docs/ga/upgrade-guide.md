@@ -1,5 +1,10 @@
 # lean-ctx Upgrade Guide
 
+> **Status: local Runtime upgrade reference.** It does not authorize website,
+> Cloud, or managed-service changes. Confirm the installed Runtime with
+> `lean-ctx doctor`; canonical scope is in
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 Use this guide to update an installed lean-ctx release, verify its integration

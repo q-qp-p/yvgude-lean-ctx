@@ -1,7 +1,14 @@
-# lean-ctx-sdk — in-process embedding façade (Rust)
+# lean-ctx-sdk — in-process embedding research (Rust)
 
-Embed the lean-ctx context engine **in-process** behind a small, stable Rust
-API. This is the substrate for power-developer tools (e.g. Lean-md) that want to
+> **Status: Preview substrate — not a supported stable public Rust SDK.** Embed
+> work is Preview; external addon authoring is Research. The only declared
+> public SDK reference path is the **Preview** Python v1/OpenAI Agents wrapper.
+> Current product scope and status are governed by
+> [`docs/internal/README.md`](../../../docs/internal/README.md).
+
+This crate records an experimental way to embed the lean-ctx context engine
+**in-process** behind a small Rust API. It is a substrate for local developer
+experiments (e.g. Lean-md) that want to
 *call* lean-ctx directly — a shared session cache, compressed reads, code search
 and symbol lookup — instead of going through the MCP server or CLI.
 
@@ -11,7 +18,7 @@ and symbol lookup — instead of going through the MCP server or CLI.
 > different job. See [`docs/guides/compress-sdk.md`](../../../docs/guides/compress-sdk.md)
 > for the client SDKs.
 
-## The headline: a shared-cache `Engine`
+## Experimental `Engine`
 
 ```rust
 use lean_ctx_sdk::{Engine, ReadMode};
@@ -24,11 +31,10 @@ assert!(again.saved_tokens >= first.saved_tokens);
 # Ok::<(), lean_ctx_sdk::Error>(())
 ```
 
-Because the `Engine` owns a **shared** `SessionCache`, a read followed by a
-re-read of an unchanged file collapses to a token-cheap delta — the property
-that makes lean-ctx worth embedding. The engine dispatches the *real* registered
-tools (`ctx_read`, `ctx_search`, `ctx_symbol`, …), exactly as the MCP server
-does.
+Because the `Engine` owns a **shared** `SessionCache`, an unchanged re-read can
+be represented as a smaller delta. This is an implementation observation, not a
+guaranteed token or task outcome. The engine dispatches registered local tools
+(`ctx_read`, `ctx_search`, `ctx_symbol`, …) during experimentation.
 
 ## Safe by default
 
@@ -45,7 +51,7 @@ does.
 It also drops the engine's `jemalloc` feature, so embedding the SDK never forces
 a `#[global_allocator]` onto your binary.
 
-## Surface (v1)
+## Experimental surface
 
 | Group | API | Backed by |
 |-------|-----|-----------|
@@ -58,11 +64,10 @@ a `#[global_allocator]` onto your binary.
 | Hashing | `hash::blake3_hex/str` | engine hash |
 | Tokens | `tokens::count` | engine tokenizer |
 | Compression | `compress::shell_output(…)` | shell pattern engine |
-| Addon authoring | `addon::scaffold/audit/slugify` | addon scaffold + audit gate |
+| Addon authoring | `addon::scaffold/audit/slugify` | Research-only addon experiments |
 
-See [`docs/rfcs/sdk-embedding-v1.md`](../../../docs/rfcs/sdk-embedding-v1.md) for
-the full surface map and roadmap, and
-[`docs/guides/embed-sdk.md`](../../../docs/guides/embed-sdk.md) for the guide.
+The source and linked RFCs are implementation material, not a public support or
+roadmap commitment.
 
 ## Runtime note
 

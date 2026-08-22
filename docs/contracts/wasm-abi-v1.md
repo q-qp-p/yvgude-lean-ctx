@@ -1,6 +1,11 @@
 # Contract: WASM Extension ABI v1 (`wasm-abi-v1`)
 
-Status: stable · Feature: `wasm` (off by default) · Source: `rust/src/core/wasm_ext.rs`
+> **Status: Research contract — external extension authoring is not a supported
+> public LeanCTX surface.** This document records an opt-in local implementation
+> and proposed ABI. Current product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
+Historical implementation status: stable · Feature: `wasm` (off by default) · Source: `rust/src/core/wasm_ext.rs`
 
 A sandboxed, language-independent way to contribute extensions —
 **compressors** (EPIC 12.8) and **context providers** (EPIC 12.10) — without

@@ -1,4 +1,4 @@
-//! LeanCTX Enterprise Suite CLI commands.
+//! Development-only organization integration commands.
 
 use std::io::{self, Write};
 use std::time::Duration;
@@ -15,6 +15,14 @@ struct InitArgs {
 }
 
 pub(crate) fn cmd_enterprise(args: &[String]) {
+    if std::env::var("LEAN_CTX_EXPERIMENTAL_ENTERPRISE").as_deref() != Ok("1") {
+        eprintln!(
+            "Organization operations are Research and unavailable in the public LeanCTX Runtime. \\
+             Set LEAN_CTX_EXPERIMENTAL_ENTERPRISE=1 only for a local development evaluation."
+        );
+        return;
+    }
+
     let result = match args.first().map(String::as_str) {
         Some("init") => run_init(&args[1..]),
         Some("status") => run_status(),
@@ -33,7 +41,7 @@ pub(crate) fn cmd_enterprise(args: &[String]) {
 
 fn print_help() {
     println!(
-        "Usage: lean-ctx enterprise <COMMAND>\n\nCommands:\n  init    Configure an Enterprise Suite connection\n  status  Show the current connection status\n\nOptions:\n  -h, --help  Print this help"
+        "Usage: LEAN_CTX_EXPERIMENTAL_ENTERPRISE=1 lean-ctx enterprise <COMMAND>\n\nDevelopment-only commands:\n  init    Configure a local evaluation connection\n  status  Show the local evaluation connection status\n\nThis is Research, not a public LeanCTX Enterprise service.\n\nOptions:\n  -h, --help  Print this help"
     );
 }
 
@@ -41,12 +49,12 @@ fn run_status() -> Result<(), String> {
     let config = crate::core::config::Config::load_global();
     let enterprise = &config.enterprise;
     if enterprise.disabled {
-        println!("Enterprise: disabled");
+        println!("Organization integration (development-only): disabled");
         return Ok(());
     }
 
     let Some(gateway_url) = enterprise.effective_gateway_url_owned() else {
-        println!("Enterprise: not configured");
+        println!("Organization integration (development-only): not configured");
         return Ok(());
     };
     let token_status = if enterprise.effective_token().is_some() {
@@ -54,7 +62,7 @@ fn run_status() -> Result<(), String> {
     } else {
         "missing"
     };
-    println!("Enterprise: configured");
+    println!("Organization integration (development-only): configured");
     println!("  Gateway URL: {gateway_url}");
     println!("  Instance ID: {}", enterprise.effective_instance_id());
     println!("  Instance token: {token_status}");
@@ -178,7 +186,10 @@ fn enterprise_section_exists() -> Result<bool, String> {
 }
 
 fn confirm_overwrite() -> Result<bool, String> {
-    let answer = prompt("Enterprise configuration exists. Overwrite? [y/N]", None)?;
+    let answer = prompt(
+        "Development-only organization configuration exists. Overwrite? [y/N]",
+        None,
+    )?;
     Ok(matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
@@ -206,11 +217,11 @@ fn print_success(url: &str) {
     let active_theme = theme::load_theme(&crate::core::config::Config::load_global().theme);
     let green = active_theme.success.fg();
     let reset = theme::rst();
-    println!("{green}✓ LeanCTX Enterprise connected to {url}{reset}");
-    println!("Features enabled:");
-    println!("  • Enterprise gateway routing");
+    println!("{green}✓ Development-only organization integration connected to {url}{reset}");
+    println!("Local evaluation capabilities enabled:");
+    println!("  • Gateway routing");
     println!("  • Authenticated runtime identity");
-    println!("  • Savings attribution and organization policy");
+    println!("  • Local policy evaluation");
 }
 
 fn print_error(error: &str) {

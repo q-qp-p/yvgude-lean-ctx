@@ -6,7 +6,7 @@
 /// obvious next step (`onboard`), not the full 150-line command reference.
 pub(super) fn quickstart_text() -> String {
     format!(
-        "lean-ctx {version} — Context Runtime for AI Agents
+        "lean-ctx {version} — Context SDK for AI Agents
 
 With no arguments, lean-ctx speaks the MCP protocol on stdin/stdout — that is
 for your AI editor, not for interactive use, so it is waiting silently. You
@@ -32,7 +32,7 @@ pub(super) fn print_quickstart() {
 /// from the README / feature catalog.
 pub(super) fn capability_banner() -> String {
     format!(
-        "95+ compression patterns | {} MCP tools | 10 read modes | Context Continuity Protocol",
+        "{} MCP tools | local context selection, shaping, reuse, recovery, and measurement",
         crate::server::registry::tool_count()
     )
 }
@@ -47,7 +47,7 @@ pub(super) fn print_help_concise() {
 
 pub(super) fn concise_help_text() -> String {
     format!(
-        "lean-ctx {version} — Context Runtime for AI Agents
+        "lean-ctx {version} — Context SDK for AI Agents
 
 {banner}
 
@@ -57,7 +57,7 @@ GETTING STARTED:
     lean-ctx onboard               Connect all AI tools at once (zero questions)
     lean-ctx setup                 Guided setup with full control over every option
     lean-ctx doctor                Check that everything is wired up correctly
-    lean-ctx gain                  See how many tokens you have saved
+    lean-ctx gain                  Inspect local context-usage estimates (not a benchmark)
 
 EVERYDAY COMMANDS:
     lean-ctx -c \"command\"          Run a shell command with compressed output
@@ -82,7 +82,7 @@ SAFETY (env vars):
 
 MORE:
     lean-ctx help all              Full command reference (every subcommand)
-    lean-ctx cheatsheet            Workflow cheat sheet for AI agents
+    lean-ctx cheatsheet            Context cheat sheet for AI agents
 
 WEBSITE: https://leanctx.com
 GITHUB:  https://github.com/yvgude/lean-ctx
@@ -94,7 +94,7 @@ GITHUB:  https://github.com/yvgude/lean-ctx
 
 pub(super) fn print_help() {
     println!(
-        "lean-ctx {version} — Context Runtime for AI Agents
+        "lean-ctx {version} — Context SDK for AI Agents
 
 {banner}
 
@@ -104,7 +104,7 @@ GETTING STARTED:
     lean-ctx onboard               Connect all AI tools at once (zero questions)
     lean-ctx setup                 Guided setup with full control over every option
     lean-ctx doctor                Check that everything is wired up correctly
-    lean-ctx gain                  See how many tokens you have saved
+    lean-ctx gain                  Inspect local context-usage estimates (not a benchmark)
     (everything below is reference — run `lean-ctx help` for the short version)
 
 USAGE:
@@ -121,21 +121,21 @@ USAGE:
     lean-ctx shell                 Interactive shell with compression
 
 COMMANDS:
-    gain                           Visual dashboard (colors, bars, sparklines, USD)
+    gain                           Local context-usage report (observed or estimated; not a benchmark)
     gain --live                    Live mode: auto-refreshes every 1s in-place
     gain --deep                    Full breakdown (cost + tasks + agents + heatmap combined)
-    gain --graph                   30-day savings chart
+    gain --graph                   30-day local context-usage chart
     gain --daily                   Bordered day-by-day table with USD
     gain --score                   Gain score breakdown (4 sub-scores + trend)
     gain --cost                    Agent cost attribution report (estimated)
     spend                          Measured provider bill (real model + billed tokens)
     spend --json                   Machine-readable measured spend
-    output-savings [--json]        Output-token reduction (A/B measured w/ 95% CI, else estimated)
+    output-savings [--json]        Local output-token estimate; evaluation claims require a declared quality gate
     value-report [--format F]      Task value report (table, markdown, or json)
     gain --tasks                   Task breakdown by category
     gain --agents                  Top agents by tool spend
-    gain --by-tool [--json]        Per-tool savings breakdown (calls, tokens, USD, %)
-    gain --heatmap                 Top files by tokens saved
+    gain --by-tool [--json]        Per-tool local context breakdown (calls, tokens, USD, %)
+    gain --heatmap                 Top files by observed token reduction
     gain --json                    Raw JSON export of all stats
     gain --pipeline                Pipeline compression stats
     gain --opportunity             Find missed savings in shell history (replaces discover/ghost)
@@ -149,20 +149,20 @@ COMMANDS:
     gain --share [=<path>]         Self-hostable Wrapped page (HTML; alias: --page)
     gain --copy                    Copy a ready-to-post share line to the clipboard
     gain --svg|--share --open      Also open the written card/page in your browser
-    gain --publish [--name=<n>]    Publish an opt-in permalink (leanctx.com/w/<id>)
-    gain --publish --leaderboard   Also list the card on the public leaderboard (opt-in)
-    gain --link [CODE]             Combine machines into one leaderboard entry (pairing code, no account)
-    gain --unpublish[=<id>]        Remove a published permalink (most recent if no id)
-    config set gain.auto_publish true  Auto-(re)publish your recap on each `gain` (opt-in, throttled, off by default)
-    savings [--period day|week|month|all] [--format table|json|markdown] Savings report (default: week/table)
-    learning [status|export|import]  Adaptive-learning state: inspect, share with team, merge
+    gain --publish [--name=<n>]    Development-only local export (hosted publication is Research)
+    gain --publish --leaderboard   Unavailable: public rankings are Research
+    gain --link [CODE]             Development-only local pairing experiment
+    gain --unpublish[=<id>]        Remove a local development export
+    config set gain.auto_publish true  Development-only local export setting (off by default)
+    savings [--period day|week|month|all] [--format table|json|markdown] Local representation-change report; not comparable proof
+    learning [status|export|import]  Local adaptive-learning state: inspect, export, import
          token-report [--json]          Token + memory report (project + session + CEP)
     pack --pr                      PR Context Pack (changed files, impact, tests, artifacts)
     snapshot create|list|show|verify|restore|publish|import  Context Time Machine: git-anchored, signed snapshots; replay, resume + share
     index <status|build|build-full|watch> [--force]  Codebase index utilities
-    embeddings <status|provision>  Managed ONNX Runtime for semantic embeddings (official CPU build, sha256-pinned)
+    embeddings <status|provision>  Local ONNX Runtime for semantic embeddings (official CPU build, sha256-pinned)
     cep                            CEP report (compression metrics, cache, modes, trends)
-    verify-cache [path] [--json]   Prove the session cache: re-read collapses to a ~13-token stub
+    verify-cache [path] [--json]   Inspect local session-cache re-read behavior
     prove [--format table|json|markdown] [--output FILE]  Generate Decision Loop evidence report
     health [path] [--json] [--gate]  Code-health report: cognitive complexity, naming, navigability score + token tax
     watch                          Live TUI dashboard (real-time event stream)
@@ -174,11 +174,11 @@ COMMANDS:
     daemon enable|disable          Auto-start daemon on login (systemd/LaunchAgent; prints service file)
     cache [list|clear|stats]       Show/manage file read cache
     sessions [list|show|delete|cleanup]  Manage saved session snapshots — PLURAL; see 'session' for live memory (alias: session-store)
-    benchmark run [path] [--json]  Run real benchmark on project files
-    benchmark report [path]        Generate shareable Markdown report
-    benchmark compare [--output F] Head-to-head comparison vs competitors
-    benchmark scorecard [--json]   Reproducible savings+recall+latency scorecard
-    cheatsheet                     Command cheat sheet & workflow quick reference
+    benchmark run [path] [--json]  Run a local representation comparison on project files
+    benchmark report [path]        Generate a local Markdown report
+    benchmark compare [--output F] Research-only comparative report; not a public benchmark claim
+    benchmark scorecard [--json]   Local representation scorecard; not a matched-workload result
+    cheatsheet                     Context-tool cheat sheet & quick reference
     onboard                        Zero-prompt golden path: connect tools + sensible defaults
     setup                          Guided setup: shell + editor + verify (full control)
     install                        Alias for setup; install --repair = non-interactive refresh
@@ -219,11 +219,11 @@ COMMANDS:
     security secrets <on|off>      Toggle secret/.env redaction (separate from containment)
     allow <cmd>                    Allow one shell command (additive; granular re-enable after yolo)
     tools [minimal|standard|power|show|list]  How many MCP tools your agent sees
-    profile [list|show|diff|create|set|suggest]  Manage context profiles (suggest = recommend from repo)
-    kit [list|load|show|unload] [name]  Manage task-specific Context Kits (`kit load code-review`)
+    profile [list|show|diff|create|set|suggest]  Manage local context configuration profiles
+    kit [list|load|show|unload] [name]  Manage available local TOML/.ctxpkg substrate; first-class Kit semantics are Research
     theme [list|set|export|import] Customize terminal colors and themes
     tee [list|clear|show <file>|last] Manage output tee files (~/.lean-ctx/tee/)
-    compression [off|lite|standard|max]  Set compression level (saves 25-65% tokens; alias: terse)
+    compression [off|lite|standard|max]  Set local output-density preference (alias: terse)
     slow-log [list|clear]          Show/clear slow command log (~/.lean-ctx/slow-commands.log)
     debug-log [list|tail N|clear|path]  Opt-in tool-call + hook-routing log (set debug_log / LEAN_CTX_DEBUG_LOG)
     update [<version>] [--check]   Update lean-ctx, or pin a version, from GitHub Releases
@@ -246,11 +246,11 @@ COMMANDS:
     plugin list|enable|disable|info|init|hooks
                                    Manage lean-ctx plugins
     addon list|search|info|add|remove
-                                   Community addons: wire external MCP servers via the gateway
+                                   Unavailable: marketplace/addon surface is Research
     rules sync|diff|lint|status|init
-                                   ContextOps: cross-agent rules governance
-    policy list|show|validate|coverage|org  Context policy packs (+ signed org-policy floor)
-    compliance report|verify       Signed CISO compliance report (OWASP + frameworks + enforcement)
+                                   Local rules management; no public cross-agent governance product
+    policy list|show|validate|coverage|org  Local policy-pack utilities; organization controls are Research
+    compliance report|verify       Research-only compliance artifact; not a public CISO product claim
     uninstall [--keep-config] [--keep-binary] [--dry-run]
                                    Full clean removal: stops all processes, removes hooks,
                                    MCP configs, rules, autostart, data, AND the binary itself.
@@ -308,7 +308,7 @@ EXAMPLES:
     lean-ctx -c \"gh pr list\"       Compressed GitHub CLI output
     lean-ctx gain                  Visual terminal dashboard
     lean-ctx gain --live           Live auto-updating terminal dashboard
-    lean-ctx gain --graph          30-day savings chart
+    lean-ctx gain --graph          30-day local context-usage chart
     lean-ctx gain --daily          Day-by-day breakdown with USD
          lean-ctx token-report --json   Machine-readable token + memory report
     lean-ctx dashboard             Open web dashboard at localhost:3333
@@ -320,18 +320,18 @@ EXAMPLES:
     lean-ctx gain --share          Self-hostable Wrapped page -> lean-ctx-wrapped.html
     lean-ctx gain --share --base-url=https://you.dev/w  Page with social preview meta
     lean-ctx gain --copy           Copy your share line to the clipboard
-    lean-ctx gain --publish        Publish an opt-in permalink and copy its URL
-    lean-ctx savings               Verified per-event savings ledger (auditable)
+    lean-ctx gain --publish        Development-only local export (hosted publication is Research)
+    lean-ctx savings               Local representation-change ledger; not comparable proof by itself
     lean-ctx savings verify        Re-check the savings ledger SHA-256 hash chain
     lean-ctx savings sign          Export an Ed25519-signed savings batch (ROI/audit artifact)
     lean-ctx savings verify-batch <file>  Verify a signed batch offline (no ledger needed)
     lean-ctx sessions list         List all CCP sessions
     lean-ctx sessions show         Show latest session state
     lean-ctx sessions delete <id>  Delete one saved session
-    lean-ctx discover              Find missed savings in shell history
+    lean-ctx discover              Find local opportunities to shape shell output
     lean-ctx discover --card       Shareable 'before' SVG -> lean-ctx-before.svg
     lean-ctx onboard               One-command setup (shell + editors + verify)
-    lean-ctx install --repair      Premium repair path (non-interactive, merge-based)
+    lean-ctx install --repair      Non-interactive repair path (merge-based)
     lean-ctx bootstrap             Non-interactive setup + fix (zero-config)
     lean-ctx bootstrap --json      Machine-readable bootstrap report
     lean-ctx init --global         Install shell aliases (includes lean-ctx-on/off/mode/status)
@@ -345,7 +345,7 @@ EXAMPLES:
     lean-ctx init --agent pi       Install Pi Coding Agent extension
   lean-ctx init --agent grok        Configure Grok (xAI) MCP + hooks
     lean-ctx doctor                Check PATH, config, MCP, and dashboard port
-    lean-ctx doctor integrations   Premium integration checks (Cursor/Claude Code/CodeBuddy)
+    lean-ctx doctor integrations   Detailed integration checks (Cursor/Claude Code/CodeBuddy)
     lean-ctx doctor --fix --json   Repair + machine-readable report
     lean-ctx status --json         Machine-readable current status
     lean-ctx session task \"implement auth\"
@@ -367,16 +367,16 @@ GRAPH (project analysis):
     lean-ctx graph symbol <spec>   Inspect a symbol (format: <file>::<symbol>, or bare <symbol>)
     lean-ctx graph context <query> Query the property graph for a concept
 
-CLOUD:
-    cloud status                   Show cloud connection status
-    cloud upgrade                  Subscribe to Pro (Personal Cloud) or Team
-    login <email>                  Log into existing LeanCTX Cloud account
-    register <email>               Create a new LeanCTX Cloud account
-    forgot-password <email>        Send password reset email
-    sync                           Sync stats (free) + your context (Pro: knowledge, commands, CEP, …)
-    sync index <push|pull|status>  Hosted Personal Index (Pro): encrypted cross-device retrieval index
-    cloud autosync <on|off|status> Daily background Personal Cloud push (Pro, opt-in)
-    contribute                     Share anonymized compression data
+HOSTED RESEARCH (unavailable unless LEAN_CTX_EXPERIMENTAL_HOSTED=1):
+    cloud status                   Development-only hosted status check
+    cloud upgrade                  Unavailable: hosted plans are not a public product path
+    login <email>                  Development-only account evaluation
+    register <email>               Development-only account evaluation
+    forgot-password <email>        Development-only account evaluation
+    sync                           Development-only hosted sync evaluation
+    sync index <push|pull|status>  Development-only hosted-index evaluation
+    cloud autosync <on|off|status> Development-only background-sync evaluation
+    contribute                     Development-only data-contribution evaluation
 
 TROUBLESHOOTING:
     Commands broken?     lean-ctx-off             (fixes current session)

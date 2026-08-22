@@ -1,111 +1,63 @@
 # LeanCTX Vision
 
-> **Control what your AI can see.**
->
-> Ecosystem overview: [`ECOSYSTEM.md`](ECOSYSTEM.md)
+> **Canonical sources:**
+> [docs/internal/README.md](docs/internal/README.md) and
+> [docs/internal/vision/PRODUCT-ARCHITECTURE.md](docs/internal/vision/PRODUCT-ARCHITECTURE.md).
+> Those documents govern this summary. They win if wording or status differs.
 
-## The Cognitive Context Layer
+## The product
 
-High performance with LLMs isn't about bigger context windows — it's about
-**information density**. LeanCTX is the cognitive context layer between your
-AI and your code: every token reaching the LLM carries maximum signal, and
-every byte of noise stripped away is a byte of reasoning gained.
+**LeanCTX is the Context SDK for AI Agents.** It sits inside or alongside an
+existing agent loop and controls how context is selected, shaped, reused,
+recovered, and measured before inference.
 
-> The winners won't be those who can afford 1M-token contexts.
-> They'll be those who achieve the same result with 10K.
+LeanCTX does not replace the customer's agent, task logic, model choice,
+tools, or retry policy. Thinkery is the company and commercial operator; it is
+not a competing developer product.
 
-## The four dimensions
+The operating loop is:
 
-1. **Compression layer (input efficiency)** — AST-based signatures, delta
-   loading, session caching (re-reads ~13 tokens), entropy filtering, 95+ CLI
-   compression patterns, 26 tree-sitter languages, 10 read modes.
-2. **Semantic router (model selection)** — intent detection, mode prediction
-   learned per file type, LITM-aware positioning per model family.
-3. **Context manager (memory architecture)** — Context Continuity Protocol
-   (~400 tokens instead of ~50K cold start), context ledger, multi-agent
-   coordination, temporal knowledge system, property graph with hybrid
-   search fusion.
-4. **Quality guardrail (output verification)** — compression safety levels,
-   deterministic anchoring, 19 versioned contracts with CI drift gates,
-   policy packs, tamper-evident audit trails, Ed25519-signed evidence bundles.
+```text
+Connect → Measure → Tune → Prove → Deploy → Repeat
+```
 
-Technical depth: [`docs/cognition-interface.md`](docs/cognition-interface.md) ·
-[`CONTRACTS.md`](CONTRACTS.md)
+Context shapes performance. A valid gain compares the same workload against a
+known baseline and treatment, with a declared quality threshold and visible
+methodology. A cheaper failed task is not a win.
 
-## Two halves of context, one pipeline
+## Integration
 
-Getting the right knowledge into the window is really *two* problems, and most
-tools only solve one:
+| Depth | What it means | Status |
+| --- | --- | --- |
+| **Attach** | Add LeanCTX around an existing coding agent through CLI setup, MCP, or a proxy/sidecar. | **Available** locally; common v1 identity and Receipt semantics are **Preview**. |
+| **Wrap** | Use a declared SDK/client adapter around a supported agent or client. | **Preview**. |
+| **Embed** | Integrate LeanCTX natively in a custom agent or application. | **Preview**. |
 
-- **Compress what fits.** A file, a diff, a shell log, a handful of docs — the
-  right move is to fit it into the window *losslessly* (read modes, structural
-  crushing, cached re-reads). Embedding-and-retrieving here throws away
-  information you already had room for.
-- **Retrieve what doesn't.** A large or dynamic knowledge base has to be
-  retrieved — and lean-ctx does it with a *hybrid* retriever: lexical BM25 +
-  learned-sparse SPLADE + dense vectors, fused with Reciprocal Rank Fusion and
-  reranked, never a single cosine signal. Embeddings run from a **local ONNX
-  model** (swappable; a model2vec fast path skips the attention pass), so recall
-  is strong without an external vector DB, an embedding API, or a minutes-long,
-  CPU-melting index build.
+Deeper integration increases observability and control; it never authorizes a
+claim that the evidence cannot support.
 
-The failure mode of naive RAG is applying *retrieve* to everything, including
-material that never needed it — more chunks, less signal, quiet drift. lean-ctx
-runs both halves under **one pipeline** and picks the right one for the material.
+## Status discipline
 
-**The moat is structure.** A codebase is not a bag of paragraphs: functions call
-functions, changes have a blast radius, symbols have definitions and references.
-lean-ctx is structure-aware (tree-sitter AST + a code graph) and *uses* that
-graph at retrieval time — associative spreading activation surfaces structurally
-close code, and reranking grounded in 2025 code-retrieval research (CoRNStack,
-SACL, SweRank) sharpens the top results. Retrieval is *precise on code* in a way
-pure text-embedding search cannot be.
+| Status | Meaning | Current scope |
+| --- | --- | --- |
+| **Available** | A local OSS capability has a real user path. | Runtime; CLI, MCP, proxy and local Attach paths; context selection, structural views, compression, reuse and recovery; local Receipt/evidence and offline-verification primitives. |
+| **Preview** | A narrow contract is converging and must keep explicit compatibility and evidence limits. | Python SDK v1/reference-wrapper scope; Wrap and Embed contracts; common session and Receipt convergence; explicit capability and degradation matrices. |
+| **Research** | A direction or private-commercial intent, not a public product promise. | Performance Benchmark; Performance Profiles; first-class Context Kits; canonical evidence bundle; AutoTune; organization control plane and LeanCTX Cloud; managed operation; external-capability composition; public benchmark/index; marketplace and agent-building. |
 
-**Knowledge stays yours.** What the engine learns is portable, not harvested:
-export it as open, git-diffable **OKF** Markdown (interop with any OKF reader, no
-lock-in) or as a signed, versioned **`.ctxpkg`** for distribution — the same
-snapshot rendered for reading or shipping. Portability is a property of the
-format, not a paid feature. And when a team wants a heavier, external RAG across
-many repos and document types, that plugs in as an **addon** rather than bloating
-the always-local core.
+An implementation directory, a command, or an internal type is not by itself a
+public API or shipping claim.
 
-## Principles
+## Guardrails
 
-- **Local-first, zero telemetry.** Nothing leaves your machine automatically —
-  ever. The engine learns locally (read modes, compression thresholds,
-  bandits); what it learns belongs to you.
-- **Learned optimization is portable, not harvested.** Tuned profiles can be
-  exported as signed `.ctxpkg` packages and shared through the registry — a
-  deliberate, inspectable file, not a background upload.
-- **Evidence over claims.** Policy decides what an agent may see; signed
-  evidence proves what it saw. Compliance reports (EU AI Act, ISO/IEC 42001,
-  SOC 2) are generated from real session data, offline-verifiable.
-- **One binary, 30+ tools.** Cursor, Claude Code, CodeBuddy, Windsurf, Copilot, Codex,
-  Gemini, JetBrains and more — the same engine everywhere.
+- Local-first and model-agnostic: LeanCTX controls context, not the customer's
+  agent or default model routing.
+- Inspectable and recoverable: an optimized representation must preserve a
+  path back to exact source when the task needs it.
+- Evidence-led: savings require a comparable baseline, quality gate, cost
+  basis, methodology, and verifiable evidence.
+- No premature platform: hosted control planes, managed execution, marketplace
+  surfaces, and autonomous tuning remain outside the current public OSS
+  product.
 
-## Direction
-
-- **Context Time Machine** — the layer state (what the model saw, why, and at
-  what token ROI) is now a git-anchored, signed, navigable artifact: rewind to
-  any commit, reproduce it, resume from it, or share it. The temporal axis
-  through everything lean-ctx does — it *decides, remembers, guards, proves, and
-  now replays*. **Shipped:** the snapshot engine (`snapshot
-  create/list/show/verify`), dashboard replay, `restore [--git]`, and signed
-  file-based `publish`/`import`. **Next:** a `ctxpkg.com` registry for hosted,
-  versioned history and a side-by-side model-view ｜ git-diff replay. See
-  [`docs/concepts/context-time-machine.md`](docs/concepts/context-time-machine.md).
-- **Context as Code** — declarative pipelines, profiles and policies in TOML,
-  version-controlled like infrastructure.
-- **Cognition interface** — constraints-aware instruction compilation,
-  attention-aware layout, budget/SLO enforcement, proof-carrying context.
-- **Unified context graph** — code, tests, commits, CI runs and knowledge in
-  one semantic graph with graph-aware reads.
-- **Provider framework** — issues, tickets, CI and logs flowing through the
-  same consolidation pipeline as code.
-- **Org-wide context** — agent handoffs, cross-session memory and team
-  accounts as the substrate for fleet-level context (see `ECOSYSTEM.md`).
-
-The end state: an AI that sees only what matters, remembers what's relevant,
-and reasons at maximum capacity — governed by policies you define.
-
-**Tokens are the new gold. Context is the new infrastructure. Spend both wisely.**
+Use the internal sources above for the authoritative feature map, product
+boundary, vocabulary, and release status.

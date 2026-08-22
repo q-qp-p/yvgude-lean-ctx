@@ -231,7 +231,6 @@ impl DynamicToolState {
     pub fn new() -> Self {
         let mut active = HashSet::new();
         active.insert(ToolCategory::Core);
-        active.insert(ToolCategory::Session);
         Self {
             active_categories: active,
             supports_list_changed: false,
@@ -292,7 +291,10 @@ impl DynamicToolState {
             return false;
         }
         if !self.supports_list_changed {
-            return true;
+            // Clients without `list_changed` cannot progressively reveal a
+            // category. Keep experimental local collaboration out of their
+            // default surface too; an explicit config category still enables it.
+            return cat != ToolCategory::Session || self.active_categories.contains(&cat);
         }
         self.active_categories.contains(&cat)
     }
@@ -346,6 +348,9 @@ mod tests {
         let state = DynamicToolState::new();
         assert!(state.is_tool_active("ctx_read"));
         assert!(state.is_tool_active("ctx_search"));
+        assert!(!state.is_tool_active("ctx_agent"));
+        assert!(!state.is_tool_active("ctx_task"));
+        assert!(!state.is_tool_active("ctx_workflow"));
     }
 
     #[test]
@@ -416,6 +421,7 @@ mod tests {
     fn all_tools_visible_without_list_changed() {
         let state = DynamicToolState::new();
         assert!(state.is_tool_active("ctx_graph"));
+        assert!(!state.is_tool_active("ctx_agent"));
         assert!(!state.is_tool_active("ctx_metrics")); // Internal tools never active
     }
 

@@ -1,18 +1,20 @@
 # Context Policy Packs v1 (GL #489)
 
+> **Status: Research contract — unavailable as a public governance product.**
+> This document records an experimental local format and implementation notes.
+> It does not announce organization policy distribution, compliance coverage,
+> hosted retention, or CISO workflow availability. Current product scope and
+> status are governed by [`docs/internal/README.md`](../internal/README.md).
+
 Declarative, versioned governance presets — "Context-Policies as Code". A pack
 pins a team's context-governance expectations in reviewable TOML: default read
 mode, allowed/denied tools, redaction patterns, an audit-retention expectation
 and a context-budget cap. The reduced, solo-viable slice of #377/#403/#404.
 
-v1 ships the **format, validation, resolution, eight curated built-ins and the
-`lean-ctx policy` CLI**; **runtime enforcement is wired as of #673**,
-**inbound content filters (PII / classification / prompt-injection) as of
-#675** and **egress/output DLP on agent writes & actions as of #676** (see
-*Enforcement*). **Central, signed org-policy distribution ships as of #674**
-([org-policy-v1.md](org-policy-v1.md)); `lean-ctx policy enforce` evaluates a
-single tool call against the active policy server-free (same guards, same
-audit) — the basis of the CISO compliance flow.
+The implementation notes below describe a proposed format, validation, and
+local enforcement experiments. References to curated packs, organization-policy
+distribution, retention, regulation, or compliance flows are historical design
+material, not a public product claim.
 
 ## Format
 
@@ -205,7 +207,7 @@ Invariants:
 - The active pack is loaded once and cached (`core::policy::runtime`); call
   `runtime::reload()` after editing the pack.
 
-## Out of scope (follow-ups)
+## Historical out-of-scope notes
 
 1. **Registry/marketplace distribution** of packs (#403/MKT) — beyond the
    built-in registry and `extends`.
@@ -215,10 +217,10 @@ Invariants:
    `lean-ctx compliance report`; a continuous score is the follow-up.
 3. Multi-file packs, non-built-in parents (`extends` against local files).
 
-**Shipped since the initial v1 slice:** central signed org-policy distribution
-(#674, [org-policy-v1.md](org-policy-v1.md)), inbound filters (#675), egress DLP
-(#676), the server-free `policy enforce` evaluator and the signed CISO
-compliance report ([compliance-report-v1.md](compliance-report-v1.md)).
+**Historical implementation notes:** earlier work recorded central signed
+org-policy distribution (#674), inbound filters (#675), egress DLP (#676), a
+server-free `policy enforce` evaluator, and a signed CISO compliance report.
+They are not current public offerings or compliance claims.
 
 ## Module map
 

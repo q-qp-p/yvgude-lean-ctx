@@ -1,10 +1,16 @@
 # personal-cloud-encryption-v1 — Zero-Knowledge Vaults (Knowledge + Gotchas)
 
-Status: **active** (GL #467) · Engine: `core/knowledge_vault.rs` ·
+> **Status: historical research contract — unavailable.** This proposed Personal
+> Cloud/account synchronization service is not a current LeanCTX product or
+> endpoint. LeanCTX is **The Context SDK for AI Agents**; available evidence and
+> verification paths are local. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
+Status: historical research · Engine: `core/knowledge_vault.rs` ·
 Server: `lean-ctx-enterprise: cloud_server/knowledge.rs` (`knowledge_blobs`),
 `lean-ctx-enterprise: cloud_server/gotchas.rs` (`gotcha_blobs`) (ADR-023)
 
-## Claim
+## Historical design claim
 
 For E2E surfaces, the Personal Cloud backend stores **only ciphertext**. We
 cannot read, search, sell or leak knowledge content — provably: the

@@ -1,5 +1,10 @@
 # lean-ctx Install Guide
 
+> **Status: local Runtime setup reference.** Installation applies to the local
+> Context SDK for existing agents, not a hosted service or general agent platform.
+> Confirm current behavior with `lean-ctx doctor`; product scope and status are in
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 Install lean-ctx on a workstation to wire supported AI tools to its MCP server,

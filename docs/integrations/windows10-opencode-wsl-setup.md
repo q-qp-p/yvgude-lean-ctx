@@ -1,4 +1,9 @@
 # Installing Lean-CTX on Windows 10 for OpenCode
+
+> **Status: local setup note.** Confirm commands against the installed Runtime;
+> this is not a hosted-service or general agent-platform setup guide. LeanCTX is
+> **The Context SDK for AI Agents**. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
 ### A Guide for Bridging WSL Ubuntu and OpenCode
 
 This guide outlines the process of installing **Lean-CTX** within a Windows Subsystem for Linux (WSL) environment and integrating it as an MCP server for **OpenCode** on Windows.

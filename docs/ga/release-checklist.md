@@ -1,5 +1,10 @@
 # Release Checklist
 
+> **Status: historical operations checklist.** It does not authorize website,
+> Cloud, managed-service, or control-plane deployment. Use the root
+> [`DEPLOY_CHECKLIST.md`](../../DEPLOY_CHECKLIST.md) for the current local Runtime
+> release boundary.
+
 ## Overview
 
 Use this checklist to prepare, publish, verify, and if needed roll back a
@@ -170,4 +175,3 @@ mismatch.
 - If CI omits an expected platform, correct the build matrix before publishing.
 - For a post-publication integrity incident, use
   [RB-05](runbook-index.md#rb-05-release-integrity-verification-failed).
-

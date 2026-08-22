@@ -1,4 +1,8 @@
-# LeanCTX in the FinOps Stack — CloudZero, Vantage, FOCUS
+# Historical FinOps integration proposal
+
+> **Status: historical research — not an available LeanCTX Cloud/FinOps product
+> or savings claim.** LeanCTX is **The Context SDK for AI Agents**; current scope
+> and status are governed by [`docs/internal/README.md`](../internal/README.md).
 
 `lean-ctx finops export` turns the tamper-evident savings ledger into daily
 cost rows your FinOps platform ingests for showback/chargeback. Unlike

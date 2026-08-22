@@ -247,7 +247,7 @@ pub async fn start(
     println!("  Stats file: {stats_path}");
     println!("  Press Ctrl+C to stop");
     println!(
-        "  \x1b[2m💡 Join the public leaderboard at https://leanctx.com/metrics: lean-ctx gain --publish --leaderboard\x1b[0m\n"
+        "  \x1b[2mLocal dashboard: context observations and evidence remain on this machine.\x1b[0m\n"
     );
 
     if is_local {

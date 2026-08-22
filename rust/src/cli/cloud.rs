@@ -1,5 +1,21 @@
 use crate::{cloud_client, core};
 
+fn hosted_research_enabled() -> bool {
+    std::env::var("LEAN_CTX_EXPERIMENTAL_HOSTED").as_deref() == Ok("1")
+}
+
+fn require_hosted_research() -> bool {
+    if hosted_research_enabled() {
+        return true;
+    }
+
+    eprintln!(
+        "Hosted account operations are Research and unavailable in the public LeanCTX Runtime. \\
+         Local context tooling continues to work without an account. Set LEAN_CTX_EXPERIMENTAL_HOSTED=1 only for a local development evaluation."
+    );
+    false
+}
+
 fn mask_email(email: &str) -> String {
     match email.split_once('@') {
         Some((local, domain)) if local.len() > 2 => {
@@ -86,6 +102,9 @@ fn save_and_report(r: &cloud_client::RegisterResult, email: &str) {
 }
 
 pub fn cmd_login(args: &[String]) {
+    if !require_hosted_research() {
+        return;
+    }
     let (email, pw) = require_email_and_password(args, "lean-ctx login <email> [--password <pw>]");
 
     println!("Logging in to LeanCTX Cloud...");
@@ -114,6 +133,9 @@ pub fn cmd_login(args: &[String]) {
 }
 
 pub fn cmd_forgot_password(args: &[String]) {
+    if !require_hosted_research() {
+        return;
+    }
     let (email, _) = parse_auth_args(args);
 
     if email.is_empty() {
@@ -136,6 +158,9 @@ pub fn cmd_forgot_password(args: &[String]) {
 }
 
 pub fn cmd_register(args: &[String]) {
+    if !require_hosted_research() {
+        return;
+    }
     let (email, pw) =
         require_email_and_password(args, "lean-ctx register <email> [--password <pw>]");
 
@@ -159,6 +184,9 @@ pub fn cmd_register(args: &[String]) {
 }
 
 pub fn cmd_sync(rest: &[String]) {
+    if !require_hosted_research() {
+        return;
+    }
     if rest.first().map(String::as_str) == Some("index") {
         cmd_sync_index(&rest[1..]);
         return;
@@ -407,6 +435,9 @@ fn collect_feedback_entries() -> Vec<serde_json::Value> {
 }
 
 pub fn cmd_contribute() {
+    if !require_hosted_research() {
+        return;
+    }
     let mut entries = Vec::new();
 
     // GH #439: mode_stats.json lives in the data dir — read it through the typed
@@ -499,6 +530,9 @@ pub fn cmd_contribute() {
 }
 
 pub fn cmd_cloud(args: &[String]) {
+    if !require_hosted_research() {
+        return;
+    }
     let action = args.first().map_or("help", std::string::String::as_str);
 
     match action {
@@ -657,7 +691,7 @@ fn cmd_cloud_status() {
         return;
     }
     let email = cloud_client::account_email().unwrap_or_default();
-    println!("Connected to LeanCTX Cloud as {email}.");
+    println!("Connected to the development-only hosted evaluation as {email}.");
 
     let d = match cloud_client::fetch_account_cloud() {
         Ok(d) => d,

@@ -769,44 +769,40 @@ pub struct CloudConfig {
     #[serde(default)]
     pub sync_stats_enabled: bool,
     pub last_sync: Option<String>,
-    /// Allow background upload of aggregate GAIN scores. Disabled by default.
+    /// Research-only background upload of aggregate local observations. Disabled by default.
     #[serde(default)]
     pub sync_gain_enabled: bool,
     pub last_gain_sync: Option<String>,
-    /// Allow background retrieval of cloud model data. Disabled by default.
+    /// Research-only hosted model-data retrieval. Disabled by default.
     #[serde(default)]
     pub sync_models_enabled: bool,
     pub last_model_pull: Option<String>,
-    /// Auto-push the Pro Personal-Cloud surfaces (knowledge, commands, CEP,
-    /// gotchas, buddy, feedback) from the background task — opt-in, once per
-    /// day, offline-tolerant (GL #384). Toggle: `lean-ctx cloud autosync on`.
+    /// Research-only hosted synchronization switch. Inactive in the public
+    /// local Runtime and off by default.
     pub auto_sync: bool,
     pub last_auto_sync: Option<String>,
-    /// Auto-push the project's encrypted retrieval-index bundle (hosted
-    /// Personal Index, GL #392) alongside the daily auto-sync — separate
-    /// opt-in because index bundles are orders of magnitude larger than the
-    /// other surfaces. Toggle: `lean-ctx cloud autoindex on`.
+    /// Research-only hosted retrieval-index synchronization switch. Inactive
+    /// in the public local Runtime and off by default.
     pub auto_index: bool,
     /// Per-project debounce: `project_hash → YYYY-MM-DD` of the last
     /// successful background index push.
     pub last_index_push: std::collections::HashMap<String, String>,
 }
 
-/// Settings for publishing your token-savings recap (`gain --publish` / auto-publish).
+/// Settings retained for local development evaluation of hosted publication.
 ///
-/// Publishing is always opt-in: it sends a small, whitelisted *aggregate* payload (tokens
-/// saved, $ avoided, compression % — never code, paths or counts) to the cloud.
-/// `auto_publish` simply removes the need to re-run `gain --publish` by hand; it stays off
-/// until the user explicitly enables it.
+/// Hosted publication and public rankings are Research, not part of the public
+/// LeanCTX Runtime. Both switches default to `false` and require the explicit
+/// `LEAN_CTX_EXPERIMENTAL_PUBLICATION=1` development flag before they can act.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GainConfig {
-    /// When true, `lean-ctx gain` automatically (re)publishes the recap, throttled to
-    /// `auto_publish_interval_hours`. On by default for new installations.
+    /// Development-only: automatically publish a local evaluation recap when the
+    /// environment opt-in is present. Off by default.
     pub auto_publish: bool,
-    /// When auto-publishing, also opt into the public leaderboard.
+    /// Development-only: request the Research public-ranking path. Off by default.
     pub leaderboard: bool,
-    /// Optional display name for the published card / leaderboard entry.
+    /// Development-only display name for a Research publication evaluation.
     pub display_name: Option<String>,
     /// Minimum hours between automatic publishes (throttle).
     pub auto_publish_interval_hours: u64,
@@ -818,8 +814,8 @@ pub struct GainConfig {
 impl Default for GainConfig {
     fn default() -> Self {
         Self {
-            auto_publish: true,
-            leaderboard: true,
+            auto_publish: false,
+            leaderboard: false,
             display_name: None,
             auto_publish_interval_hours: 24,
             last_auto_publish: None,

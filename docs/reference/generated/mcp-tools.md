@@ -8,14 +8,14 @@ lean-ctx registers **83 MCP tools** (granular profile). Each entry below lists t
 
 ## `ctx_agent`
 
-Multi-agent coordination — shared message bus, persistent diaries, stigmergic scent field.
-WORKFLOW: register agents first, then post/read messages, sync for state alignment.
+Experimental local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.
+Enable the session category explicitly before evaluating it.
 Actions: register (agent_type+role), post (message+category), read (poll),
 status (active|idle|finished), handoff (task+summary), sync (agents+messages+scent),
 claim/release (file/task), brief (sub-agent briefing),
 return (distill→knowledge), diary|recall_diary|diaries (agent journal),
 share_knowledge|receive_knowledge (cross-agent), list, info.
-ANTIPATTERN: NOT for single-agent workflows. Use ctx_compose for code understanding.
+ANTIPATTERN: Do not treat this local helper as a durable workflow or a hosted coordination service.
 
 Parameters: `action`*, `agent_type`, `category`, `message`, `role`, `status`, `to_agent`
 
@@ -49,10 +49,10 @@ Parameters: `action`*, `format`, `name`, `project_root`, `query`, `top_k`
 
 ## `ctx_benchmark`
 
-Benchmark compression modes — measures token savings across all available modes for a file or project.
-WORKFLOW: use BEFORE ctx_read to pick the optimal compression strategy.
+Local representation comparison for a file or project. It reports the selected modes' context size; it does not establish task quality or a universal gain.
+WORKFLOW: use before ctx_read when choosing a local representation.
 Provide a file path, or use action=project for project-wide results.
-ANTIPATTERN: NOT for production profiling — measures compression, not runtime performance.
+ANTIPATTERN: not the Research Performance Benchmark — this tool does not compare matched workloads or quality gates.
 
 Parameters: `action`, `format`, `path`*
 
@@ -265,7 +265,8 @@ Parameters: `budget`*, `paths`*, `task`
 
 ## `ctx_gain`
 
-Gain report — shows token savings from lean-ctx compression.
+Local context-usage report — reports observed or estimated representation changes.
+It is not a matched-workload benchmark or a universal savings claim.
 action=wrapped for periodic/annual summary. Other actions: status|report|score|cost|tasks|heatmap|agents|json.
 period="week"|"month"|"all" scopes the report.
 
@@ -457,7 +458,7 @@ Parameters: `dry_run`, `end_hash`, `end_line`, `find`, `hash`, `line`, `name`, `
 
 ## `ctx_perf`
 
-Current-session proxy compression performance, agent budget, and triage profile.
+Current-session local context metrics, agent budget, and triage profile. These observations are not a matched-workload benchmark.
 
 Parameters: _none_
 
@@ -675,11 +676,11 @@ Parameters: `action`, `query`, `top_k`
 
 ## `ctx_task`
 
-Multi-agent task orchestration.
-WORKFLOW: action=create → action=list to review → action=update to change state.
+Experimental local task record for collaboration experiments. It is not a public agent-orchestration contract.
+Enable the session category explicitly before evaluating it.
 Actions: create|update|list|get|cancel|message|info.
 States: working|input-required|completed|failed|canceled.
-ANTIPATTERN: not for code execution — use ctx_shell or ctx_execute.
+ANTIPATTERN: not for code execution or production workflow orchestration — use ctx_shell or ctx_execute.
 
 Parameters: `action`*, `description`, `message`, `state`, `task_id`, `to_agent`
 
@@ -731,12 +732,12 @@ Parameters: `action`, `format`
 
 ## `ctx_workflow`
 
-Workflow rails — state machine with evidence tracking.
-WORKFLOW: start → transition (multiple) → complete. evidence_add before
+Experimental local state tracker with evidence notes. It is not a public workflow-orchestration product.
+Enable the session category explicitly before evaluating it.
 transition to attach proof. Built-in plan_code_test when spec omitted.
 Actions: start|status|transition|complete|evidence_add|evidence_list|stop.
 spec=WorkflowSpec JSON for custom states/transitions.
-ANTIPATTERN: NOT for one-shot tasks — use direct tool calls instead.
+ANTIPATTERN: NOT for production orchestration or one-shot tasks — use direct tool calls instead.
 
 Parameters: `action`, `key`, `name`, `spec`, `to`, `value`
 

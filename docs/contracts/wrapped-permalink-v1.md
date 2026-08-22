@@ -1,8 +1,18 @@
 # Wrapped Permalink Contract v1
 
+> **Status: historical research contract — not an available LeanCTX service.**
+> This document records a proposed hosted sharing and public-ranking flow. It
+> does not establish a LeanCTX Cloud account service, public leaderboard,
+> publishing endpoint, managed data path, or savings claim. LeanCTX is **The
+> Context SDK for AI Agents**; the available product is local Runtime/CLI/MCP/
+> proxy capability with local evidence and offline verification. Product scope
+> and status are governed by [`docs/internal/README.md`](../internal/README.md).
+> Do not implement or advertise these endpoints without a new explicit product
+> decision and the required privacy, security, and evidence gates.
+
 ## Goal
 
-A **versioned HTTP API contract** for the opt-in, hosted **Wrapped permalink** — the public side
+A proposed **versioned HTTP API contract** for an opt-in, hosted **Wrapped permalink** — the public side
 of the lean-ctx viral loop (`docs/business/10-wrapped-viral-loop-spec.md`, VL-3). A user may
 **anonymously publish** a curated, privacy-safe slice of their local Wrapped report and get back a
 shareable URL (`https://leanctx.com/w/<id>`). No login is required to publish; an account may later
@@ -22,7 +32,7 @@ shareable URL (`https://leanctx.com/w/<id>`). No login is required to publish; a
   Command/session/file counts, top command names and the model id are **no longer collected**.
 - **honest**: the `pricing_estimated` marker is preserved end-to-end; estimates stay labelled.
 
-## Version (SSOT)
+## Historical design references
 
 - Runtime: `lean-ctx-enterprise: cloud_server/wrapped.rs` (ADR-023)
 - Schema: `lean-ctx-enterprise: cloud_server/db.rs` (`init_schema`, table `wrapped_cards`)

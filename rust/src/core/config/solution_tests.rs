@@ -107,6 +107,7 @@ fn empty_solution_toml_section_uses_defaults() {
 
 #[test]
 fn solution_tracker_records_and_snapshots() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
     let _guard = TRACKER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -141,6 +142,7 @@ fn solution_tracker_records_and_snapshots() {
 
 #[test]
 fn solution_tracker_reset_zeroes_all_counters() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
     let _guard = TRACKER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -155,6 +157,7 @@ fn solution_tracker_reset_zeroes_all_counters() {
 
 #[test]
 fn gain_summary_formats_correctly() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
     let _guard = TRACKER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

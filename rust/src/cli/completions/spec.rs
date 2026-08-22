@@ -328,7 +328,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "profile",
         aliases: &[],
-        description: "Set tool profile",
+        description: "Manage local context configuration profiles",
         subcommands: &[],
         flags: &[],
         positional: Some(DynamicKind::Profiles),
@@ -337,7 +337,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "gain",
         aliases: &[],
-        description: "Show token savings",
+        description: "Show local context-usage estimates",
         subcommands: &[],
         flags: &[
             FlagSpec {
@@ -350,7 +350,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
             FlagSpec {
                 long: "--by-tool",
                 short: None,
-                description: "Per-tool savings breakdown",
+                description: "Per-tool local context breakdown",
                 takes_value: false,
                 value_kind: None,
             },
@@ -556,7 +556,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "cloud",
         aliases: &[],
-        description: "Cloud features",
+        description: "Research-only hosted development commands",
         subcommands: &[],
         flags: &[],
         positional: None,
@@ -583,7 +583,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "audit",
         aliases: &["compliance"],
-        description: "Run compliance audit",
+        description: "Research-only local compliance artifact",
         subcommands: &[],
         flags: &[],
         positional: None,
@@ -667,7 +667,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "addon",
         aliases: &["addons", "plugin", "plugins"],
-        description: "Manage addons",
+        description: "Unavailable: marketplace/addon surface is Research",
         subcommands: &[
             CommandNode {
                 name: "list",
@@ -708,12 +708,12 @@ pub static COMMAND_TREE: &[CommandNode] = &[
         ],
         flags: &[],
         positional: None,
-        hidden: false,
+        hidden: true,
     },
     CommandNode {
         name: "savings",
         aliases: &[],
-        description: "Show local compression savings",
+        description: "Show local representation-change estimates",
         subcommands: &[],
         flags: &[
             FlagSpec {
@@ -737,7 +737,7 @@ pub static COMMAND_TREE: &[CommandNode] = &[
     CommandNode {
         name: "output-savings",
         aliases: &["output_savings"],
-        description: "Output-token reduction report",
+        description: "Local output-token estimate; not a workload benchmark",
         subcommands: &[],
         flags: &[FlagSpec {
             long: "--json",

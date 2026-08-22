@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lean-ctx-python"
 version = "1.0.0"
-description = "SDK for lean-ctx — context compression and execution evidence for AI agents"
+description = "Preview SDK for LeanCTX — context selection, shaping, reuse, recovery, and local evidence for AI agents"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.9"
@@ -13,7 +13,7 @@ dependencies = []
 keywords = ["llm", "context", "compression", "evidence", "ai", "mcp"]
 authors = [{name = "Yves Gugger", email = "yves@thinkery.ai"}]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Topic :: Software Development :: Libraries",

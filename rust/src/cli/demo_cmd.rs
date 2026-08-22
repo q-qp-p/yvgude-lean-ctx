@@ -1,4 +1,4 @@
-//! `lean-ctx demo` — interactive walkthrough of the Control Plane task lifecycle.
+//! Development-only walkthrough of an unshipped control-plane concept.
 //!
 //! This command demonstrates the full pipeline without requiring a live server:
 //! Task → Context → Scheduler → Execution → Receipt → Outcome → ETPAO
@@ -19,6 +19,14 @@ const CHECK: &str = "✓";
 const ARROW: &str = "→";
 
 pub(crate) fn cmd_demo(args: &[String]) {
+    if std::env::var("LEAN_CTX_EXPERIMENTAL_DEMO").as_deref() != Ok("1") {
+        eprintln!(
+            "The control-plane demo is Research and unavailable in the public LeanCTX Runtime. \\
+             Set LEAN_CTX_EXPERIMENTAL_DEMO=1 only for a local development evaluation."
+        );
+        return;
+    }
+
     let subcommand = args.first().map(String::as_str).unwrap_or("help");
     match subcommand {
         "task-lifecycle" | "lifecycle" => run_task_lifecycle_demo(),
@@ -32,13 +40,15 @@ pub(crate) fn cmd_demo(args: &[String]) {
 }
 
 fn print_demo_help() {
-    println!("{BOLD}lean-ctx demo{RESET} — erlebe den Control Plane Task-Lifecycle");
+    println!("{BOLD}lean-ctx demo{RESET} — development-only Control Plane research walkthrough");
     println!();
     println!("  {BOLD}lean-ctx demo task-lifecycle{RESET}");
     println!("    Spielt einen kompletten Task end-to-end durch und zeigt");
     println!("    bei jedem Schritt was passiert und warum.");
     println!();
-    println!("  {DIM}Der Demo-Befehl verwendet echte Protocol-Typen (TaskEnvelopeV1,");
+    println!(
+        "  {DIM}Nur mit LEAN_CTX_EXPERIMENTAL_DEMO=1. Der Demo-Befehl verwendet echte Protocol-Typen (TaskEnvelopeV1,"
+    );
     println!("  ExecutionReceiptV1, etc.) und echte Compression — kein Mock-Daten.{RESET}");
 }
 

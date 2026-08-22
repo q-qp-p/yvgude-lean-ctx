@@ -1,8 +1,13 @@
 # HTTP-MCP Contract v1
 
+> **Status: Local runtime contract.** This document specifies an implementation
+> surface, not a Cloud, Team, or Context-OS product promise. Any team-runtime
+> references are historical or target-only unless the internal availability
+> authority explicitly promotes them.
+
 ## Goal
 
-A **versioned HTTP API contract** for lean-ctx Context OS, defining the REST + SSE surface
+A **versioned HTTP API contract** for the local lean-ctx runtime, defining the REST + SSE surface
 that sits alongside the Streamable HTTP MCP transport. All endpoints listed below are
 served by the same `axum` server that handles MCP protocol messages via fallback routing.
 
@@ -14,10 +19,10 @@ served by the same `axum` server that handles MCP protocol messages via fallback
 ## Version (SSOT)
 
 - Runtime (local): `rust/src/http_server/mod.rs`
-- Runtime (team): `lean-ctx-enterprise: http_server/team.rs` (ADR-023)
-- Events: `rust/src/core/context_os/context_bus.rs`
-- Metrics: `rust/src/core/context_os/metrics.rs`
-- Redaction: `rust/src/core/context_os/redaction.rs`
+- Team runtime: historical/target reference only — `lean-ctx-enterprise: http_server/team.rs` (ADR-023)
+- Events: `rust/src/core/context_os/context_bus.rs` (internal module name)
+- Metrics: `rust/src/core/context_os/metrics.rs` (internal module name)
+- Redaction: `rust/src/core/context_os/redaction.rs` (internal module name)
 
 ---
 

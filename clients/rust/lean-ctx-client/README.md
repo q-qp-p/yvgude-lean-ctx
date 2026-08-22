@@ -1,9 +1,17 @@
 # lean-ctx-client
 
-A thin, **stable** Rust client for the [lean-ctx](https://leanctx.com) Context OS
-`/v1` HTTP contract. Talk to a running lean-ctx server from your own
-program — an agent harness, a lead-gen worker, a research bot — **without
-linking the engine**.
+> **Status: Local runtime contract — not the public LeanCTX SDK promise.**
+> LeanCTX is **The Context SDK for AI Agents**, a local context-performance
+> layer for existing agents. The currently declared SDK path is Python SDK v1
+> and its OpenAI Agents reference wrapper (**Preview**). This Rust client is a
+> narrow local HTTP/MCP integration surface; it does not make a hosted service,
+> generic agent platform, remote execution, or organization product available.
+> Product scope and status are governed by
+> [`docs/internal/README.md`](../../../docs/internal/README.md).
+
+A thin Rust client for the local lean-ctx `/v1` HTTP contract. Talk to a
+running local Runtime from your own program without linking the engine. Discover
+capabilities before depending on a route or tool.
 
 This is the Rust counterpart of the TypeScript SDK in `cookbook/sdk`. Both
 target the same versioned contract:

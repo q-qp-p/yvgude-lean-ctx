@@ -1,5 +1,10 @@
 # Disaster Recovery and Backup Guide
 
+> **Status: historical operations guide.** It does not establish an available
+> hosted, organization, or managed-data service. Confirm any command against the
+> installed local Runtime; canonical product scope is in
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 This guide covers backups and recovery for a standalone lean-ctx installation

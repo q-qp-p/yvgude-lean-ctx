@@ -611,7 +611,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         },
     );
 
-    // Org-gateway MCP registry (GL#91) — distinct from `[[gateway.servers]]`
+    // Research-only organization gateway registry — distinct from `[[gateway.servers]]`
     // (the local tool-catalog aggregator above): these are the MCP servers the
     // *org gateway* reverse-proxies, meters and inventories under /mcp/{id}.
     let mut mcp_servers = BTreeMap::new();
@@ -644,13 +644,13 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "bool",
             serde_json::json!(true),
-            "Per-server switch (default true)",
+            "Research-only per-server switch (default true once a development configuration explicitly adds this server)",
         ),
     );
     sections.insert(
         "gateway_server.mcp_servers".into(),
         SectionSchema {
-            description: "Org-gateway MCP registry (array of tables: `[[gateway_server.mcp_servers]]`): reverse-proxied under /mcp/{id} with per-person keys, metered into mcp_events, tool definitions hash-tracked (observe stage, GL#91)".into(),
+            description: "Research-only organization gateway registry (array of tables: `[[gateway_server.mcp_servers]]`). It is inactive in the public local Runtime and must be explicitly configured for development evaluation.".into(),
             keys: mcp_servers,
         },
     );
@@ -678,13 +678,15 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "bool",
             serde_json::json!(cfg.cloud.auto_sync),
-            "Push the Personal Cloud (knowledge, commands, CEP, gotchas, buddy, feedback) silently once per day at session end (Pro; toggle: `lean-ctx cloud autosync on|off`)",
+            "Research-only hosted synchronization setting. Inactive in the public local Runtime; use only with an explicit development evaluation flag.",
         ),
     );
     sections.insert(
         "cloud".into(),
         SectionSchema {
-            description: "Cloud feature settings".into(),
+            description:
+                "Research-only hosted settings. They are inactive in the public local Runtime."
+                    .into(),
             keys: cloud,
         },
     );
@@ -695,7 +697,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             key(
                 "bool",
                 serde_json::json!(cfg.gain.auto_publish),
-                "Automatically (re)publish your Wrapped recap when you run `lean-ctx gain` (opt-in, off by default; throttled and sends only an aggregate payload)",
+                "Research-only hosted publication setting. Off by default and inactive unless LEAN_CTX_EXPERIMENTAL_PUBLICATION=1 is set for a local development evaluation.",
             ),
         );
     gain.insert(
@@ -703,7 +705,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "bool",
             serde_json::json!(cfg.gain.leaderboard),
-            "When auto-publishing, also list the card on the public opt-in leaderboard",
+            "Research-only public-ranking setting. Off by default and inactive in the public local Runtime.",
         ),
     );
     gain.insert(
@@ -711,7 +713,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "string?",
             serde_json::json!(cfg.gain.display_name),
-            "Optional display name shown on your published card / leaderboard entry",
+            "Optional development-evaluation display name for a hosted publication experiment",
         ),
     );
     gain.insert(
@@ -719,7 +721,7 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "u64",
             serde_json::json!(cfg.gain.auto_publish_interval_hours),
-            "Minimum hours between automatic publishes (throttle; default 24)",
+            "Minimum hours between development-evaluation publishes (throttle; default 24)",
         ),
     );
     gain.insert(
@@ -727,13 +729,13 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         key(
             "string?",
             serde_json::json!(null),
-            "Timestamp of the last automatic publish (written by lean-ctx for throttling — not meant to be edited)",
+            "Timestamp of the last development-evaluation publish (written for throttling — not meant to be edited)",
         ),
     );
     sections.insert(
         "gain".into(),
         SectionSchema {
-            description: "Token-savings recap publishing (gain --publish / auto-publish)".into(),
+            description: "Research-only hosted publication settings (inactive by default)".into(),
             keys: gain,
         },
     );

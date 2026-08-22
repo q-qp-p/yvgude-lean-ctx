@@ -1,5 +1,10 @@
 # Team Invite Links v1 (GL #385)
 
+> **Status: historical research contract — unavailable.** This describes a
+> proposed hosted team, dashboard, and account flow. It is not a current LeanCTX
+> product surface. LeanCTX is **The Context SDK for AI Agents**; current scope
+> and status are governed by [`docs/internal/README.md`](../internal/README.md).
+
 One-time links replace manual token copy-paste when onboarding teammates onto
 a hosted team server. The owner mints a link on the dashboard; the teammate
 opens it on `leanctx.com/join/?code=…` and receives their own member token —

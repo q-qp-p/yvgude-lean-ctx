@@ -1,9 +1,8 @@
 //! # lean-ctx-client
 //!
-//! A thin, **stable** Rust client for the lean-ctx Context OS `/v1` HTTP
-//! contract. It lets any program — your own agent harness, a lead-gen worker,
-//! a research bot — talk to a running lean-ctx server without linking the
-//! engine.
+//! A thin, **Preview** Rust client for the declared lean-ctx `/v1` HTTP
+//! boundary. It lets a custom integration talk to a running local lean-ctx
+//! server without linking the engine.
 //!
 //! ```no_run
 //! use lean_ctx_client::{LeanCtxClient, CallContext};
@@ -31,8 +30,8 @@
 //!
 //! ## What it covers
 //!
-//! The **entire** public `/v1` surface (verified by [`run_conformance`] and
-//! the `sdk-conformance` CI job, GL #395):
+//! The development routes covered by [`run_conformance`] and the
+//! `sdk-conformance` CI job:
 //!
 //! - `GET /health`, `GET /v1/manifest`, `GET /v1/capabilities`,
 //!   `GET /v1/openapi.json`
@@ -45,16 +44,15 @@
 //!
 //! ## SemVer coupling
 //!
-//! This crate's major version follows the engine's `http_mcp` contract major
-//! ([`SUPPORTED_HTTP_CONTRACT_VERSIONS`]). The conformance kit's
-//! `engine_compat` check fails when a server speaks a contract this release
-//! does not support; `route_coverage` fails when the server adds a `/v1`
-//! route this client does not cover.
+//! The public facade and session contract are still converging. This crate
+//! follows the declared `http_mcp` contract major
+//! ([`SUPPORTED_HTTP_CONTRACT_VERSIONS]) for its preview scope; it does not
+//! make every local server route a stable public API.
 //!
 //! All open-ended documents (`manifest`, `capabilities`, `openapi.json`) are
 //! returned as [`serde_json::Value`], so adding server keys never breaks a
-//! client build. Branch on stable fields (e.g. `capabilities["plane"]`,
-//! `error.error_code()`), not on human-readable messages.
+//! client build. Branch only on fields explicitly declared by the integration
+//! contract, not on human-readable messages or incidental server routes.
 //!
 //! ## Non-goals (the embedding boundary)
 //!

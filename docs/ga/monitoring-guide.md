@@ -1,5 +1,10 @@
 # Monitoring and Observability Guide
 
+> **Status: historical operations guide.** This is not a dashboard, Cloud, or
+> organization-monitoring product promise. Confirm behavior against the local
+> Runtime; canonical scope is in
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 This guide helps operators establish health checks, baselines, alerting, and

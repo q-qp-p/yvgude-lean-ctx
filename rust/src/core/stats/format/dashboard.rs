@@ -1,4 +1,4 @@
-//! The `gain` hero dashboard: themed savings panels, footer, tips, live mode.
+//! The `gain` hero dashboard: themed local context-usage panels, footer, tips, live mode.
 
 use super::util::{
     active_theme, cmd_total_saved, day_total_saved, format_big, format_num, format_usd,
@@ -12,12 +12,12 @@ pub fn format_gain() -> String {
     format_gain_themed(&active_theme())
 }
 
-/// Renders the token savings dashboard with a specific theme.
+/// Renders the local context-usage dashboard with a specific theme.
 pub fn format_gain_themed(t: &Theme) -> String {
     format_gain_themed_at(t, None)
 }
 
-/// Renders the concise "hero" gain output — 3 key metrics, gain score, trend, next actions.
+/// Renders the concise "hero" gain output — local observations, trend, and next actions.
 pub fn format_gain_hero() -> String {
     format_gain_hero_themed(&active_theme())
 }
@@ -87,9 +87,9 @@ pub fn format_gain_hero_themed(t: &Theme) -> String {
     let ul3 = theme::pad_right(&t.kpi_underline(usd_val.len(), &t.accent), kw);
     out.push(box_line(&format!("  {ul1}{ul2}{ul3}")));
 
-    let l1 = theme::pad_right(&format!("{dim}input tokens saved{rst}"), kw);
-    let l2 = theme::pad_right(&format!("{dim}compression{rst}"), kw);
-    let l3 = theme::pad_right(&format!("{dim}USD saved{rst}"), kw);
+    let l1 = theme::pad_right(&format!("{dim}token difference{rst}"), kw);
+    let l2 = theme::pad_right(&format!("{dim}representation ratio{rst}"), kw);
+    let l3 = theme::pad_right(&format!("{dim}USD estimate{rst}"), kw);
     out.push(box_line(&format!("  {l1}{l2}{l3}")));
     out.push(box_line(""));
 
@@ -154,7 +154,7 @@ pub fn format_gain_hero_themed(t: &Theme) -> String {
     out.push(format!("  {}", t.box_bottom(w)));
     // One-line methodology so the headline is never read as the whole bill.
     out.push(format!(
-        "  {dim}savings = compression on lean-ctx-touched traffic, not your full provider bill · details: lean-ctx gain --deep{rst}"
+        "  {dim}local token difference = selected representation vs. source on observed traffic; not a provider bill or workload benchmark · details: lean-ctx gain --deep{rst}"
     ));
     out.push(String::new());
 
@@ -351,7 +351,7 @@ fn render_gain_dashboard_for_store(
     let header_padded = theme::pad_right(&header, w - ver.len() - 2);
     out.push(format!("  {side}{header_padded}{ver_part} {side}"));
 
-    let subtitle = format!("     {dim}Token Savings Dashboard{rst}");
+    let subtitle = format!("     {dim}Local Context Activity{rst}");
     out.push(box_line(&subtitle));
     out.push(box_line(""));
     out.push(format!("  {}", t.box_mid(w)));
@@ -380,10 +380,10 @@ fn render_gain_dashboard_for_store(
     let ul4 = theme::pad_right(&t.kpi_underline(usd_val.len(), &t.accent), kw);
     out.push(box_line(&format!("     {ul1}{ul2}{ul3}{ul4}")));
 
-    let l1 = theme::pad_right(&format!("{dim}input tokens saved{rst}"), kw);
+    let l1 = theme::pad_right(&format!("{dim}token difference{rst}"), kw);
     let l2 = theme::pad_right(&format!("{dim}compression{rst}"), kw);
     let l3 = theme::pad_right(&format!("{dim}commands{rst}"), kw);
-    let l4 = theme::pad_right(&format!("{dim}USD saved{rst}"), kw);
+    let l4 = theme::pad_right(&format!("{dim}USD estimate{rst}"), kw);
     out.push(box_line(&format!("     {l1}{l2}{l3}{l4}")));
     out.push(box_line(""));
     out.push(format!("  {}", t.box_bottom(w)));
@@ -739,7 +739,7 @@ fn append_gain_footer(out: &mut Vec<String>, t: &Theme, store: &StatsStore) {
         }
 
         if !ctx_items.is_empty() {
-            out.push(format!("    {a}⚡ Context OS{rst}"));
+            out.push(format!("    {a}⚡ Local Context SDK{rst}"));
             for item in &ctx_items {
                 out.push(format!("    {item}"));
             }

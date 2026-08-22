@@ -7,7 +7,7 @@ pub fn cmd_cheatsheet() {
     let ver_pad = format!("v{ver}");
     let header = format!(
         "\x1b[1;36m╔══════════════════════════════════════════════════════════════╗\x1b[0m
-\x1b[1;36m║\x1b[0m  \x1b[1;37mlean-ctx Workflow Cheat Sheet\x1b[0m\x1b[2m{ver_pad:>29}\x1b[0m  \x1b[1;36m║\x1b[0m
+\x1b[1;36m║\x1b[0m  \x1b[1;37mlean-ctx Context Cheat Sheet\x1b[0m\x1b[2m{ver_pad:>30}\x1b[0m  \x1b[1;36m║\x1b[0m
 \x1b[1;36m╚══════════════════════════════════════════════════════════════╝\x1b[0m");
     println!(
         "{header}
@@ -19,13 +19,13 @@ pub fn cmd_cheatsheet() {
   ctx_knowledge action=recall     \x1b[2m# check stored project facts\x1b[0m
 
 \x1b[1;32m━━━ WHILE CODING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m
-  ctx_read mode=full    \x1b[2m# first read (cached, re-reads: 99% saved)\x1b[0m
-  ctx_read mode=map     \x1b[2m# context-only files (~93% saved)\x1b[0m
-  ctx_read mode=diff    \x1b[2m# after editing (~98% saved)\x1b[0m
-  ctx_read mode=sigs    \x1b[2m# API surface of large files (~95%)\x1b[0m
+  ctx_read mode=full    \x1b[2m# exact source when you need it\x1b[0m
+  ctx_read mode=map     \x1b[2m# structure and dependencies first\x1b[0m
+  ctx_read mode=diff    \x1b[2m# inspect changes after editing\x1b[0m
+  ctx_read mode=sigs    \x1b[2m# API surface of large files\x1b[0m
   ctx_multi_read        \x1b[2m# read multiple files at once\x1b[0m
-  ctx_search            \x1b[2m# search with compressed results (~70%)\x1b[0m
-  ctx_shell             \x1b[2m# run CLI with compressed output (~60-90%)\x1b[0m
+  ctx_search            \x1b[2m# focused search results with references\x1b[0m
+  ctx_shell             \x1b[2m# shape large CLI output with recovery\x1b[0m
   ctx_read raw=true     \x1b[2m# escape hatch: exact bytes (CLI: lean-ctx raw \"cmd\")\x1b[0m
 
 \x1b[1;35m━━━ AFTER CODING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m
@@ -35,11 +35,11 @@ pub fn cmd_cheatsheet() {
   ctx_knowledge action=consolidate \x1b[2m# import session + run lifecycle\x1b[0m
   ctx_metrics                     \x1b[2m# see session statistics\x1b[0m
 
-\x1b[1;34m━━━ MULTI-AGENT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m
-  ctx_agent action=register       \x1b[2m# announce yourself\x1b[0m
-  ctx_agent action=list           \x1b[2m# see other active agents\x1b[0m
-  ctx_agent action=post           \x1b[2m# share findings\x1b[0m
-  ctx_agent action=read           \x1b[2m# check messages\x1b[0m
+\x1b[1;34m━━━ EXPERIMENTAL LOCAL COLLABORATION (OPT-IN) ━━━━━━━━━━━━━━━\x1b[0m
+  ctx_agent action=register       \x1b[2m# local development helper; not default MCP\x1b[0m
+  ctx_agent action=list           \x1b[2m# inspect local registrations\x1b[0m
+  ctx_agent action=post           \x1b[2m# share a local finding\x1b[0m
+  ctx_agent action=read           \x1b[2m# inspect local messages\x1b[0m
 
 \x1b[1;31m━━━ READ MODE DECISION TREE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m
   Will edit?  → \x1b[1mfull\x1b[0m (re-reads: 13 tokens)  → after edit: \x1b[1mdiff\x1b[0m
@@ -49,10 +49,10 @@ pub fn cmd_cheatsheet() {
   Browsing?   → \x1b[1maggressive\x1b[0m (syntax stripped)
 
 \x1b[1;36m━━━ MONITORING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m
-  lean-ctx gain          \x1b[2m# visual savings dashboard\x1b[0m
-  lean-ctx gain --live   \x1b[2m# live auto-updating (Ctrl+C)\x1b[0m
+  lean-ctx gain          \x1b[2m# local context-usage estimates (not a benchmark)\x1b[0m
+  lean-ctx gain --live   \x1b[2m# live local estimates (Ctrl+C)\x1b[0m
   lean-ctx dashboard     \x1b[2m# web dashboard with charts\x1b[0m
-  lean-ctx gain --wrapped \x1b[2m# wrapped savings report\x1b[0m
+  lean-ctx gain --wrapped \x1b[2m# local usage summary\x1b[0m
   lean-ctx discover      \x1b[2m# find uncompressed commands\x1b[0m
   lean-ctx doctor        \x1b[2m# diagnose installation\x1b[0m
   lean-ctx update        \x1b[2m# self-update (or 'update 3.8.5' to pin)\x1b[0m

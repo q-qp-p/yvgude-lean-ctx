@@ -1,9 +1,15 @@
 # Capabilities Contract (v1)
 
+> **Status: implementation contract, not canonical product copy.** This
+> discovery payload reports what a local Runtime build exposes. Values for
+> experimental planes, personas, extensions, or services do not make them public
+> LeanCTX offerings. Current product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 `GET /v1/capabilities` returns a discovery document so any client — in any
 language — can learn at runtime what a lean-ctx instance supports, and branch on
 real features instead of making trial calls. It is the entry point of the
-Context OS "Open Door" (RFC `docs/context-os/rfc-v1.md`, EPIC 12.1).
+local Runtime discovery surface (historical RFC `docs/context-os/rfc-v1.md`, EPIC 12.1).
 
 - **Contract version:** `1` (`leanctx.contract.capabilities.contract_version`,
   constant `CAPABILITIES_CONTRACT_VERSION` in `rust/src/core/contracts.rs`).
@@ -27,7 +33,7 @@ contract_version, server, plane, transports, presets, read_modes, tools, feature
 |-----|------|---------|
 | `contract_version` | number | This contract's version (`1`). |
 | `server` | object | `{ name, version, persona }` — `version` is the running `lean-ctx` release; `persona` is the active context persona (`persona-spec-v1`, EPIC 12.15). |
-| `plane` | string | Deployment plane: `personal` (local), `team`, or `cloud`. The local default is `personal`. See RFC §6 (Local-Free Invariant). |
+| `plane` | string | Runtime build label. `personal` is the local default; historical `team`/`cloud` labels are not public product availability claims. See RFC §6 (Local-Free Invariant). |
 | `transports` | string[] | Wire transports this instance speaks: `stdio-mcp`, `http-mcp`, `rest`, `sse`. |
 | `presets` | string[] | Built-in context personas (`persona-spec-v1`, EPIC 12.15/12.16). Today: `coding` (the historical default); non-coding presets land in 12.16. |
 | `read_modes` | object | `{ count, modes }` — the `ctx_read` modes this build supports (mirrors the MCP manifest). |

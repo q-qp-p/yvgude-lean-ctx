@@ -10,6 +10,13 @@
  * above the standing card via a server-side /api/leaderboard proxy.
  */
 
+// Public rankings are Research and intentionally unavailable in the default
+// dashboard. Keep the implementation behind an explicit local development
+// flag so it cannot become an implicit public product claim.
+function experimentalLeaderboardEnabled() {
+  return window.LEAN_CTX_EXPERIMENTAL_LEADERBOARD === true;
+}
+
 function api() {
   return window.LctxApi && window.LctxApi.apiFetch ? window.LctxApi.apiFetch : null;
 }
@@ -76,6 +83,11 @@ class CockpitLeaderboard extends HTMLElement {
   }
 
   async loadData() {
+    if (!experimentalLeaderboardEnabled()) {
+      this._loading = false;
+      this.render();
+      return;
+    }
     var fetchJson = api();
     if (!fetchJson) {
       this._error = 'API client not loaded';
@@ -196,6 +208,13 @@ class CockpitLeaderboard extends HTMLElement {
   }
 
   render() {
+    if (!experimentalLeaderboardEnabled()) {
+      this.innerHTML =
+        '<div class="card"><div class="card-header"><h3>Public rankings are unavailable</h3></div>' +
+        '<p class="hs" style="margin:0">Benchmark publication and the Agent Performance Index are Research. ' +
+        'Use local Receipts and offline verification for evidence today.</p></div>';
+      return;
+    }
     var F = fmtLib();
     var esc =
       F.esc ||

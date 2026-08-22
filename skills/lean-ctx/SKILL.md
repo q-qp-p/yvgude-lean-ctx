@@ -1,11 +1,11 @@
 ---
 name: lean-ctx
-description: Context Engineering for AI Agents — 83 MCP tools, 10 read modes, 95+ shell patterns, tree-sitter AST for 26 languages. Compresses LLM context by up to 99%. Use when reading files, running shell commands, searching code, or exploring directories. Auto-installs if not present.
+description: Local context tooling for AI agents. Use it to select, shape, reuse, recover, and inspect context before inference when reading files, running shell commands, searching code, or exploring directories.
 ---
 
-# LeanCTX — Context Engineering for AI Agents
+# LeanCTX — Local Context SDK for AI Agents
 
-LeanCTX optimizes LLM context through 83 MCP tools, 95+ shell compression patterns, and tree-sitter AST parsing for 26 languages. It provides adaptive file reading, cross-session memory (CCP), task-conditioned relevance scoring, and a feedback loop for learning optimal compression.
+LeanCTX is a local context layer for existing agents. It provides selectable file representations, focused search, controlled shell-output shaping, session continuity, and recovery to exact source when needed.
 
 ## Setup (run first)
 
@@ -41,7 +41,7 @@ wrapped. Do not inspect env vars just to decide; users may forbid env access.
 Use `lean-ctx -c <command>` over running commands directly only when:
 - The command produces verbose output (build logs, git diffs, dependency trees, test results)
 - You are reading files and only need the structure or API surface
-- You want to check token savings for the current session
+- You want to inspect local context-usage estimates for the current session
 
 ## Shell commands
 
@@ -99,7 +99,7 @@ lean-ctx init --agent windsurf        # Hybrid (Windsurf)
 # Mode is auto-detected; override with --mode mcp|hybrid if needed.
 ```
 
-## Multi-Agent & Knowledge
+## Local knowledge and session continuity
 
 CLI (works in Hybrid and MCP setups):
 
@@ -118,8 +118,8 @@ lean-ctx session decision "what you decided"
 lean-ctx session save
 ```
 
-If MCP is enabled for your IDE, the same capabilities are also available as MCP tools
-(`ctx_knowledge`, `ctx_session`, `ctx_agent`, ...).
+If MCP is enabled for your IDE, the same local capabilities are also available as MCP tools
+(`ctx_knowledge`, `ctx_session`, ...). Experimental local collaboration tools are opt-in and not part of the default public Runtime surface.
 
 ## Additional Intelligence Tools
 
@@ -130,34 +130,34 @@ If MCP is enabled for your IDE, the same capabilities are also available as MCP 
 - `ctx_intent` now supports multi-intent detection and complexity classification
 - Semantic cache: TF-IDF + cosine similarity for finding similar files across reads
 
-## Session Continuity (CCP)
+## Session continuity
 
 ```bash
 lean-ctx sessions list          # List all CCP sessions
 lean-ctx sessions show          # Show latest session state
 lean-ctx sessions delete <id>   # Delete one saved session
-lean-ctx wrapped                # Weekly savings report card
-lean-ctx wrapped --month        # Monthly savings report card
-lean-ctx benchmark run          # Real project benchmark (terminal output)
+lean-ctx wrapped                # Local usage summary card
+lean-ctx wrapped --month        # Monthly local usage summary card
+lean-ctx benchmark run          # Local representation comparison (terminal output)
 lean-ctx benchmark run --json   # Machine-readable JSON output
 lean-ctx benchmark report       # Shareable Markdown report
 ```
 
-MCP tools for CCP:
+MCP tools for session continuity:
 - `ctx_session status` — show current session state (~400 tokens)
 - `ctx_session load` — restore previous session (cross-chat memory)
 - `ctx_session task "description"` — set current task
 - `ctx_session finding "file:line — summary"` — record key finding
 - `ctx_session decision "summary"` — record architectural decision
 - `ctx_session save` — force persist session to disk
-- `ctx_gain action=wrapped` — generate savings report card in chat
+- `ctx_gain action=wrapped` — generate a local usage summary card in chat
 - `ctx_refactor` — LSP-powered rename, references, definition, implementations (requires language server)
 - `ctx_expand action=search_all query="..."` — FTS5 cross-archive fulltext search
 
 ## Analytics
 
 ```bash
-lean-ctx gain                   # Visual token savings dashboard
+lean-ctx gain                   # Visual local context-usage estimates (not a benchmark)
 lean-ctx dashboard              # Web dashboard at localhost:3333
 lean-ctx session                # Adoption statistics
 lean-ctx discover               # Find uncompressed commands in shell history
@@ -165,9 +165,9 @@ lean-ctx discover               # Find uncompressed commands in shell history
 
 ## Tips
 
-- The output suffix `[lean-ctx: 5029→197 tok, -96%]` shows original vs compressed token count
+- The output suffix reports the local source/output token counts for that representation
 - For large outputs, lean-ctx automatically truncates while preserving relevant context
 - JSON responses from curl/wget are reduced to schema outlines
 - Build errors are grouped by type with counts
 - Test results show only failures with summary counts
-- Cached re-reads cost only ~13 tokens
+- Cached re-reads can return a compact local reference

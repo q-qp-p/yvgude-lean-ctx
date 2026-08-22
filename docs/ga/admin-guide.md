@@ -1,5 +1,11 @@
 # Administrator Guide
 
+> **Status: historical operations guide — not an organization-product promise.**
+> Follow only behavior supported by the installed local Runtime. LeanCTX is **The
+> Context SDK for AI Agents**; Cloud, managed/team, SSO, and control-plane
+> surfaces are not current availability. See
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 This guide is for administrators who install, configure, secure, and operate

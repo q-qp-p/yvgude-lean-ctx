@@ -1,8 +1,14 @@
 # Addon Manifest — v1
 
-Status: **stable (v1)** · Module: `core::addons` · CLI: `lean-ctx addon`
+> **Status: Research contract — not a supported public product surface.** This
+> document records an experimental implementation and proposed format. LeanCTX
+> does not currently offer a hosted registry, marketplace, paid-addon flow, or
+> verified public catalog. Current product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
 
-An **addon** packages an external MCP server (plus metadata) behind a small
+Historical implementation status: `core::addons` · `lean-ctx addon`
+
+An experimental **addon** format packages an external MCP server (plus metadata) behind a small
 `lean-ctx-addon.toml` manifest, so a third-party tool plugs into lean-ctx's MCP
 gateway with one `lean-ctx addon add` — no fork, no recompile. Addons are
 user-global and reuse the gateway trust model: `[gateway]` is global-only (never
@@ -109,8 +115,8 @@ The capabilities the user consents to at install are recorded in
 
 ### `[[dependencies]]` (optional, additive in v1)
 
-Context packages this addon needs at runtime, resolved depth-1 against the
-hosted registry and installed **before** the addon is wired.
+Context packages an experimental addon could need at runtime. The historical
+design resolves them depth-1 against a proposed hosted registry before wiring.
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
@@ -128,16 +134,14 @@ optional    = false
 LEAN_MD_SKILLS_DIR = "{pack_dir:@dasTholo/lean-md-skills}"
 ```
 
-A dependency must be published to the hosted registry: the resolver looks
-versions up through the registry index only. A pack that exists solely as a
-GitHub release asset (the `[artifacts]` channel) is invisible to it, and
-`addon add` fails with "no installable version matches".
+A dependency would need to be published to that proposed registry. This is not
+a currently available distribution channel or public package ecosystem.
 
-### `[pricing]` (optional — sellable addons, Track B)
+### `[pricing]` (historical proposal — unavailable)
 
-Generalises the ctxpkg paid-artifact model to addons. Absent (`None`) → the
-addon is **free**. A paid entry must clear the [paid-listing gate](#paid-listing-gate-track-b)
-before it can be listed or sold.
+This historical proposal generalized a paid-artifact model to addons. It does
+not describe a current checkout, marketplace, listing, publisher, or billing
+path.
 
 | Field | Type | Default | Meaning |
 |-------|------|---------|---------|
@@ -169,9 +173,9 @@ the billing service.
   `addon add` refuses (no fabricated wiring). Used for announced addons that have
   not published an MCP endpoint yet.
 
-## Registry
+## Historical registry design
 
-The curated catalog. Layered like the model registry:
+An archived curated-catalog design, layered like the model registry:
 
 1. **Bundled** — `rust/data/addon_registry.json`, compiled into the binary.
 2. **User override** — `<data_dir>/addon_registry.json` (optional). An entry with
@@ -189,7 +193,7 @@ Shape:
 ```
 
 Each array element is exactly one manifest (the `[mcp]` table may be omitted for
-listed-only entries). Getting listed = a merge request adding an entry here.
+listed-only entries). This is not an open or publicly available listing path.
 
 ## Install semantics
 
@@ -246,12 +250,11 @@ installing one as a consequential, disclosed, policy-gated action.
 - Output is deterministic and local-only: no network calls, no telemetry in the
   add/list/search/info/remove paths.
 
-### Trust tier
+### Historical trust-tier design
 
-`addon.verified` splits the catalog into **verified** (maintainer-audited) and
-**community** (installable, unaudited). The tier is shown in `addon list`,
-`addon info` and the install preview, and on the website. It is set by the
-registry, never self-asserted (see the field table).
+The archived design splits a catalog into **verified** (maintainer-audited) and
+**community** (unaudited) entries. There is no current public verified catalog
+or website tier. The format is not self-asserted (see the field table).
 
 ### Static risk assessment
 
@@ -361,7 +364,7 @@ wiring, and — for stdio — a pinned `sha256` binary. The registry validator
 requires a `verified` entry to be finding-free. Run it ad hoc with
 `lean-ctx addon audit <name|path>` (non-zero exit on `fail`).
 
-### Paid-listing gate (Track B)
+### Historical paid-listing gate (unavailable)
 
 The mandatory gate before an addon may be **listed or sold for money**
 (`core::addons::commerce::paid_listing_gate`). It is a no-op for free addons; for
@@ -406,7 +409,7 @@ revocation feed layers in through the same signed-override trust anchor as the
 registry (verified before it can block). `lean-ctx addon unrevoke <name>` lifts a
 local revocation.
 
-### Usage metering (`core::addons::meter`)
+### Historical usage-metering design (`core::addons::meter`)
 
 Every gateway proxy call ([`crate::core::gateway::proxy`]) is attributed to its
 owning server and tool and counted in `<data_dir>/addons/usage.json`
@@ -414,8 +417,9 @@ owning server and tool and counted in `<data_dir>/addons/usage.json`
 A transport failure or a downstream `is_error` counts as an error. Metering is a
 **side-channel** — it never alters the proxied tool output, so output determinism
 (#498) holds — and is local-only, controlled by `addons.metering` (default on).
-It is the honest basis for marketplace "most-used" discovery, builder analytics
-and usage-metered billing (Track B). Surfaced via `lean-ctx addon usage`.
+In the archived design, this would have supported marketplace discovery, builder
+analytics, and usage-metered billing. None of those is a current LeanCTX
+offering. The implementation surface is `lean-ctx addon usage`.
 
 ### Runtime redaction + audit
 

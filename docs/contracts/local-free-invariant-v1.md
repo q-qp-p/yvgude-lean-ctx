@@ -1,20 +1,26 @@
 # Local-Free Invariant & Plane Separation — v1
 
-Status: **stable (v1)** · EPIC 12.19 · RFC §4, §6
+> **Status: historical research contract — not a public pricing, Team, or Cloud
+> offering.** The local Runtime is the current product. Any Team/Cloud plane,
+> account, organization, or commercialization material below is an archived
+> design boundary, not a roadmap commitment or available service. Current
+> product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
 
-lean-ctx is **local-first and free**. Commercialization comes from *additive*
-Team/Cloud features over a clean process/service boundary — never from gating the
-local experience. This document defines the boundary and the CI gate that
-enforces it.
+Historical implementation status: stable · EPIC 12.19 · RFC §4, §6
 
-## The two planes
+This archived contract states that future commercial work, if pursued, must be
+additive to the local Runtime and never gate it.
+
+## Historical two-plane design
 
 | Plane | What it is | How it ships | Gating |
 |-------|-----------|--------------|--------|
 | **Personal (local)** | The full single-developer experience: every MCP tool, all read modes, compression, caching, knowledge, sessions, gateway, sensitivity floor, savings ledger, audit trail, personas, plugins, extensions. | Always compiled into the binary (some capabilities are optional **compile** features, never license features). | **None.** No account, license, or plan — ever. |
-| **Team / Cloud (commercial)** | Cross-machine sync, shared knowledge graph, RBAC/SSO/SCIM, hosted ingestion, marketplace, domain packs, billing. | `lean-ctx-enterprise` (separate repo, ADR-023). | Account / plan, by design — but strictly **additive**. |
+| **Team / Cloud (historical proposal)** | Cross-machine sync, shared knowledge graph, RBAC/SSO/SCIM, hosted ingestion, marketplace, domain packs, billing. | `lean-ctx-enterprise` (separate repo, ADR-023). | Account / plan in the archived design — strictly **additive**. |
 
-`GET /v1/capabilities` reports the active `plane` (default `personal`).
+`GET /v1/capabilities` may report the historical `plane` label (default
+`personal`); it does not expose an available Team or Cloud service.
 
 ## The invariant
 

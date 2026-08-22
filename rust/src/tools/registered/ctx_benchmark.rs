@@ -15,10 +15,10 @@ impl McpTool for CtxBenchmarkTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_benchmark",
-            "Benchmark compression modes — measures token savings across all available modes for a file or project.\n\
-            WORKFLOW: use BEFORE ctx_read to pick the optimal compression strategy.\n\
+            "Local representation comparison for a file or project. It reports the selected modes' context size; it does not establish task quality or a universal gain.\n\
+            WORKFLOW: use before ctx_read when choosing a local representation.\n\
             Provide a file path, or use action=project for project-wide results.\n\
-            ANTIPATTERN: NOT for production profiling — measures compression, not runtime performance.",
+            ANTIPATTERN: not the Research Performance Benchmark — this tool does not compare matched workloads or quality gates.",
             json!({
                 "type": "object",
                 "properties": {

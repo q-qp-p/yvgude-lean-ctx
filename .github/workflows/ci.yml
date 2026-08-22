@@ -27,6 +27,16 @@ env:
   LEAN_CTX_EMBEDDINGS_AUTO_DOWNLOAD: "0"
 
 jobs:
+  narrative-governance:
+    name: Narrative governance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Enforce internal product authority
+        run: python3 scripts/check-narrative-governance.py
+
   test:
     name: Test
     strategy:

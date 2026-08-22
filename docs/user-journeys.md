@@ -3,8 +3,9 @@
 > **Status: historical product research — not current website or installation
 > copy.** This document includes proposed Context OS, plugin, multi-SDK, Cloud,
 > and commercial-plane journeys that are not active LeanCTX commitments. Current
-> truth is [`docs/internal/README.md`](internal/README.md): LeanCTX is a Context
-> Performance SDK for existing agents; the local Runtime is available and Python
+> truth is [`docs/internal/README.md`](internal/README.md): LeanCTX is **The
+> Context SDK for AI Agents**, a context-performance layer for existing agents;
+> the local Runtime is available and Python
 > SDK v1/reference-wrapper work is Preview. Do not treat commands or claims below
 > as shipped without current reference documentation and release evidence.
 

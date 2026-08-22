@@ -1,8 +1,24 @@
-# Repository docs
+# LeanCTX repository documentation
 
-This folder contains **developer-facing** docs for the `lean-ctx` repository.
+This directory documents the local LeanCTX Runtime and the work needed to
+converge its public contracts.
 
-End-user documentation lives at **https://leanctx.com/docs/getting-started**.
+LeanCTX is the **Context SDK for AI Agents**. It sits inside or alongside an
+existing agent loop and controls how context is selected, shaped, reused,
+recovered, and measured before inference. It does not replace an agent,
+orchestrate a fleet, choose a model, or host an agent platform.
+
+## Product status
+
+| Status | Public meaning |
+| --- | --- |
+| **Available** | Local Runtime: CLI, MCP, proxy paths, context selection/compression/reuse, and local receipt or offline-verification primitives. |
+| **Preview** | Python SDK v1 and its declared OpenAI Agents reference-wrapper scope; common session and receipt convergence; explicit capability and degradation matrices. |
+| **Research** | Performance Benchmark; Performance Profiles; first-class Context Kits; canonical evidence bundle; automated tuning; managed/cloud operation; marketplaces; organization controls; public rankings; and external-capability composition. |
+
+Read the status boundary before relying on a document:
+[internal product authority](internal/README.md) and the
+[Product Architecture](internal/vision/PRODUCT-ARCHITECTURE.md).
 
 ## Start here
 
@@ -10,50 +26,27 @@ End-user documentation lives at **https://leanctx.com/docs/getting-started**.
 - Contributing: [`CONTRIBUTING.md`](../CONTRIBUTING.md)
 - Security: [`SECURITY.md`](../SECURITY.md)
 - Architecture: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
-- Benchmarks: [`BENCHMARKS.md`](../BENCHMARKS.md)
+- Current tool and configuration inventories: [MCP tools](reference/generated/mcp-tools.md) · [config keys](reference/generated/config-keys.md)
 
-## Codebase entry points
+## Current local Runtime
 
-- Core binary + MCP server: [`rust/`](../rust/)
-- Cookbook (real examples + `lean-ctx-client`): [`cookbook/`](../cookbook/)
-- Editor integrations: [`packages/`](../packages/)
+- Core binary and MCP server: [`rust/`](../rust/)
+- Integration setup: [guides](guides/README.md)
+- Local Runtime reference: [reference](reference/README.md)
+- Local contracts and schemas: [contracts](contracts/README.md)
+- Python SDK v1 (**Preview**): [`packages/python-lean-ctx/`](../packages/python-lean-ctx/)
 
-## Contracts & SDKs
+## Context Kits and package material
 
-Current product status is governed by [`docs/internal/README.md`](internal/README.md).
-LeanCTX is a Context Performance SDK for existing agents: the local Runtime is
-available; Python SDK v1 and its declared reference-wrapper scope are **Preview**.
-Research and historical documents are not installation or availability claims.
+The signed `.ctxpkg` substrate exists locally. First-class Context Kit
+semantics and any hosted distribution are **Research**, not a
+public registry, marketplace, or enterprise service. See
+[package-status notes](guides/publishing-packages.md) and
+[the v2 research record](specs/context-package-v2.md).
 
-- OCLA Wire Contract: [`docs/contracts/ocla-wire-v1.schema.json`](contracts/ocla-wire-v1.schema.json)
-- Contract Pack (80+ documents): [`docs/contracts/`](contracts/)
-- Contract Portal: [`docs/contracts/README.md`](contracts/README.md)
-- Certification Levels: [`docs/contracts/certification-levels-v1.md`](contracts/certification-levels-v1.md)
-- SDK status: [`docs/reference/sdk-conformance-matrix.md`](reference/sdk-conformance-matrix.md)
-- Python SDK v1 (Preview): [`packages/python-lean-ctx/`](../packages/python-lean-ctx/)
-- Rust client substrate: [`clients/rust/lean-ctx-client/`](../clients/rust/lean-ctx-client/)
+## Historical and research material
 
-## Reference & journeys
-
-- Full function-by-function reference (organized as user journeys): [`reference/README.md`](reference/README.md)
-- **User journeys (website narrative)** — the governed, scalable context runtime wave (MCP Gateway, Context Firewall, Sensitivity Floor, Reproducible Scorecard): [`user-journeys.md`](user-journeys.md)
-- Always-current, generated appendices: [MCP tools](reference/generated/mcp-tools.md) · [config keys](reference/generated/config-keys.md)
-
-## Guides
-
-- Monorepo usage: [`guides/monorepo.md`](guides/monorepo.md)
-- Publishing context packages to ctxpkg.com (sign, publish, install,
-  lockfile): [`guides/publishing-packages.md`](guides/publishing-packages.md)
-
-## Compliance
-
-- Context Governance Benchmark (CGB) self-assessment — honest grading incl.
-  declared gaps: [`compliance/cgb-self-assessment.md`](compliance/cgb-self-assessment.md)
-
-## Design notes / tickets
-
-- Cache correctness + heatmap plan: [`premium-cache-heatmap.md`](premium-cache-heatmap.md)
-
-## Archive
-
-- Implementation Protocol (v3.4.7 era): [`docs/archive/`](archive/)
+Some repository documents preserve experiments, implementation sketches, or
+retired commercial concepts. They are not installation instructions or public
+availability claims. Each such document must carry a prominent status header;
+when it conflicts with the internal product authority, the authority wins.

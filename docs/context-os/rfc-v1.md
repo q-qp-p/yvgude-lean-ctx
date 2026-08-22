@@ -1,8 +1,8 @@
-# RFC v1 — lean-ctx Context OS: a Universal Context Infrastructure for Any Agent
+# Historical RFC — Context OS proposal
 
 | | |
 |---|---|
-| **Status** | Draft |
+| **Status** | Historical research; superseded for product positioning |
 | **Author(s)** | lean-ctx core |
 | **Created** | 2026-06-07 |
 | **Tracking** | GitLab `[LeanCTX][EPIC 12]` (open core) + `[LeanCTX][EPIC 13]` (commercial plane) |
@@ -10,6 +10,15 @@
 | **Related** | `docs/cognition-interface.md`, `docs/contracts/http-mcp-contract-v1.md`, `docs/contracts/provider-framework-contract-v1.md`, `docs/contracts/context-ir-v1.md`, `docs/contracts/team-server-contract-v1.md`, `docs/reference/09-team-cloud-ci.md`, `docs/reference/16-signed-savings-ledger.md` |
 
 ---
+
+> This RFC preserves a broad Context OS / commercial-plane proposal. It is not
+> current product documentation and does not make universal agent infrastructure,
+> Team/Cloud, extension marketplaces, or any hosted capability available.
+> LeanCTX is **The Context SDK for AI Agents**: a local context-performance layer
+> for existing agents. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md); Python SDK v1 and its
+> declared OpenAI Agents wrapper are **Preview**, while the broader surfaces in
+> this RFC are **Research** or deferred.
 
 ## 1. Summary
 

@@ -1,5 +1,12 @@
 # Extending lean-ctx — one decision, one trust model
 
+> **Status: historical/research extension design — not an available marketplace
+> or public builder surface.** LeanCTX is **The Context SDK for AI Agents**. The
+> available product is the local Runtime, CLI, MCP server, proxy, and context
+> primitives; broad third-party distribution, registries, and generic agent
+> building are deferred. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 lean-ctx can be extended in several ways. They look similar from the outside
 (they all "add capabilities"), but each targets a different job and a different
 trust model. This guide is the **single entry point**: pick the right mechanism

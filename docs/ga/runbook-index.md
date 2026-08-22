@@ -1,5 +1,9 @@
 # Operational Runbook Index
 
+> **Status: historical operations index.** It is not an availability commitment
+> for a hosted, team, or organization service. LeanCTX's current product scope is
+> governed by [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 These runbooks provide first response for standalone lean-ctx incidents. Run one
@@ -268,4 +272,3 @@ Record the runbook ID, trigger, repair, and verification result.
   [DR and Backup Guide](dr-backup-guide.md).
 - Consult the [security audit schedule](../contracts/audit-schedule-v1.md) for
   scheduled audit controls rather than treating an incident repair as an audit.
-

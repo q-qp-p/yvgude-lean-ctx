@@ -1,12 +1,12 @@
-# Context Time Machine
+# Historical Context Time Machine proposal
 
-> **North-star concept.** This document defines the positioning, the vision, the
-> architecture (built on foundations that already exist in the codebase), and a
-> phased roadmap. The GitLab epic and its sub-issues are derived from here.
-> **Status: Phases 0–4 have shipped** — the headless engine, the dashboard Time
-> Machine, restore/resume, and signed file-based share/import are all live (see
-> §10). What remains is reach, not foundations: a `ctxpkg.com` registry and a
-> side-by-side git-diff replay view.
+> **Status: historical research — not a current product surface or availability
+> claim.** This proposal predates LeanCTX's current product boundary and must not
+> be used to advertise a dashboard, hosted registry, Context Snapshot product,
+> public sharing, or universal performance proof. LeanCTX is **The Context SDK
+> for AI Agents**: an available local context-performance layer for existing
+> agents. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
 
 ## TL;DR
 

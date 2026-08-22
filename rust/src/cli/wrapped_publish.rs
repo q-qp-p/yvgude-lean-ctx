@@ -121,14 +121,6 @@ pub(crate) fn has_published() -> bool {
     !store.cards.is_empty()
 }
 
-/// Whether any published card is opted into the public leaderboard
-/// (`leanctx.com/metrics`). Distinct from `has_published`: a user can hold a
-/// private permalink (`/w/<id>`) without ever appearing on the public board, so
-/// the recap hint can keep nudging them toward `--leaderboard` until they join.
-pub(crate) fn has_leaderboard_entry() -> bool {
-    PublishedStore::load().cards.iter().any(|c| c.leaderboard)
-}
-
 // ─── Dashboard surface (#466) ─────────────────────────────────────────────────
 //
 // The dashboard's leaderboard card needs to (a) show the current submission
@@ -500,8 +492,19 @@ fn record_published(
     }
 }
 
-/// `lean-ctx gain --publish` — generate, publish, record, and copy the permalink.
+fn experimental_publication_enabled() -> bool {
+    std::env::var("LEAN_CTX_EXPERIMENTAL_PUBLICATION").as_deref() == Ok("1")
+}
+
+/// Development-only hosted publication evaluation.
 pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
+    if !experimental_publication_enabled() {
+        eprintln!(
+            "Hosted publication and public rankings are Research and unavailable in the public LeanCTX Runtime. \\
+             Set LEAN_CTX_EXPERIMENTAL_PUBLICATION=1 only for a local development evaluation."
+        );
+        return;
+    }
     let report = WrappedReport::generate(period);
     if report.tokens_saved == 0 {
         println!("Nothing to publish yet — use lean-ctx for a bit, then try again.");
@@ -539,7 +542,9 @@ pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
             }
             if leaderboard {
                 if let Some(base) = card.url.split("/w/").next() {
-                    println!("Listed on the community leaderboard: {base}/metrics#leaderboard");
+                    println!(
+                        "Listed in the development-only ranking evaluation: {base}/metrics#leaderboard"
+                    );
                 }
                 if card.account_claimed {
                     println!(
@@ -562,7 +567,7 @@ pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
                 // A nameless entry shows as "anonymous" on the board — nudge once toward a handle.
                 if effective_name.is_none() {
                     println!(
-                        "Tip: claim a handle so you're not listed as \"anonymous\" — \
+                        "Development tip: set a handle for the local evaluation instead of \"anonymous\" — \
                          lean-ctx gain --publish --leaderboard --name=\"your handle\""
                     );
                 }
@@ -570,7 +575,7 @@ pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
                 // Closes the loop for plain `--publish`: a private permalink never reaches the
                 // public board, so spell out the exact opt-in path the metrics page documents.
                 println!(
-                    "Tip: also appear on the public leaderboard at https://leanctx.com/metrics — \
+                    "Development-only ranking evaluation at https://leanctx.com/metrics — \
                      re-run with  lean-ctx gain --publish --leaderboard"
                 );
             }
@@ -593,6 +598,9 @@ pub(crate) fn publish(period: &str, name: Option<&str>, leaderboard: bool) {
 /// signed, the server upserts one card per (machine, period), so refreshing the recap never
 /// piles up duplicates on the public leaderboard.
 pub(crate) fn maybe_auto_publish(period: &str) {
+    if !experimental_publication_enabled() {
+        return;
+    }
     let cfg = crate::core::config::Config::load_global();
     let g = &cfg.gain;
     if !g.auto_publish {
@@ -658,6 +666,9 @@ pub(crate) fn maybe_auto_publish(period: &str) {
 /// Because publishes are signed, the server upserts one card per (machine, period),
 /// so even if two sessions start at once the worst case is one idempotent re-publish.
 pub(crate) fn maybe_auto_publish_background() {
+    if !experimental_publication_enabled() {
+        return;
+    }
     let cfg = crate::core::config::Config::load();
     let g = &cfg.gain;
     if !g.auto_publish {
@@ -677,6 +688,9 @@ pub(crate) fn maybe_auto_publish_background() {
 /// records the timestamp on success. Period is fixed to `all` to match the public
 /// leaderboard/hero, which aggregate the all-time per-publisher card.
 fn publish_in_background(period: &str) {
+    if !experimental_publication_enabled() {
+        return;
+    }
     let cfg = crate::core::config::Config::load_global();
     let g = &cfg.gain;
     if !g.auto_publish

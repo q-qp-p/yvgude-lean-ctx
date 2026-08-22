@@ -1,7 +1,15 @@
 # lean-ctx (Node SDK)
 
-Context compression for AI agents — a thin, dependency-free client for the local
-[lean-ctx](https://leanctx.com) daemon.
+> **Status: research implementation reference — not a supported public SDK.**
+> LeanCTX is **The Context SDK for AI Agents**, with local Runtime/CLI/MCP/proxy
+> capability available. The declared SDK Preview is Python SDK v1 and its
+> OpenAI Agents reference wrapper. This Node package must not be presented as a
+> general agent platform, universal model wrapper, hosted service, or a
+> performance guarantee. Product scope and status are governed by
+> [`docs/internal/README.md`](../../docs/internal/README.md).
+
+An experimental, dependency-free client for a local lean-ctx Runtime. Discover
+the Runtime's capabilities and handle unavailable routes explicitly.
 
 ```bash
 npm install lean-ctx-sdk

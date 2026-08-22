@@ -1,5 +1,12 @@
 # A2A Contract v1
 
+> **Status: research contract — not an available multi-agent product surface.**
+> The document records an internal coordination design. LeanCTX is **The Context
+> SDK for AI Agents**, an available local context-performance layer for existing
+> agents; generic orchestration, shared agent context, and agent-building are
+> deferred. Current scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 GitLab: `#2319`
 
 ## Ziel

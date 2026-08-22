@@ -1,5 +1,11 @@
 # Installation Matrix (Setup / Init / Update)
 
+> **Status: local Runtime implementation matrix.** This records setup paths for
+> existing agents; it does not establish a LeanCTX Cloud, generic agent platform,
+> hosted execution, or performance guarantee. LeanCTX is **The Context SDK for
+> AI Agents**. Current product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 This document defines the **exact** wiring lean-ctx performs for every supported IDE/agent and for every installation path.
 
 ## Installation paths (entry points)

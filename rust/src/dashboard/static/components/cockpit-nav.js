@@ -94,7 +94,6 @@ const COCKPIT_NAV_SECTIONS = [
       { id: 'value-gate', label: 'ValueGate', desc: 'Task outcomes, cost per accepted outcome, and quality.' },
       { id: 'replay', label: 'Time Machine', desc: 'Rewind to any snapshot — see what the model saw, why, and the token-ROI.' },
       { id: 'learning', label: 'Trends', desc: 'How your savings and efficiency change over time.' },
-      { id: 'leaderboard', label: 'Leaderboard', desc: 'Submit your tokens saved to the community leaderboard.' },
     ],
   },
   {

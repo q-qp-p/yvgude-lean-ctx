@@ -13,7 +13,7 @@ include = [
   "/scripts/**",
 ]
 license = "Apache-2.0"
-description = "Thin, stable HTTP client for the lean-ctx Context OS /v1 contract. Integrate over the process boundary without linking the engine."
+description = "Preview HTTP client for the LeanCTX /v1 context contract. Integrate over the process boundary without linking the local runtime."
 repository = "https://github.com/yvgude/lean-ctx"
 homepage = "https://leanctx.com"
 readme = "README.md"

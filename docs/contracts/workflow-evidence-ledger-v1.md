@@ -1,8 +1,16 @@
 # Workflow Evidence Ledger v1 (EvidenceLedgerV1)
 
+> **Status: historical research contract — unavailable as a public workflow or
+> evidence product.** The local Runtime has receipt and offline-verification
+> primitives; a workflow system and canonical evidence bundle remain Research.
+> Current product scope and status are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 GitLab: `#2315`
 
-LeanCTX Workflows können Transitions an **Evidence Keys** koppeln (evidence-gated transitions). Evidence Ledger v1 standardisiert, wie Evidence Items gespeichert, gehasht und für Gates ausgewertet werden.
+This archived design lets experimental LeanCTX workflows couple transitions to
+**Evidence Keys** (evidence-gated transitions). Evidence Ledger v1 describes
+how those items could be stored, hashed, and evaluated for gates.
 
 ## Ziele
 
@@ -43,4 +51,3 @@ LeanCTX Workflows können Transitions an **Evidence Keys** koppeln (evidence-gat
 - Workflow Tool: `rust/src/tools/ctx_workflow.rs`
 - Tool receipts boundary: `rust/src/server/mod.rs`
 - Proof export wiring: `rust/src/tools/ctx_proof.rs`
-

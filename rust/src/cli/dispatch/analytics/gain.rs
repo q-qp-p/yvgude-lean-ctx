@@ -1,7 +1,18 @@
-//! `lean-ctx gain` — the savings dashboard and Wrapped share cards,
+//! `lean-ctx gain` — local context-usage reports and Wrapped share cards,
 //! plus the `--opportunity` and `--raw` sub-views it absorbs.
 
 use crate::{core, tools};
+
+fn publication_research_enabled() -> bool {
+    std::env::var("LEAN_CTX_EXPERIMENTAL_PUBLICATION").as_deref() == Ok("1")
+}
+
+fn print_publication_unavailable() {
+    eprintln!(
+        "Hosted publication and public rankings are Research and unavailable in the public LeanCTX Runtime. \\
+         Set LEAN_CTX_EXPERIMENTAL_PUBLICATION=1 only for a local development evaluation."
+    );
+}
 
 pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
     // Keep the latest-version cache fresh (#563): non-blocking, 24h-TTL
@@ -58,6 +69,18 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
 
     if rest.iter().any(|a| a == "--no-cache-adjust") {
         core::context_overhead::set_no_cache_adjust(true);
+    }
+
+    let publication_requested = rest.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--publish" | "--leaderboard" | "--link" | "--rejoin"
+        ) || arg.starts_with("--rejoin=")
+    }) || unpublish_request(rest).is_some()
+        || link_request(rest).is_some();
+    if publication_requested && !publication_research_enabled() {
+        print_publication_unavailable();
+        return;
     }
 
     if let Some(req) = unpublish_request(rest) {
@@ -194,8 +217,10 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
             "{}",
             tools::ctx_gain::handle("wrapped", Some(&period), model.as_deref(), Some(limit))
         );
-        // Interactive publish prompt (if TTY and not already published)
-        if !rest.iter().any(|a| a == "--publish")
+        // Development-only interactive publication evaluation (if TTY and not
+        // already published). Public publication is Research by default.
+        if publication_research_enabled()
+            && !rest.iter().any(|a| a == "--publish")
             && std::io::IsTerminal::is_terminal(&std::io::stdin())
             && !crate::cli::wrapped_publish::has_published()
         {
@@ -223,7 +248,7 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
                     _ => {}
                 }
             }
-        } else {
+        } else if publication_research_enabled() {
             crate::cli::wrapped_publish::maybe_auto_publish(&period);
         }
     } else if rest.iter().any(|a| a == "--pipeline") {
@@ -265,7 +290,9 @@ pub(in crate::cli::dispatch) fn cmd_gain(rest: &[String]) {
         print_cloud_sync_hint();
         print_bridge_warning();
         print_split_hint();
-        crate::cli::wrapped_publish::maybe_auto_publish(&period);
+        if publication_research_enabled() {
+            crate::cli::wrapped_publish::maybe_auto_publish(&period);
+        }
         print_community_hint();
     }
 }
@@ -342,50 +369,7 @@ fn format_thousands(value: u64) -> String {
     formatted
 }
 
-fn print_cloud_sync_hint() {
-    if crate::cloud_client::is_logged_in() {
-        let plan = crate::cloud_client::resolve_effective_plan_cached();
-        if plan.plan == crate::core::billing::Plan::Free {
-            let facts = count_local_knowledge_facts();
-            if facts > 0 {
-                eprintln!(
-                    "\n  \x1b[2m\u{1f517} {facts} knowledge facts \u{2014} local only.\n     Back them up + sync across devices: lean-ctx cloud upgrade --plan pro\x1b[0m"
-                );
-            }
-        }
-    } else {
-        let facts = count_local_knowledge_facts();
-        let store = core::stats::load();
-        if store.total_input_tokens > 100_000 || facts > 10 {
-            eprintln!(
-                "\n  \x1b[2m\u{1f517} Your context runs on this machine only.\n     Sync it everywhere: lean-ctx cloud upgrade --plan pro ($9/mo)\x1b[0m"
-            );
-        }
-    }
-}
-
-fn count_local_knowledge_facts() -> usize {
-    let Ok(data_dir) = crate::core::paths::data_dir() else {
-        return 0;
-    };
-    let knowledge_dir = data_dir.join("knowledge");
-    if !knowledge_dir.is_dir() {
-        return 0;
-    }
-    std::fs::read_dir(&knowledge_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().is_dir())
-        .flat_map(|project| {
-            std::fs::read_dir(project.path())
-                .into_iter()
-                .flatten()
-                .filter_map(Result::ok)
-                .filter(|f| f.path().extension().is_some_and(|ext| ext == "json"))
-        })
-        .count()
-}
+fn print_cloud_sync_hint() {}
 
 /// `gain --cost` values savings with a *resolved* model (estimated). When the
 /// proxy has recorded real provider usage, point at the measured `spend` view so
@@ -440,43 +424,11 @@ fn print_split_hint() {
 }
 
 fn print_community_hint() {
-    let s = core::savings_ledger::summary();
-    if s.total_events == 0 {
-        return;
+    if publication_research_enabled() {
+        eprintln!(
+            "\n  \x1b[2mHosted publication is a local development evaluation only; it is not a public LeanCTX product surface.\x1b[0m"
+        );
     }
-
-    let on_board = crate::cli::wrapped_publish::has_leaderboard_entry();
-    let published = crate::cli::wrapped_publish::has_published();
-    let has_name = crate::core::config::Config::load()
-        .gain
-        .display_name
-        .is_some();
-
-    // State-aware nudge so the path to https://leanctx.com/metrics — and how to set a
-    // display name or unpublish — is always one copy-pasteable line away. Every state
-    // names both the public command and the way back out (community ask: a clear
-    // "how to publish/unpublish" line in the normal `gain` output).
-    let body = if on_board && has_name {
-        "💡 On the public leaderboard (https://leanctx.com/metrics).\n     \
-         Refresh:  lean-ctx gain --publish --leaderboard\n     \
-         Multiple machines?  lean-ctx gain --link  (combine into one entry)\n     \
-         Remove:  lean-ctx gain --unpublish"
-            .to_string()
-    } else if on_board {
-        "💡 You're on the leaderboard as \"anonymous\". Claim your handle:\n     \
-         lean-ctx gain --publish --leaderboard --name=\"your handle\"\n     \
-         Multiple machines?  lean-ctx gain --link  (combine into one entry)"
-            .to_string()
-    } else if published {
-        "💡 You're published privately. List on the public leaderboard at https://leanctx.com/metrics:\n     \
-         lean-ctx gain --publish --leaderboard --name=\"your handle\"   ·   Remove:  lean-ctx gain --unpublish"
-            .to_string()
-    } else {
-        "💡 Join the public leaderboard at https://leanctx.com/metrics (opt-in — shares only 4 aggregate totals, never your code):\n     \
-         Publish:  lean-ctx gain --publish --leaderboard --name=\"your handle\"   ·   Remove:  lean-ctx gain --unpublish"
-            .to_string()
-    };
-    eprintln!("\n  \x1b[2m{body}\x1b[0m");
 }
 
 /// A prominent, friendly nudge to support lean-ctx financially. The engine is

@@ -18,7 +18,7 @@ Top-level configuration keys
 - `auto_capture` (bool, default `true`) — Automatic knowledge capture from tool findings
 - `auto_mode_learning` (bool, default `false` — env `LEAN_CTX_AUTO_MODE_LEARNING`) — Opt-in: let adaptive learning signals (predictor, bandit, heatmap, adaptive policy, bounce/path memory) influence `auto` mode. Off by default for a deterministic, I/O-light cascade (capability guards + size/task heuristic only) that keeps output byte-stable for prompt caching. Override via LEAN_CTX_AUTO_MODE_LEARNING
 - `bm25_max_cache_mb` (u64, default `128` — env `LEAN_CTX_BM25_MAX_CACHE_MB`) — Maximum BM25 cache file size in MB
-- `buddy_enabled` (bool, default `true`) — Enable the buddy system for multi-agent coordination
+- `buddy_enabled` (bool, default `true`) — Enable the experimental local buddy helper. It does not enable a public multi-agent product or MCP surface.
 - `bypass_hints` (enum: on | off | aggressive, default `on` — env `LEAN_CTX_BYPASS_HINTS`) — Bypass-hint mode: when agents use native Read/Grep instead of lean-ctx tools, a hint is appended to the next tool response. on (default), off, aggressive (hint on every call, no cooldown). Override via LEAN_CTX_BYPASS_HINTS
 - `cache_max_tokens` (usize, default `0` — env `LEAN_CTX_CACHE_MAX_TOKENS`) — Token budget for the in-memory ctx_read cache (0 = built-in default 500k). When exceeded, least-valuable entries are evicted immediately via RRF (recency x frequency x size) so reads never block; eviction is not deferred to the staleness TTL
 - `cache_policy` (enum(aggressive|safe|off), default `aggressive` — env `LEAN_CTX_CACHE_POLICY`) — Cache policy for ctx_read: aggressive (13-tok stubs), safe (map on hit), off (always disk)
@@ -31,7 +31,7 @@ Top-level configuration keys
 - `custom_aliases` (array, default `[]`) — Custom command aliases (array of {command, alias} entries)
 - `dashboard_auth` (bool, default `true`) — Require Bearer-token auth for the dashboard (default true). Set false for no-auth mode protected by Sec-Fetch-Site/Origin/Host checks. Override per-run with --no-auth or LEAN_CTX_DASHBOARD_AUTH
 - `debug_log` (bool, default `false` — env `LEAN_CTX_DEBUG_LOG`) — Opt-in (default off): write a human-readable debug log of intercepted MCP tool calls and hook routing decisions (lean-ctx vs native, with the reason) to <state_dir>/logs/debug.log. View with `lean-ctx debug-log`
-- `default_tool_categories` (string[], default `[]`) — Tool categories active by default (core, arch, debug, memory, metrics, session). Override via LCTX_DEFAULT_CATEGORIES
+- `default_tool_categories` (string[], default `[]`) — Tool categories active by default. `core` is the default; `session` enables experimental local collaboration tools only when explicitly listed. Override via LCTX_DEFAULT_CATEGORIES
 - `delta_explicit` (boolean, default `false`) — Serve explicit full/lines re-reads of changed cached files as diffs (opt-in). Override via LCTX_DELTA_EXPLICIT=1
 - `disabled_tools` (string[], default `[]`) — Tools to exclude from the MCP tool list
 - `enable_wakeup_ctx` (bool, default `true`) — Append wakeup briefing (facts, session summary) to ctx_overview output. Set false to reduce context bloat when calling ctx_overview frequently.
@@ -89,9 +89,9 @@ Top-level configuration keys
 - `slow_command_threshold_ms` (u64, default `5000`) — Commands taking longer than this (ms) are recorded in the slow log. Set to 0 to disable
 - `structure_first` (bool, default `false` — env `LEAN_CTX_STRUCTURE_FIRST`) — Opt-in: bias `auto` toward structure-first reads (map) for medium code files on a cold read. Off by default — for phase-isolated harnesses with no warm-session cache payback. Override via LEAN_CTX_STRUCTURE_FIRST
 - `symbol_map_auto` (bool, default `false`) — Opt-in: α-code identifier substitution in aggressive reads (>50-file projects). Off by default — abbreviated symbols hinder editing/refactoring
-- `team_auto_push` (bool, default `false`) — Opt-in: daemon periodically pushes your signed savings batch to team_url (off by default; requires team_url + team_token)
-- `team_token` (string?, default `null`) — Bearer token for the team server (push needs a member token; pull/auto-push needs the configured team token)
-- `team_url` (string?, default `null`) — Team server base URL for the opt-in savings roll-up (push/pull)
+- `team_auto_push` (bool, default `false`) — Research-only organization roll-up switch. Off by default and inactive in the public local Runtime.
+- `team_token` (string?, default `null`) — Research-only organization roll-up credential. Inactive in the public local Runtime.
+- `team_url` (string?, default `null`) — Research-only organization roll-up URL. Inactive in the public local Runtime.
 - `tee_mode` (enum: never | failures | highcompression | always, default `highcompression`) — Controls when shell output is tee'd to disk for later retrieval
 - `terse_agent` (enum: off | lite | full | ultra, default `off` — env `LEAN_CTX_TERSE_AGENT`) — Controls agent output verbosity via instructions injection
 - `theme` (string, default `default`) — Dashboard color theme
@@ -143,9 +143,9 @@ Cross-project boundary and access control policies
 
 ## `[cloud]`
 
-Cloud feature settings
+Research-only hosted settings. They are inactive in the public local Runtime.
 
-- `auto_sync` (bool, default `false`) — Push the Personal Cloud (knowledge, commands, CEP, gotchas, buddy, feedback) silently once per day at session end (Pro; toggle: `lean-ctx cloud autosync on|off`)
+- `auto_sync` (bool, default `false`) — Research-only hosted synchronization setting. Inactive in the public local Runtime; use only with an explicit development evaluation flag.
 
 ## `[context]`
 
@@ -192,13 +192,13 @@ Semantic-embedding engine settings (model selection for ctx_semantic_search)
 
 ## `[gain]`
 
-Token-savings recap publishing (gain --publish / auto-publish)
+Research-only hosted publication settings (inactive by default)
 
-- `auto_publish` (bool, default `true`) — Automatically (re)publish your Wrapped recap when you run `lean-ctx gain` (opt-in, off by default; throttled and sends only an aggregate payload)
-- `auto_publish_interval_hours` (u64, default `24`) — Minimum hours between automatic publishes (throttle; default 24)
-- `display_name` (string?, default `null`) — Optional display name shown on your published card / leaderboard entry
-- `last_auto_publish` (string?, default `null`) — Timestamp of the last automatic publish (written by lean-ctx for throttling — not meant to be edited)
-- `leaderboard` (bool, default `true`) — When auto-publishing, also list the card on the public opt-in leaderboard
+- `auto_publish` (bool, default `false`) — Research-only hosted publication setting. Off by default and inactive unless LEAN_CTX_EXPERIMENTAL_PUBLICATION=1 is set for a local development evaluation.
+- `auto_publish_interval_hours` (u64, default `24`) — Minimum hours between development-evaluation publishes (throttle; default 24)
+- `display_name` (string?, default `null`) — Optional development-evaluation display name for a hosted publication experiment
+- `last_auto_publish` (string?, default `null`) — Timestamp of the last development-evaluation publish (written for throttling — not meant to be edited)
+- `leaderboard` (bool, default `false`) — Research-only public-ranking setting. Off by default and inactive in the public local Runtime.
 
 ## `[gateway]`
 
@@ -226,10 +226,10 @@ Downstream MCP servers (array of tables: `[[gateway.servers]]`)
 
 ## `[gateway_server.mcp_servers]`
 
-Org-gateway MCP registry (array of tables: `[[gateway_server.mcp_servers]]`): reverse-proxied under /mcp/{id} with per-person keys, metered into mcp_events, tool definitions hash-tracked (observe stage, GL#91)
+Research-only organization gateway registry (array of tables: `[[gateway_server.mcp_servers]]`). It is inactive in the public local Runtime and must be explicitly configured for development evaluation.
 
 - `auth_env` (string, default `""`) — Env var holding the upstream credential the gateway injects as `Authorization: Bearer <env value>` (callers never see it)
-- `enabled` (bool, default `true`) — Per-server switch (default true)
+- `enabled` (bool, default `true`) — Research-only per-server switch (default true once a development configuration explicitly adds this server)
 - `id` (string, default `""`) — Registry id; becomes the governed route `/mcp/{id}` on the proxy port (lowercase alnum/-/_)
 - `url` (string, default `""`) — Upstream Streamable-HTTP endpoint (HTTPS; loopback HTTP ok; plain HTTP needs [proxy] allow_insecure_http_upstream)
 

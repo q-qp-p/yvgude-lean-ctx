@@ -1,6 +1,15 @@
 # Cognition Interface (v1)
 
-LeanCTX cannot modify proprietary model weights. Instead, it ships a **Cognition Interface**: a deterministic control surface that shapes the model’s *effective* reasoning by controlling **what it sees**, **how it is budgeted**, **what is remembered**, and **what must be verified**.
+> **Status: research architecture note — not a public product name or capability
+> claim.** LeanCTX is **The Context SDK for AI Agents**, a local
+> context-performance layer for existing agents. Current scope and status are
+> governed by [`docs/internal/README.md`](internal/README.md). Profiles,
+> autonomous orchestration, Team Server, and broader SDK surfaces referenced
+> below are Research or unavailable.
+
+LeanCTX cannot modify proprietary model weights. This note explores a
+**Cognition Interface**: a deterministic control surface for shaping what an
+agent receives, how it is budgeted, remembered, and verified.
 
 This is production-realistic for API LLMs and becomes even stronger when paired with open-weights models in an optional Cognition Lab track.
 
@@ -80,4 +89,3 @@ For open-weights experimentation (or internal models), the same interface become
 - ONNX models with versioning + rollout policies
 
 See: `docs/cognition-lab/plan-v1.md` (tracked in GitLab `#2344`).
-

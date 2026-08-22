@@ -1,10 +1,15 @@
 # Conformance & Reproducibility — `conformance-v1`
 
-Status: stable · EPIC 12.17 · Code: [`rust/src/core/conformance.rs`](../../rust/src/core/conformance.rs)
+> **Status: implementation contract, not canonical product copy.** Conformance
+> checks describe local implementation behavior; they do not announce a
+> platform, extension ecosystem, or performance outcome. Current product scope
+> and status are governed by [`docs/internal/README.md`](../internal/README.md).
+
+Historical implementation status: stable · EPIC 12.17 · Code: [`rust/src/core/conformance.rs`](../../rust/src/core/conformance.rs)
 
 A self-check any user or CI can run to prove a lean-ctx instance honors its own
-contracts and that its extension surface behaves. It is the trust anchor for the
-Context OS: third-party extensions, SDKs, and domain packs can rely on these
+contracts and that its extension surface behaves. It is a local implementation
+check; experimental third-party extensions, SDKs, and domain packs can rely on these
 invariants holding on every build.
 
 ## Running it

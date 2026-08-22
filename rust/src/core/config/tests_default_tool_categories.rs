@@ -3,15 +3,12 @@ use super::*;
 // --- Defaults ---
 
 #[test]
-fn default_returns_core_and_session() {
+fn default_returns_core_only() {
     if std::env::var("LCTX_DEFAULT_CATEGORIES").is_ok() {
         return;
     }
     let cfg = Config::default();
-    assert_eq!(
-        cfg.default_tool_categories_effective(),
-        vec!["core", "session"]
-    );
+    assert_eq!(cfg.default_tool_categories_effective(), vec!["core"]);
 }
 
 #[test]

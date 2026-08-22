@@ -1,5 +1,10 @@
 # API Guide
 
+> **Status: local implementation reference.** Routes and schemas describe only
+> the installed Runtime's discoverable capability; they do not create a hosted
+> API, generic agent platform, or support commitment. LeanCTX is **The Context
+> SDK for AI Agents**; see [`docs/internal/README.md`](../internal/README.md).
+
 This guide summarizes the stable integration surfaces. Discover a running
 instance before calling tools: `GET /v1/capabilities` and `GET /v1/openapi.json`
 report the enabled features and published HTTP schema.

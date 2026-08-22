@@ -1,9 +1,9 @@
 /**
- * ROI & Plan monitoring view.
+ * Local evidence and context-usage view.
  *
- * Renders the local, signed savings ROI (tokens / $ / energy saved + verification
- * provenance), the effective commercial plan with offline-grace status and its
- * entitlements, and the daily savings trend. Read-only; data comes from /api/roi.
+ * Renders local observations, evidence metadata, and a daily trend. Hosted
+ * plans, organization controls, and public publication do not appear in the
+ * public Runtime dashboard.
  */
 
 function croiApi() {
@@ -16,13 +16,6 @@ function croiFmt() {
 
 function croiCharts() {
   return window.LctxCharts || {};
-}
-
-/** Humanise a unix-seconds verification time into "Nd ago". */
-function ageDays(verifiedAt) {
-  if (!verifiedAt) return null;
-  var secs = Math.max(0, Math.floor(Date.now() / 1000) - Number(verifiedAt));
-  return Math.floor(secs / 86400);
 }
 
 /** How often the view re-fetches /api/roi while it is the active view. */
@@ -90,34 +83,18 @@ class CockpitRoi extends HTMLElement {
     if (!this._data) this.render();
 
     try {
-      // Individual + local only. The team roll-up is a separate surface
-      // (web /account/team, or `lean-ctx savings team`) — not this cockpit.
-      // Stats feed the estimated cost-analysis card (moved here from Home,
-      // GL #486) and are clearly labelled as estimates next to the ledger.
       var cached = window.LctxApi && window.LctxApi.cachedFetch
         ? window.LctxApi.cachedFetch : fetchJson;
       var results = await Promise.all([
         fetchJson('/api/roi', { timeoutMs: 12000 }),
         cached('/api/stats', { timeoutMs: 12000 }).catch(function () { return null; }),
-        fetchJson('/api/spend', { timeoutMs: 8000 }).catch(function () { return null; }),
-        // Org usage breakdown (enterprise#20): central admin API when
-        // [gateway_server].admin_url is set, else this machine's snapshot.
-        fetchJson('/api/usage-breakdown', { timeoutMs: 12000 }).catch(function () { return null; }),
-        fetchJson('/api/kernel', { timeoutMs: 8000 }).catch(function () { return null; }),
-        fetchJson('/api/solution', { timeoutMs: 8000 }).catch(function () { return null; }),
       ]);
       this._data = results[0];
       this._stats = results[1];
-      // Measured spend (real provider bill) + server-side pricing so the
-      // estimated cost model de-hardcodes its blended rate (GL #486 follow-up).
-      this._spend = results[2];
-      this._usage = results[3];
-      this._kernel = results[4];
-      this._solution = results[5];
-      var Fp = croiFmt();
-      if (this._spend && this._spend.pricing && Fp.applyServerPricing) {
-        Fp.applyServerPricing(this._spend.pricing);
-      }
+      this._spend = null;
+      this._usage = null;
+      this._kernel = null;
+      this._solution = null;
       this._updatedAt = new Date();
       // Output-echo summary (#501) and edit-efficiency counters (#1008) ride
       // on /api/stats; non-fatal if missing.
@@ -167,14 +144,8 @@ class CockpitRoi extends HTMLElement {
     if (!roi.total_events) {
       this.innerHTML =
         '<div class="card"><div class="empty-state">' +
-        '<h2>No verified savings yet</h2>' +
-        '<p>Use lean-ctx (ctx_read / ctx_search / \u2026) for a while. Your signed savings ' +
-        'ledger fills up automatically, then this view shows your ROI.</p></div></div>';
-      // Still render org usage + plan so gateway admins see the org picture
-      // (and users their plan) even before this machine has local events.
-      this.innerHTML += this._renderOrgUsage(esc);
-      this.innerHTML += this._renderPlan(esc);
-      this.innerHTML += this._renderSolutionEfficiency(esc);
+        '<h2>No local evidence yet</h2>' +
+        '<p>Use lean-ctx (ctx_read / ctx_search / \u2026) for a while. This view will show local context observations and evidence metadata.</p></div></div>';
       return;
     }
 
@@ -183,17 +154,11 @@ class CockpitRoi extends HTMLElement {
     body += this._renderOutputEfficiency(esc);
     body += this._renderEditEfficiency(esc);
     body += this._renderOutputSavings(esc);
-    body += this._renderSolutionEfficiency(esc);
     body += this._renderVerification(esc);
     body += this._renderMethodology();
-    body += this._renderMeasuredSpend(esc);
-    body += this._renderOrgUsage(esc);
-    body += this._renderCostAnalysis(esc);
-    body += this._renderPlan(esc);
     body += this._renderTrendCard(esc);
     body += this._renderBreakdown(esc);
     body += this._renderProviders(esc);
-    body += this._renderShare(esc);
     this.innerHTML = body;
   }
 
@@ -553,12 +518,7 @@ class CockpitRoi extends HTMLElement {
     );
   }
 
-  /**
-   * Output Tokens Saved (#895). lean-ctx shapes output via cache-safe effort
-   * control + verbosity steering; this card reports how much that saved. It is
-   * honestly labelled: a real A/B **measured** reduction with a 95% CI when an
-   * output_holdout is running, otherwise a model-based **estimate** band.
-   */
+  /** Local output observations; not a Performance Benchmark (Research). */
   _renderOutputSavings(esc) {
     var o = this._data && this._data.output;
     if (!o || !o.status) return '';
@@ -569,12 +529,11 @@ class CockpitRoi extends HTMLElement {
     if (o.status === 'measured') {
       return (
         '<div class="card" style="margin-bottom:16px">' +
-        '<div class="card-header"><h3>Output Tokens Saved</h3>' +
-        '<span class="tag tg">measured</span></div>' +
+        '<div class="card-header"><h3>Output observations</h3>' +
+        '<span class="tag tg">local sample</span></div>' +
         '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">' +
         '<div class="hv" style="color:var(--green)">' + esc(fix1(o.reduction_pct)) + '%</div>' +
-        '<span class="hs">fewer output tokens \u00b7 95% CI ' +
-        esc(fix1(o.ci95_low_pct)) + '\u2013' + esc(fix1(o.ci95_high_pct)) + '%</span></div>' +
+        '<span class="hs">difference in this local sample</span></div>' +
         '<div class="sr"><span class="sl">Avg output / turn</span><span class="sv">' +
         esc(String(round(o.control_avg_output))) + ' \u2192 ' +
         esc(String(round(o.treatment_avg_output))) + ' tok ' +
@@ -583,7 +542,7 @@ class CockpitRoi extends HTMLElement {
         esc(String(n(o.control_n))) + ' control \u00b7 ' +
         esc(String(n(o.treatment_n))) + ' shaped turns</span></div>' +
         '<p class="hs" style="margin-top:8px;color:var(--muted)">' +
-        'Real A/B result from your <code>output_holdout</code> control arm.</p>' +
+        'Local control and shaped turns; this does not establish a benchmark or agent quality.</p>' +
         '</div>'
       );
     }
@@ -591,28 +550,25 @@ class CockpitRoi extends HTMLElement {
       var need = n(o.needed_per_arm);
       return (
         '<div class="card" style="margin-bottom:16px">' +
-        '<div class="card-header"><h3>Output Tokens Saved</h3>' +
-        '<span class="tag tb">holdout running</span></div>' +
-        '<p class="hs">Collecting paired turns: <b>' + esc(String(n(o.control_n))) + '/' + esc(String(need)) +
+        '<div class="card-header"><h3>Output observations</h3>' +
+        '<span class="tag tb">collecting local data</span></div>' +
+        '<p class="hs">Collected: <b>' + esc(String(n(o.control_n))) + '/' + esc(String(need)) +
         '</b> control, <b>' + esc(String(n(o.treatment_n))) + '/' + esc(String(need)) + '</b> shaped. ' +
-        'A measured reduction with a 95% CI appears once both arms reach ' + esc(String(need)) + ' turns.</p>' +
+        'These observations do not establish a Performance Benchmark (Research).</p>' +
         '</div>'
       );
     }
     // estimated
     return (
       '<div class="card" style="margin-bottom:16px">' +
-      '<div class="card-header"><h3>Output Tokens Saved</h3>' +
-      '<span class="tag ty">estimated</span></div>' +
+      '<div class="card-header"><h3>Output observations</h3>' +
+      '<span class="tag ty">local estimate</span></div>' +
       '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">' +
       '<div class="hv">~' + esc(String(round(o.point_pct))) + '%</div>' +
       '<span class="hs">model-based estimate \u00b7 band ' +
       esc(String(round(o.low_pct))) + '\u2013' + esc(String(round(o.high_pct))) + '%</span></div>' +
       '<p class="hs" style="margin-top:6px;color:var(--muted)">' +
-      'This is an estimate, not a measurement. Enable a holdout control arm to ' +
-      'measure your real output savings:</p>' +
-      '<pre class="mono" style="background:var(--bg-elev,#0d1117);padding:10px;border-radius:8px;overflow:auto">' +
-      'lean-ctx config set proxy.output_holdout 0.1</pre>' +
+      'This is a local estimate, not a measurement, benchmark, or guarantee.</p>' +
       '</div>'
     );
   }
@@ -687,60 +643,6 @@ class CockpitRoi extends HTMLElement {
       'Numbers derive from a local, hash-chained, Ed25519-signed savings ledger \u2014 ' +
       'tamper-evident and shareable. This does not establish quality, exclusive ' +
       'attribution, customer approval, settlement eligibility, or invoice authority.</p>' +
-      '</div>'
-    );
-  }
-
-  _renderPlan(esc) {
-    var plan = (this._data && this._data.plan) || { plan: 'free', source: 'none', entitlements: {} };
-    var e = plan.entitlements || {};
-    var label = String(plan.plan || 'free');
-
-    var sourceTag;
-    if (plan.source === 'live') {
-      sourceTag = '<span class="tag tg">live</span>';
-    } else if (plan.source === 'cached') {
-      var age = ageDays(plan.verified_at);
-      var remaining = age == null ? null : Math.max(0, (plan.grace_days || 14) - age);
-      sourceTag = '<span class="tag tb">cached' +
-        (age == null ? '' : ' \u00b7 verified ' + age + 'd ago, valid ' + remaining + 'd more') + '</span>';
-    } else if (plan.source === 'expired') {
-      sourceTag = '<span class="tag ty">cached plan expired</span>';
-    } else {
-      sourceTag = '<span class="tag tb">no account</span>';
-    }
-
-    function ent(name, ok) {
-      return '<div class="sr"><span class="sl">' + esc(name) + '</span>' +
-        '<span class="sv">' + (ok ? '<span class="tag tg">yes</span>' : '<span class="tag tb">no</span>') +
-        '</span></div>';
-    }
-    var seats = e.seats === 4294967295 ? 'unlimited' : (e.seats != null ? String(e.seats) : '\u2014');
-
-    var cta;
-    if (plan.source === 'expired') {
-      cta = 'Reconnect to restore your plan: <code>lean-ctx login</code> then <code>lean-ctx sync</code>.';
-    } else if (label === 'free') {
-      cta = 'Upgrade for hosted sync &amp; team ROI roll-up: <code>lean-ctx cloud upgrade</code>.';
-    } else if (label === 'pro') {
-      cta = 'On a team? Aggregate everyone\u2019s ROI: <code>lean-ctx cloud upgrade --plan team</code>.';
-    } else if (label === 'team') {
-      cta = 'Need org SSO + 1-year audit? <code>lean-ctx cloud upgrade --plan business</code>.';
-    } else {
-      cta = 'Manage billing &amp; invoices from the customer portal.';
-    }
-
-    return (
-      '<div class="card" style="margin-bottom:16px">' +
-      '<div class="card-header"><h3>Plan: ' + esc(label) + '</h3>' + sourceTag + '</div>' +
-      ent('Personal Cloud sync', !!e.cloud_sync) +
-      '<div class="sr"><span class="sl">Seats</span><span class="sv">' + esc(seats) + '</span></div>' +
-      ent('Private registry', !!e.private_registry) +
-      ent('Org SSO (OIDC)', !!e.sso_oidc) +
-      ent('SAML SSO / SCIM', !!e.sso_scim) +
-      ent('Supporter', !!e.supporter) +
-      '<p class="hs" style="margin-top:8px;color:var(--muted)">' + cta + '</p>' +
-      '<p class="hs" style="color:var(--muted)">The local engine is always free and never gated.</p>' +
       '</div>'
     );
   }

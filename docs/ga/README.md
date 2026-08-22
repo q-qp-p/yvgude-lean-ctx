@@ -1,5 +1,11 @@
 # lean-ctx — GA Documentation Pack
 
+> **Status: historical operations pack — not a GA, Cloud, team, or enterprise
+> availability claim.** Use current local Runtime documentation and `lean-ctx
+> doctor` to establish behavior. LeanCTX is **The Context SDK for AI Agents**;
+> canonical product scope and status are in
+> [`docs/internal/README.md`](../internal/README.md).
+
 ## Overview
 
 This pack is for administrators deploying lean-ctx, operators running it, and
