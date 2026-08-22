@@ -55,6 +55,37 @@ REQUIRED_TEXT: dict[str, tuple[str, ...]] = {
     ),
     "docs/internal/vision/PRODUCT-ARCHITECTURE.md": (
         "The Context SDK for AI Agents",
+        "ContextPlan",
+        "post-v1 Research target",
+    ),
+    "docs/internal/vision/05-CONTEXT-SDK-POSITIONING.md": (
+        "ContextPlan",
+        "post-v1 Research targets",
+        "Context Workspace & `.ctxpkg` Plan",
+    ),
+    "docs/internal/execution/SDK-V1-SPEC.md": (
+        "Historical Python Preview implementation specification",
+        "Runtime-parity boundary",
+    ),
+    "docs/internal/vision/03-ROADMAP.md": (
+        "Historical product-version roadmap",
+        "Context Workspace & `.ctxpkg` Plan",
+    ),
+    "docs/internal/reference/REPO-CONVERGENCE.md": (
+        "Historical repository-convergence record",
+        "Preview compatibility surface",
+    ),
+    "docs/internal/reference/WHAT-WE-HAVE.md": (
+        "Historical implementation audit",
+        "runtime-parity proof",
+    ),
+    "docs/internal/execution/CONVERGENCE-PLAN.md": (
+        "Historical LeanCTX convergence plan",
+        "Context Workspace & `.ctxpkg` Plan",
+    ),
+    "docs/internal/reference/MASTER-VISION.md": (
+        "Historical strategy synthesis",
+        "Context Workspace & `.ctxpkg` Plan",
     ),
     "docs/internal/execution/WEBSITE-REDESIGN.md": (
         "Status:** Internal target copy",
@@ -106,9 +137,12 @@ STATUS_GUARDED_RECORDS = (
 )
 
 CANONICAL_FEATURE_STATUSES = {
+    "ContextWorkspace / Checkpoint / Delta": "Research",
+    "Shared project context and handoffs": "Research",
     "Performance Profiles": "Research",
     "Context Kits": "Research",
     "Performance Benchmark": "Research",
+    "Named SDK `wrap()` adapters": "Preview",
 }
 
 

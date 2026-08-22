@@ -11,6 +11,12 @@ portable package identity, pinning, signer behavior, and the public
 ContextKitV1 contract are still **Research**. The local substrate must not be
 represented as a public publisher service or as a general package manager.
 
+A `.ctxpkg` is not a live ContextWorkspace, a receipt, an evidence bundle, or
+a Cloud account. Existing Kit TOML, legacy `.ctx.json` export, snapshots and
+package substrate remain distinct until a versioned composition/migration
+contract exists. See the internal
+[Context Workspace & `.ctxpkg` Plan](../internal/vision/07-CONTEXT-WORKSPACE-CTXPKG-PLAN.md).
+
 ## Research direction
 
 Earlier work explored a richer package shape for reusable context assets,

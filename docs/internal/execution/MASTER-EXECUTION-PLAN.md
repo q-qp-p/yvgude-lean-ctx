@@ -12,15 +12,25 @@
 
 ```text
 WS-1: CODEBASE CLEANUP          ██████████  DONE (2026-08-20)
-WS-2: SDK V1 + EVIDENCE         ██████████  Technical v1 complete; commercial sprint separate
+WS-2: SDK V1 + EVIDENCE         ██████████  Phase-A substrate complete; public SDK remains Preview
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     ██████████  Native + bounded external capability paths complete
-WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
+WS-4: OCLA + COMPOSABLE (B)     ██████████  Substrate complete; public capability composition remains Research
+WS-5: PARTNERSHIP (C)           —— DEFERRED (no near-term partner execution)
 WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; no automated selection claims
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
 WS-8: MANUAL SELECTION (D)      ██████░░░░  Signed evidence is revalidated at apply time; independent verification and cross-implementation conformance remain
 WS-9: THINKERY CONTROL PLANE(E) ░░░░░░░░░░  Private commercial work; separate repository/infrastructure
 ```
+
+**Status rule:** A completed implementation task or published package does not
+promote a product surface to Available. The canonical status map and the
+Engine/SDK/Cloud dependency order are in
+[`../vision/06-ENGINE-SDK-CLOUD-PLAN.md`](../vision/06-ENGINE-SDK-CLOUD-PLAN.md);
+the ContextWorkspace, checkpoint and `.ctxpkg` target gates are in
+[`../vision/07-CONTEXT-WORKSPACE-CTXPKG-PLAN.md`](../vision/07-CONTEXT-WORKSPACE-CTXPKG-PLAN.md).
+The cross-product implementation sequence, RFC backlog and stop conditions are
+in [`../vision/08-COMPLETE-IMPLEMENTATION-ROADMAP.md`](../vision/08-COMPLETE-IMPLEMENTATION-ROADMAP.md).
+This file schedules approved work; it does not supersede those authorities.
 
 ---
 
@@ -58,6 +68,10 @@ cargo fmt --check
 **Timeline:** 2-3 weeks after cleanup  
 **Exit criterion:** Reproducible local Receipt with offline verification
 
+**Interpretation:** This is an implementation/proof-loop milestone. Python SDK
+v1 and its OpenAI Agents reference wrapper remain **Preview** until their
+contract, compatibility and support gates are explicitly promoted.
+
 | # | Task | Status |
 |---|------|--------|
 | 2.1 | Consolidate Python types from `py-sdk/` + `clients/python/` into `packages/python-lean-ctx/` | **done** (pre-existing) |
@@ -70,6 +84,7 @@ cargo fmt --check
 | 2.8 | Write Quickstart documentation | **done** (README 342 LOC) |
 | 2.9 | Publish v1.0 on PyPI | **done** (lean-ctx-python 1.0.0) |
 | 2.10 | Run first Thinkery Agent Tuning Sprint (CHF 7,500) | **ON HOLD** (commercial track; #1254; does not block vision engineering or public Research releases) |
+| 2.11 | Freeze Workspace, checkpoint and `.ctxpkg` target architecture | **done** (internal plan; remains Research—no Workspace API or Cloud claim promoted) |
 
 ---
 
@@ -123,24 +138,13 @@ cargo fmt --check
 
 ---
 
-## WS-5: ~~Partnership + Ecosystem~~ CANCELLED
+## WS-5: Partnership + Ecosystem — Deferred
 
-**Decision (2026-08-21):** Gestrichen. LeanCTX strebt Monopolstellung an —
-absolute Performance aus einer Hand statt composable Partner-Oekosystem.
-Die technische Faehigkeit (OCLA external capability path) existiert als
-Fallback fuer Enterprise-Kunden, wird aber nicht aktiv beworben oder
-entwickelt.
-
-**Reasoning:**
-- Partner-Oekosystem gibt Wertschoepfung ab
-- "Composable Layer" positioniert LeanCTX als Infrastruktur statt Loesung
-- Monopol auf Token-Savings-Kette ist strategisch staerker
-- Kapazitaet besser investiert in eigene Performance-Verbesserungen
-
-**Was bleibt:**
-- WS-4.8 External Capability Cookbook (technische Referenz)
-- OCLA Contract (Enterprise kann eigene Capabilities bauen falls noetig)
-- Kein aktives Marketing, keine Partner-Akquise, kein Oekosystem-Bau
+No near-term partner execution is planned. The bounded external-capability
+path remains a local technical compatibility reference; it is not a
+marketplace, a public ecosystem strategy or a reason to broaden the product
+boundary. Revisit only after the local SDK evidence path and contract gates
+have passed.
 
 ## WS-6: Benchmark + Calibrator (Research Track)
 **Goal:** Validate the Calibrator concept: one agent, two profiles, controlled benchmark, quality preserved, correct recommendation.
@@ -175,6 +179,11 @@ predeclared quality gate, complete provenance, and independently runnable verifi
 report formatter, offline verifier. No learned ranking, fleet telemetry, customer data, or
 hosted history.
 
+**Promotion gate:** a governed or shared claim additionally requires explicit
+enforced/degraded sandbox status, resolved identity/scope, monotonic policy,
+declared data mode, external signer trust, licensing/repository approval and a
+named jurisdiction/export review owner. Missing inputs block promotion.
+
 | # | Task | Exit criterion | Status |
 |---:|---|---|---|
 | 7.1 | Versioned evaluated-workload manifest | Stable identity, declared QA/code evaluator, bounded code-test fixture, deterministic validation | in progress — versioned source-probe and code-repair manifests exist; hardened bounded fixture execution remains required |
@@ -191,6 +200,11 @@ hosted history.
 operator selection, exported profile, and rollback. Learned rankings, customer priors, and
 automatic promotion stay private Class D/E.
 
+**Promotion gate:** recommendations must preserve the same security, identity,
+policy, data-mode and trusted-verifier admission record as their evidence;
+unsigned/self-attested artifacts may remain local observations but cannot
+justify a governed or Cloud promotion.
+
 | # | Task | Exit criterion | Status |
 |---:|---|---|---|
 | 8.1 | Evidence-qualified candidate input | Unevaluated or incomplete-cost runs cannot feed a recommendation | in progress — creation validates evaluated receipt-linked runs; apply replays the pinned bundle's signed inventory, exact specs/results, and receipt artifacts, while independent verification remains required for public claims |
@@ -198,19 +212,20 @@ automatic promotion stay private Class D/E.
 | 8.3 | Explicit apply/rollback CLI | Operator approves a named profile; prior profile is preserved and restorable | in progress — a later apply requires an explicit bundle path and rejects unavailable, changed, unsigned, semantically mismatched, stale, or profile-hash-mismatched evidence; independent verification remains required |
 | 8.4 | Manual-selection conformance suite | Stable result across reordered inputs; all rejection paths are covered | in progress — ordering, verified later apply, stale state, immediate rollback, and tampered/unavailable/mismatched-evidence rejections are covered; full cross-implementation conformance remains |
 
-## WS-9: Thinkery Control Plane (Phase E, Commercial, private)
+## WS-9: Cloud Coordination (Phase E, Commercial, private)
 
-**Goal:** Govern continuous optimization safely for organizations without exporting their
-private workloads, rankings, prices, or policy data into the OSS repository.
+**Goal:** Start only with a metadata-first Receipt/Workspace Board after local
+SDK proof; govern later organization context without exporting raw source or
+private workloads into the OSS repository.
 **Repository boundary:** This work belongs in a separate private Thinkery repository and
 private infrastructure. It must not be scaffolded as a hidden feature in LeanCTX OSS.
 
 | # | Capability | Boundary | Status |
 |---:|---|---|---|
-| 9.1 | Organization registry, access control, audit and retention | Class D; private | blocked — private project not designated |
-| 9.2 | Scheduled experiment queue, budget, approval, rollback | Class D; private | blocked — private project not designated |
-| 9.3 | Learned ranking, customer priors, continuous optimization | Class E; private | blocked — governed data and private project not designated |
-| 9.4 | Fleet roll-out/canary and support/SLA operation | Class D/E; private | blocked — private infrastructure not designated |
+| 9.1 | Metadata-only Receipt/Workspace Board: tenant, project, retention and audit | Class D; private | blocked — local SDK proof and private project not designated |
+| 9.2 | Opt-in package/handoff metadata and policy distribution | Class D; private | blocked — Workspace/Package contracts not promoted |
+| 9.3 | Shared context, raw-source sync and organization governance | Class D/E; private | blocked — explicit privacy, conflict and customer-evidence gates |
+| 9.4 | Learned ranking, fleet rollout and SLA operation | Class E; private | blocked — governed data and private infrastructure not designated |
 
 
 ## Tracking Rules

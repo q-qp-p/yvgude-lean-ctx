@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 
 use super::invocation::CapabilityResult;
 use crate::core::io_boundary;
+use crate::core::limits;
 use crate::core::ocla::OclaError;
 use crate::core::ocla::OclaResult;
 use crate::core::tokens;
+
+const MAX_CONTEXT_PATHS: usize = 32;
 
 pub mod coverage;
 pub(crate) mod external_process;
@@ -29,11 +32,18 @@ pub(crate) fn read_context_paths(root: &Path, paths: &[String]) -> OclaResult<St
             "context request must contain at least one path".into(),
         ));
     }
+    if paths.len() > MAX_CONTEXT_PATHS {
+        return Err(OclaError::InvalidRequest(format!(
+            "context request exceeds the {MAX_CONTEXT_PATHS} path limit"
+        )));
+    }
 
     let root = root
         .canonicalize()
         .map_err(|error| OclaError::InvalidRequest(format!("invalid adapter root: {error}")))?;
     let mut contents = Vec::with_capacity(paths.len());
+    let mut total_bytes = 0_usize;
+    let max_bytes = limits::max_read_bytes();
 
     for path in paths {
         if path.trim().is_empty() {
@@ -55,10 +65,42 @@ pub(crate) fn read_context_paths(root: &Path, paths: &[String]) -> OclaResult<St
                 "context path escapes adapter root: {path}"
             )));
         }
+        let metadata = std::fs::symlink_metadata(&canonical).map_err(|error| {
+            OclaError::InvalidRequest(format!("cannot inspect context path {path}: {error}"))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(OclaError::InvalidRequest(format!(
+                "context path must be a regular non-symlink file: {path}"
+            )));
+        }
+        let declared_bytes = usize::try_from(metadata.len()).map_err(|_| {
+            OclaError::InvalidRequest(format!("context path is too large to read safely: {path}"))
+        })?;
+        let separator_bytes = usize::from(!contents.is_empty());
+        if total_bytes
+            .checked_add(separator_bytes)
+            .and_then(|total| total.checked_add(declared_bytes))
+            .is_none_or(|total| total > max_bytes)
+        {
+            return Err(OclaError::InvalidRequest(format!(
+                "context request exceeds the {max_bytes} byte limit"
+            )));
+        }
         let canonical_string = canonical.to_string_lossy().into_owned();
         let content = io_boundary::read_file_nofollow(&canonical_string).map_err(|error| {
             OclaError::InvalidRequest(format!("cannot read context path {path}: {error}"))
         })?;
+        total_bytes = total_bytes
+            .checked_add(separator_bytes)
+            .and_then(|total| total.checked_add(content.len()))
+            .ok_or_else(|| {
+                OclaError::InvalidRequest("context request byte count overflowed".into())
+            })?;
+        if total_bytes > max_bytes {
+            return Err(OclaError::InvalidRequest(format!(
+                "context request exceeds the {max_bytes} byte limit"
+            )));
+        }
         contents.push(content);
     }
 
@@ -186,5 +228,27 @@ mod tests {
         assert_eq!(found.manifest().capability_id, manifest.capability_id);
         assert_eq!(registry.list_available_adapters().len(), 1);
         assert_eq!(registry.health_check_all().expect("health checks").len(), 1);
+    }
+
+    #[test]
+    fn context_reads_enforce_path_and_byte_bounds() {
+        let _guard = crate::core::data_dir::test_env_lock();
+        let dir = tempdir().expect("fixture directory");
+        crate::test_env::set_var("LEAN_CTX_MAX_READ_BYTES", "1024");
+        std::fs::write(dir.path().join("large.txt"), vec![b'x'; 1025])
+            .expect("large fixture write");
+
+        let over_bytes =
+            read_context_paths(&dir.path().canonicalize().unwrap(), &["large.txt".into()])
+                .expect_err("oversized context must fail");
+        assert!(over_bytes.to_string().contains("byte limit"));
+
+        let paths = (0..=MAX_CONTEXT_PATHS)
+            .map(|index| format!("fixture-{index}.txt"))
+            .collect::<Vec<_>>();
+        let over_paths =
+            read_context_paths(dir.path(), &paths).expect_err("too many paths must fail");
+        assert!(over_paths.to_string().contains("path limit"));
+        crate::test_env::remove_var("LEAN_CTX_MAX_READ_BYTES");
     }
 }
