@@ -191,16 +191,17 @@ impl EvaluationSpecV1 {
     }
 }
 
-fn is_safe_relative_file(value: &str) -> bool {
+pub(crate) fn is_safe_relative_file(value: &str) -> bool {
     let path = Path::new(value);
     !value.trim().is_empty()
+        && !value.as_bytes().contains(&0)
         && !path.is_absolute()
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn is_safe_shell_test(value: &str) -> bool {
+pub(crate) fn is_safe_shell_test(value: &str) -> bool {
     let mut parts = value.split_whitespace();
     let command = parts.next();
     let script = parts.next();

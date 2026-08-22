@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use super::suite::{Domain, Task};
@@ -184,6 +184,23 @@ impl CodeScorer {
 
 impl Scorer for CodeScorer {
     fn score(&self, task: &Task, output: &str, workspace: &Path) -> Result<Score> {
+        if let Err(reason) = task.validate_code_evaluation() {
+            bail!("invalid task {}: {reason}", task.id);
+        }
+        let metadata = std::fs::symlink_metadata(workspace)
+            .with_context(|| format!("inspecting workspace {}", workspace.display()))?;
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "refusing symlinked code-evaluation workspace {}",
+                workspace.display()
+            );
+        }
+        if !metadata.is_dir() {
+            bail!("code-evaluation workspace is not a directory");
+        }
+        let workspace = std::fs::canonicalize(workspace)
+            .with_context(|| format!("canonicalizing workspace {}", workspace.display()))?;
+
         let target = task
             .target_file
             .as_deref()
@@ -195,7 +212,7 @@ impl Scorer for CodeScorer {
 
         let sandbox = tempfile::tempdir().context("creating sandbox")?;
         let mut copy_budget = CopyBudget::default();
-        copy_dir_all(workspace, sandbox.path(), 0, &mut copy_budget)
+        copy_dir_all(&workspace, sandbox.path(), 0, &mut copy_budget)
             .with_context(|| format!("copying workspace {}", workspace.display()))?;
 
         let target_path = sandbox.path().join(target);
@@ -447,6 +464,25 @@ mod tests {
     fn extract_code_unwraps_fence() {
         assert_eq!(extract_code("```sh\necho hi\n```"), "echo hi");
         assert_eq!(extract_code("plain text"), "plain text");
+    }
+
+    #[test]
+    fn code_scorer_rejects_unsafe_task_before_workspace_access() {
+        let task = Task {
+            id: "c".into(),
+            domain: Domain::Code,
+            prompt: "implement add".into(),
+            workspace: ".".into(),
+            retrieval_query: None,
+            answers: vec![],
+            target_file: Some("../solution.sh".into()),
+            test_cmd: Some("sh test.sh".into()),
+        };
+        assert!(
+            CodeScorer::default()
+                .score(&task, "ignored", Path::new("/missing/workspace"))
+                .is_err()
+        );
     }
 
     #[cfg(unix)]

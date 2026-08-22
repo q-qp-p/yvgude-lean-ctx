@@ -6,10 +6,12 @@
 //! supported today: free-form [`Domain::Qa`] (scored with EM / F1 / containment) and
 //! [`Domain::Code`] (scored by running a unit-test command against the model output).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+use crate::core::benchmark_spec::types::{is_safe_relative_file, is_safe_shell_test};
 
 /// What kind of task this is — selects the scorer and how the model output is interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +33,16 @@ impl Domain {
     }
 }
 
+fn is_safe_relative_workspace(value: &str) -> bool {
+    let path = Path::new(value);
+    !value.trim().is_empty()
+        && !value.as_bytes().contains(&0)
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
 /// One scored unit of work. Fixtures are stored as NDJSON (one task per line) so suites are
 /// diff-friendly and stream without loading the whole file into a single JSON value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,8 +53,8 @@ pub struct Task {
     pub domain: Domain,
     /// The instruction shown to the model (the "user turn").
     pub prompt: String,
-    /// Repo / corpus directory the context is assembled from. Relative paths resolve against
-    /// the suite file's parent directory; absolute paths are used as-is.
+    /// Repo / corpus directory the context is assembled from. Safe relative paths resolve
+    /// against the suite file's parent directory.
     pub workspace: String,
     /// Query used to retrieve context in the lean-ctx condition. Defaults to `prompt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,16 +90,45 @@ impl Task {
         }
     }
 
+    /// Canonical workspace constrained to the suite directory.
+    pub(crate) fn resolve_workspace_path(&self, suite_dir: &Path) -> Result<PathBuf> {
+        if let Err(reason) = self.validate() {
+            bail!("invalid task {}: {reason}", self.id);
+        }
+        let root = std::fs::canonicalize(suite_dir)
+            .with_context(|| format!("canonicalizing suite directory {}", suite_dir.display()))?;
+        let workspace = std::fs::canonicalize(root.join(&self.workspace))
+            .with_context(|| format!("canonicalizing workspace {}", self.workspace))?;
+        if !workspace.starts_with(&root) {
+            bail!(
+                "task {}: workspace {} escapes suite directory",
+                self.id,
+                self.workspace
+            );
+        }
+        if !workspace.is_dir() {
+            bail!(
+                "task {}: workspace {} is not a directory",
+                self.id,
+                workspace.display()
+            );
+        }
+        Ok(workspace)
+    }
+
     /// Validates the per-domain invariants. Returns a human-readable reason on failure.
-    fn validate(&self) -> std::result::Result<(), String> {
+    pub(crate) fn validate(&self) -> std::result::Result<(), String> {
         if self.id.trim().is_empty() {
             return Err("task id is empty".into());
         }
         if self.prompt.trim().is_empty() {
             return Err(format!("task {}: prompt is empty", self.id));
         }
-        if self.workspace.trim().is_empty() {
-            return Err(format!("task {}: workspace is empty", self.id));
+        if !is_safe_relative_workspace(&self.workspace) {
+            return Err(format!(
+                "task {}: workspace must be a safe relative path",
+                self.id
+            ));
         }
         match self.domain {
             Domain::Qa => {
@@ -98,14 +139,40 @@ impl Task {
                     ));
                 }
             }
-            Domain::Code => {
-                if self.target_file.as_deref().unwrap_or("").trim().is_empty() {
-                    return Err(format!("task {}: code task needs target_file", self.id));
-                }
-                if self.test_cmd.as_deref().unwrap_or("").trim().is_empty() {
-                    return Err(format!("task {}: code task needs test_cmd", self.id));
-                }
-            }
+            Domain::Code => self.validate_code_evaluation()?,
+        }
+        Ok(())
+    }
+
+    /// Validates code-evaluator fields independently of suite-relative workspace parsing.
+    pub(crate) fn validate_code_evaluation(&self) -> std::result::Result<(), String> {
+        if self.domain != Domain::Code {
+            return Err(format!(
+                "task {}: code evaluator requires a code task",
+                self.id
+            ));
+        }
+        if self.target_file.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(format!("task {}: code task needs target_file", self.id));
+        }
+        if !self
+            .target_file
+            .as_deref()
+            .is_some_and(is_safe_relative_file)
+        {
+            return Err(format!(
+                "task {}: target_file must be a safe relative file path",
+                self.id
+            ));
+        }
+        if self.test_cmd.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(format!("task {}: code task needs test_cmd", self.id));
+        }
+        if !self.test_cmd.as_deref().is_some_and(is_safe_shell_test) {
+            return Err(format!(
+                "task {}: test_cmd must be exactly `sh <relative .sh file>`",
+                self.id
+            ));
         }
         Ok(())
     }
@@ -157,6 +224,23 @@ impl EvalSuite {
             }
         }
         Ok(Self { dir, tasks })
+    }
+
+    /// Revalidates a suite assembled by callers instead of parsed from NDJSON.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.tasks.is_empty() {
+            bail!("suite contains no tasks");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for task in &self.tasks {
+            if let Err(reason) = task.validate() {
+                bail!("invalid task: {reason}");
+            }
+            if !seen.insert(task.id.as_str()) {
+                bail!("duplicate task id: {}", task.id);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -212,5 +296,59 @@ mod tests {
     #[test]
     fn rejects_empty_suite() {
         assert!(EvalSuite::parse("# only comments\n\n", PathBuf::from(".")).is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_workload_and_code_paths() {
+        for workspace in ["/tmp/outside", "../outside", "nested/../../outside"] {
+            let raw = format!(
+                r#"{{"id":"q","domain":"qa","prompt":"p","workspace":"{workspace}","answers":["a"]}}"#
+            );
+            assert!(EvalSuite::parse(&raw, PathBuf::from(".")).is_err());
+        }
+        for target_file in [
+            "/tmp/solution.sh",
+            "../solution.sh",
+            "nested/../../solution.sh",
+        ] {
+            let raw = format!(
+                r#"{{"id":"c","domain":"code","prompt":"p","workspace":".","target_file":"{target_file}","test_cmd":"sh test.sh"}}"#
+            );
+            assert!(EvalSuite::parse(&raw, PathBuf::from(".")).is_err());
+        }
+        for test_cmd in [
+            "sh ../test.sh",
+            "sh test.sh; touch /tmp/pwned",
+            "cat /etc/passwd",
+        ] {
+            let raw = format!(
+                r#"{{"id":"c","domain":"code","prompt":"p","workspace":".","target_file":"solution.sh","test_cmd":"{test_cmd}"}}"#
+            );
+            assert!(EvalSuite::parse(&raw, PathBuf::from(".")).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_workspace_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let suite_root = root.path().join("suite");
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(&suite_root).unwrap();
+        std::os::unix::fs::symlink(outside.path(), suite_root.join("link")).unwrap();
+        let raw = r#"{"id":"q","domain":"qa","prompt":"p","workspace":"link","answers":["a"]}"#;
+        let suite = EvalSuite::parse(raw, suite_root.clone()).unwrap();
+        assert!(suite.tasks[0].resolve_workspace_path(&suite.dir).is_err());
+    }
+
+    #[test]
+    fn canonical_workspace_preserves_dot_fixture() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = r#"{"id":"q","domain":"qa","prompt":"p","workspace":".","answers":["a"]}"#;
+        let suite = EvalSuite::parse(raw, root.path().to_path_buf()).unwrap();
+        assert_eq!(
+            suite.tasks[0].resolve_workspace_path(&suite.dir).unwrap(),
+            std::fs::canonicalize(root.path()).unwrap()
+        );
     }
 }

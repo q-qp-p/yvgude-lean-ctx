@@ -40,17 +40,18 @@ pub fn build_recording(
     budget_tokens: usize,
     model: &dyn CannedModel,
 ) -> Result<Recording> {
+    lock.validate().context("validating testbench lock")?;
     let mut rec = Recording::new(fingerprint);
     for entry in &lock.repos {
+        let suite_path = lock.suite_path(entry)?;
         let repo_dir = clone::materialize(entry, lock.dir(), cache_dir)?;
-        let suite_path = lock.dir().join(&entry.suite);
         let raw = std::fs::read_to_string(&suite_path)
             .with_context(|| format!("reading suite {}", suite_path.display()))?;
         let suite = EvalSuite::parse(&raw, repo_dir)
             .with_context(|| format!("parsing suite for repo {}", entry.name))?;
 
         for task in &suite.tasks {
-            let ws = task.workspace_path(&suite.dir);
+            let ws = task.resolve_workspace_path(&suite.dir)?;
             for condition in ARMS {
                 let ctx = assemble(condition, &ws, task.query(), budget_tokens)?;
                 let answer = model.answer(&entry.name, task, condition);

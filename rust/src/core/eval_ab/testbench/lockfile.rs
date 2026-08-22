@@ -8,15 +8,32 @@
 //! [`super::super::suite`] file whose task `workspace`s resolve *inside* the repo.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::core::benchmark_spec::types::is_safe_relative_file;
 use crate::core::eval_ab::sha256_hex;
 
 /// Lockfile schema discriminator.
 pub const TESTBENCH_LOCK_KIND: &str = "lean-ctx.testbench-lock";
+
+fn is_safe_repo_name(value: &str) -> bool {
+    if value.trim().is_empty()
+        || value.as_bytes().contains(&0)
+        || value.contains('/')
+        || value.contains('\\')
+    {
+        return false;
+    }
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+fn is_safe_relative_dir(value: &str) -> bool {
+    value == "." || is_safe_relative_file(value)
+}
 
 /// One pinned repository under test.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,12 +59,18 @@ impl RepoEntry {
         self.path.is_some()
     }
 
-    fn validate(&self) -> std::result::Result<(), String> {
-        if self.name.trim().is_empty() {
-            return Err("repo entry has an empty name".into());
+    pub(crate) fn validate(&self) -> std::result::Result<(), String> {
+        if !is_safe_repo_name(&self.name) {
+            return Err(format!(
+                "repo name {:?} must be a safe single path component",
+                self.name
+            ));
         }
-        if self.suite.trim().is_empty() {
-            return Err(format!("repo {}: suite is empty", self.name));
+        if !is_safe_relative_file(&self.suite) {
+            return Err(format!(
+                "repo {}: suite must be a safe relative file path",
+                self.name
+            ));
         }
         match (&self.url, &self.commit, &self.path) {
             (Some(u), Some(c), None) => {
@@ -60,8 +83,11 @@ impl RepoEntry {
                 Ok(())
             }
             (None, None, Some(p)) => {
-                if p.trim().is_empty() {
-                    return Err(format!("repo {}: path is empty", self.name));
+                if !is_safe_relative_dir(p) {
+                    return Err(format!(
+                        "repo {}: path must be a safe relative directory",
+                        self.name
+                    ));
                 }
                 Ok(())
             }
@@ -98,14 +124,21 @@ impl TestbenchLock {
     pub fn parse(raw: &str, dir: PathBuf) -> Result<Self> {
         let mut lock: TestbenchLock =
             serde_json::from_str(raw).context("parsing testbench lock JSON")?;
-        if lock.kind != TESTBENCH_LOCK_KIND {
-            bail!("not a {TESTBENCH_LOCK_KIND} file (kind = {:?})", lock.kind);
+        lock.validate()?;
+        lock.dir = dir;
+        Ok(lock)
+    }
+
+    /// Revalidates a lock assembled by callers instead of parsed from JSON.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.kind != TESTBENCH_LOCK_KIND {
+            bail!("not a {TESTBENCH_LOCK_KIND} file (kind = {:?})", self.kind);
         }
-        if lock.repos.is_empty() {
+        if self.repos.is_empty() {
             bail!("testbench lock contains no repos");
         }
         let mut seen = HashSet::new();
-        for repo in &lock.repos {
+        for repo in &self.repos {
             if let Err(reason) = repo.validate() {
                 bail!("invalid lock entry: {reason}");
             }
@@ -113,8 +146,29 @@ impl TestbenchLock {
                 bail!("duplicate repo name: {}", repo.name);
             }
         }
-        lock.dir = dir;
-        Ok(lock)
+        Ok(())
+    }
+
+    /// Canonical suite path constrained to the lockfile directory.
+    pub(crate) fn suite_path(&self, repo: &RepoEntry) -> Result<PathBuf> {
+        if let Err(reason) = repo.validate() {
+            bail!("invalid lock entry: {reason}");
+        }
+        let root = std::fs::canonicalize(self.dir())
+            .with_context(|| format!("canonicalizing lock directory {}", self.dir().display()))?;
+        let suite = std::fs::canonicalize(root.join(&repo.suite))
+            .with_context(|| format!("canonicalizing suite {}", repo.suite))?;
+        if !suite.starts_with(&root) {
+            bail!(
+                "repo {}: suite {} escapes lock directory",
+                repo.name,
+                repo.suite
+            );
+        }
+        if !suite.is_file() {
+            bail!("repo {}: suite {} is not a file", repo.name, repo.suite);
+        }
+        Ok(suite)
     }
 
     /// Resolution root for relative `path` / `suite` entries.
@@ -195,5 +249,39 @@ mod tests {
         let a = TestbenchLock::parse(local_lock(), PathBuf::from("/one")).unwrap();
         let b = TestbenchLock::parse(local_lock(), PathBuf::from("/two")).unwrap();
         assert_eq!(a.digest(), b.digest());
+    }
+
+    #[test]
+    fn rejects_unsafe_repo_names_and_relative_paths() {
+        for (name, path, suite) in [
+            ("../escape", "repos/qa", "qa.ndjson"),
+            ("nested/name", "repos/qa", "qa.ndjson"),
+            ("qa", "/tmp/fixture", "qa.ndjson"),
+            ("qa", "../fixture", "qa.ndjson"),
+            ("qa", "repos/qa", "/tmp/qa.ndjson"),
+            ("qa", "repos/qa", "../qa.ndjson"),
+        ] {
+            let raw = format!(
+                r#"{{"kind":"lean-ctx.testbench-lock","repos":[{{"name":"{name}","path":"{path}","suite":"{suite}"}}]}}"#
+            );
+            assert!(
+                TestbenchLock::parse(&raw, PathBuf::from(".")).is_err(),
+                "unsafe lock entry accepted: {name} {path} {suite}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn suite_path_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("suite.ndjson");
+        let suite_link = root.path().join("suite.ndjson");
+        std::fs::write(&outside_file, "{}").unwrap();
+        std::os::unix::fs::symlink(&outside_file, &suite_link).unwrap();
+        let raw = r#"{"kind":"lean-ctx.testbench-lock","repos":[{"name":"qa","path":"fixture","suite":"suite.ndjson"}]}"#;
+        let lock = TestbenchLock::parse(raw, root.path().to_path_buf()).unwrap();
+        assert!(lock.suite_path(&lock.repos[0]).is_err());
     }
 }

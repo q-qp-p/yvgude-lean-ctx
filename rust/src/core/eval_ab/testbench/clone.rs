@@ -2,7 +2,7 @@
 //!
 //! Turns a [`RepoEntry`] into an on-disk directory the eval can read:
 //!
-//! * **local fixture** (`path`) — resolved against the lockfile dir and returned as-is.
+//! * **local fixture** (`path`) — resolved canonically inside the lockfile dir.
 //!   This is what the committed deterministic CI subset uses, so it never touches the
 //!   network.
 //! * **remote** (`url` + `commit`) — cloned into `cache/<name>` once, then checked out
@@ -19,8 +19,22 @@ use super::lockfile::RepoEntry;
 
 /// Materializes `repo` and returns the directory its task workspaces resolve against.
 pub fn materialize(repo: &RepoEntry, lock_dir: &Path, cache_dir: &Path) -> Result<PathBuf> {
+    if let Err(reason) = repo.validate() {
+        bail!("invalid lock entry: {reason}");
+    }
+
     if let Some(rel) = &repo.path {
-        let dir = lock_dir.join(rel);
+        let lock_root = std::fs::canonicalize(lock_dir)
+            .with_context(|| format!("canonicalizing lock directory {}", lock_dir.display()))?;
+        let dir = std::fs::canonicalize(lock_root.join(rel))
+            .with_context(|| format!("canonicalizing local fixture {rel}"))?;
+        if !dir.starts_with(&lock_root) {
+            bail!(
+                "repo {}: local fixture {} escapes lock directory",
+                repo.name,
+                rel
+            );
+        }
         if !dir.is_dir() {
             bail!(
                 "repo {}: local fixture {} is not a directory",
@@ -43,7 +57,10 @@ pub fn materialize(repo: &RepoEntry, lock_dir: &Path, cache_dir: &Path) -> Resul
 
     std::fs::create_dir_all(cache_dir)
         .with_context(|| format!("creating cache dir {}", cache_dir.display()))?;
-    let dest = cache_dir.join(&repo.name);
+    let cache_root = std::fs::canonicalize(cache_dir)
+        .with_context(|| format!("canonicalizing cache dir {}", cache_dir.display()))?;
+    let dest = cache_root.join(&repo.name);
+    validate_cache_destination(&cache_root, &dest)?;
 
     if !dest.join(".git").is_dir() {
         // Fresh clone. A full clone is heavier than a shallow one but lets us check
@@ -51,6 +68,7 @@ pub fn materialize(repo: &RepoEntry, lock_dir: &Path, cache_dir: &Path) -> Resul
         // once and reused on every subsequent run.
         git(&["clone", "--quiet", url, &dest.to_string_lossy()], None)
             .with_context(|| format!("cloning {url} for repo {}", repo.name))?;
+        validate_cache_destination(&cache_root, &dest)?;
     }
 
     // Check out the pin; fetch once if the commit is not present yet (e.g. a newer
@@ -72,6 +90,41 @@ pub fn materialize(repo: &RepoEntry, lock_dir: &Path, cache_dir: &Path) -> Resul
         );
     }
     Ok(dest)
+}
+
+fn validate_cache_destination(cache_root: &Path, dest: &Path) -> Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(dest) {
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "refusing symlinked testbench cache destination {}",
+                dest.display()
+            );
+        }
+        let canonical = std::fs::canonicalize(dest)
+            .with_context(|| format!("canonicalizing cache destination {}", dest.display()))?;
+        if !canonical.starts_with(cache_root) {
+            bail!(
+                "testbench cache destination {} escapes cache directory",
+                dest.display()
+            );
+        }
+    }
+
+    let git_dir = dest.join(".git");
+    if let Ok(metadata) = std::fs::symlink_metadata(&git_dir) {
+        if metadata.file_type().is_symlink() {
+            bail!("refusing symlinked git directory {}", git_dir.display());
+        }
+        let canonical = std::fs::canonicalize(&git_dir)
+            .with_context(|| format!("canonicalizing git directory {}", git_dir.display()))?;
+        if !canonical.starts_with(cache_root) {
+            bail!(
+                "git directory {} escapes cache directory",
+                git_dir.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Runs `git ARGS` (optionally in `dir`), returning trimmed stdout or an error that
@@ -108,7 +161,10 @@ mod tests {
             suite: "qa.ndjson".into(),
         };
         let got = materialize(&entry, root.path(), &root.path().join("cache")).unwrap();
-        assert_eq!(got, root.path().join("repos/qa"));
+        assert_eq!(
+            got,
+            std::fs::canonicalize(root.path().join("repos/qa")).unwrap()
+        );
     }
 
     #[test]
@@ -122,6 +178,71 @@ mod tests {
             suite: "qa.ndjson".into(),
         };
         assert!(materialize(&entry, root.path(), &root.path().join("cache")).is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_paths_before_materialization() {
+        let root = tempfile::tempdir().unwrap();
+        for rel in ["/tmp/fixture", "../fixture", "nested/../../fixture"] {
+            let entry = RepoEntry {
+                name: "qa".into(),
+                url: None,
+                commit: None,
+                path: Some(rel.into()),
+                suite: "qa.ndjson".into(),
+            };
+            assert!(materialize(&entry, root.path(), &root.path().join("cache")).is_err());
+        }
+
+        let cache = root.path().join("cache");
+        let entry = RepoEntry {
+            name: "../escape".into(),
+            url: Some("https://example.invalid/repo.git".into()),
+            commit: Some("deadbeef".into()),
+            path: None,
+            suite: "qa.ndjson".into(),
+        };
+        assert!(materialize(&entry, root.path(), &cache).is_err());
+        assert!(
+            !cache.exists(),
+            "unsafe name must fail before cache creation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_fixture_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = root.path().join("fixture");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let entry = RepoEntry {
+            name: "qa".into(),
+            url: None,
+            commit: None,
+            path: Some("fixture".into()),
+            suite: "qa.ndjson".into(),
+        };
+        assert!(materialize(&entry, root.path(), &root.path().join("cache")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_destination_rejects_symlink_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, cache.join("repo")).unwrap();
+        let entry = RepoEntry {
+            name: "repo".into(),
+            url: Some("https://example.invalid/repo.git".into()),
+            commit: Some("deadbeef".into()),
+            path: None,
+            suite: "qa.ndjson".into(),
+        };
+        assert!(materialize(&entry, root.path(), &cache).is_err());
     }
 
     #[cfg(unix)]

@@ -110,11 +110,12 @@ pub fn run_testbench(
     runner: &dyn ModelRunner,
     cfg: &TestbenchConfig,
 ) -> Result<TestbenchReport> {
+    lock.validate().context("validating testbench lock")?;
     let judge = LlmJudge;
     let mut repos = Vec::with_capacity(lock.repos.len());
     for entry in &lock.repos {
+        let suite_path = lock.suite_path(entry)?;
         let repo_dir = clone::materialize(entry, lock.dir(), cache_dir)?;
-        let suite_path = lock.dir().join(&entry.suite);
         let raw = std::fs::read_to_string(&suite_path)
             .with_context(|| format!("reading suite {}", suite_path.display()))?;
         // Task workspaces resolve INSIDE the materialized repo, not next to the suite.
@@ -153,7 +154,7 @@ fn run_repo(
     let (mut off_ms, mut on_ms): (u128, u128) = (0, 0);
 
     for task in &suite.tasks {
-        let workspace = task.workspace_path(&suite.dir);
+        let workspace = task.resolve_workspace_path(&suite.dir)?;
         let off_ctx = assemble(
             Condition::Baseline,
             &workspace,

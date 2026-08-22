@@ -25,7 +25,7 @@ pub mod scorers;
 pub mod suite;
 pub mod testbench;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use conditions::{Condition, DEFAULT_BUDGET_TOKENS, assemble};
 use model::{ModelRequest, ModelRunner};
@@ -81,9 +81,10 @@ pub fn run_ab(
     runner: &dyn ModelRunner,
     cfg: &AbRunConfig,
 ) -> Result<AbReport> {
+    suite.validate().context("validating eval suite")?;
     let mut records = Vec::with_capacity(suite.tasks.len());
     for task in &suite.tasks {
-        let workspace = task.workspace_path(&suite.dir);
+        let workspace = task.resolve_workspace_path(&suite.dir)?;
 
         let base_ctx = assemble(
             Condition::Baseline,
