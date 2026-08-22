@@ -71,6 +71,7 @@ wire definitions; documents here describe their use and surrounding systems.
 - [addon-manifest-v1.md](addon-manifest-v1.md) — Add-on manifest.
 - [capabilities-contract-v1.md](capabilities-contract-v1.md) — Capabilities contract.
 - [conformance-v1.md](conformance-v1.md) — SDK and implementation conformance suite.
+- [engine-interface-compatibility-v1.md](engine-interface-compatibility-v1.md) — Local Engine boundary and future SDK compatibility policy.
 - [ctxpkg-registry-v1.md](ctxpkg-registry-v1.md) — Context-package registry.
 - [extractors-v1.md](extractors-v1.md) — Extractor integration.
 - [http-mcp-contract-v1.md](http-mcp-contract-v1.md) — HTTP MCP integration.
