@@ -48,26 +48,32 @@ impl ToolRegistry {
     }
 
     /// Returns MCP Tool definitions in the official public surface.
-    /// Deprecated aliases remain callable through dispatch but are not
-    /// published or counted as official tools.
+    ///
+    /// Deprecated aliases and local-only collaboration compatibility tools
+    /// remain callable through dispatch but are neither published nor counted
+    /// as official tools.
     /// Applies MCP `ToolAnnotations` (readOnlyHint, destructiveHint) so clients
     /// can make informed decisions about tool usage in restricted contexts.
     pub fn tool_defs(&self) -> Vec<Tool> {
-        self.tool_defs_filtered(true)
-    }
-
-    /// Returns MCP Tool definitions for every registered tool, including
-    /// deprecated compatibility aliases.
-    /// Used by callability and schema checks that cover the full registry.
-    pub fn registered_tool_defs(&self) -> Vec<Tool> {
         self.tool_defs_filtered(false)
     }
 
-    fn tool_defs_filtered(&self, exclude_deprecated: bool) -> Vec<Tool> {
+    /// Returns MCP Tool definitions for every registered tool, including
+    /// deprecated aliases and local-only compatibility substrate.
+    /// Used by callability and schema checks that cover the full registry.
+    pub fn registered_tool_defs(&self) -> Vec<Tool> {
+        self.tool_defs_filtered(true)
+    }
+
+    /// `include_non_public` is reserved for direct compatibility checks; all
+    /// discovery paths use the public surface by default.
+    fn tool_defs_filtered(&self, include_non_public: bool) -> Vec<Tool> {
         let mut defs: Vec<Tool> = self
             .tools
             .values()
-            .filter(|t| !exclude_deprecated || !super::dynamic_tools::is_deprecated_alias(t.name()))
+            .filter(|t| {
+                include_non_public || super::dynamic_tools::is_publicly_advertised_tool(t.name())
+            })
             .map(|t| t.tool_def())
             .collect();
         defs.sort_by(|a, b| a.name.as_ref().cmp(b.name.as_ref()));
@@ -86,7 +92,7 @@ impl ToolRegistry {
             .values()
             .filter(|t| {
                 state.is_tool_active(t.name())
-                    && !super::dynamic_tools::is_deprecated_alias(t.name())
+                    && super::dynamic_tools::is_publicly_advertised_tool(t.name())
             })
             .map(|t| t.tool_def())
             .collect();
@@ -105,7 +111,7 @@ impl ToolRegistry {
             .values()
             .filter(|t| {
                 profile.is_tool_enabled(t.name())
-                    && !super::dynamic_tools::is_deprecated_alias(t.name())
+                    && super::dynamic_tools::is_publicly_advertised_tool(t.name())
             })
             .map(|t| t.tool_def())
             .collect();
@@ -279,5 +285,39 @@ mod tests {
             registry.get_arc("ctx_read").is_some(),
             "get and get_arc must agree on tool presence"
         );
+    }
+
+    #[test]
+    fn local_collaboration_tools_are_hidden_but_remain_directly_callable() {
+        let registry = build_registry();
+        let public_defs = registry.tool_defs();
+        let public_names: Vec<_> = public_defs.iter().map(|tool| tool.name.as_ref()).collect();
+        let power_defs =
+            registry.profile_tool_defs(&crate::core::tool_profiles::ToolProfile::Power);
+        let power_names: Vec<_> = power_defs.iter().map(|tool| tool.name.as_ref()).collect();
+        let registered_defs = registry.registered_tool_defs();
+        let registered_names: Vec<_> = registered_defs
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect();
+
+        for name in crate::server::dynamic_tools::LOCAL_COLLABORATION_COMPATIBILITY_TOOLS {
+            assert!(
+                !public_names.contains(name),
+                "{name} must stay out of the public tool surface"
+            );
+            assert!(
+                !power_names.contains(name),
+                "{name} must stay out of an explicit Power advertisement"
+            );
+            assert!(
+                registered_names.contains(name),
+                "{name} must remain in the direct compatibility registry"
+            );
+            assert!(
+                registry.get(name).is_some(),
+                "{name} must remain directly callable"
+            );
+        }
     }
 }

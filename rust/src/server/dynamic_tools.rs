@@ -160,6 +160,36 @@ pub fn is_deprecated_alias(name: &str) -> bool {
     deprecated_alias(name).is_some()
 }
 
+/// Local collaboration substrate that remains callable for installed users but
+/// is excluded from every public MCP tool surface.
+///
+/// LeanCTX is a Context SDK, not an agent coordination product. These tools
+/// support local development compatibility only; they do not imply a supported
+/// public agent bus, task scheduler, workflow engine, or A2A product.
+pub const LOCAL_COLLABORATION_COMPATIBILITY_TOOLS: &[&str] = &[
+    "ctx_agent",
+    "ctx_share",
+    "ctx_task",
+    "ctx_handoff",
+    "ctx_workflow",
+];
+
+/// Whether a registered tool is retained only for local compatibility and must
+/// never be advertised from a public tool-definition path.
+#[must_use]
+pub fn is_local_collaboration_compatibility_tool(name: &str) -> bool {
+    LOCAL_COLLABORATION_COMPATIBILITY_TOOLS.contains(&name)
+}
+
+/// Whether a registered tool belongs on a public MCP tool surface.
+///
+/// Compatibility aliases and local collaboration substrate remain directly
+/// callable, including through `ctx_call`; this gate only controls discovery.
+#[must_use]
+pub fn is_publicly_advertised_tool(name: &str) -> bool {
+    !is_deprecated_alias(name) && !is_local_collaboration_compatibility_tool(name)
+}
+
 /// The one-line deprecation notice prepended to a deprecated alias's output.
 /// Stable per tool (no timestamps/counters) so provider-side prompt caching
 /// stays byte-stable (#498).
@@ -380,6 +410,16 @@ mod tests {
             "ctx_search"
         );
         assert!(is_deprecated_alias("ctx_symbol"));
+    }
+
+    #[test]
+    fn local_collaboration_substrate_is_compatibility_only() {
+        for name in LOCAL_COLLABORATION_COMPATIBILITY_TOOLS {
+            assert!(is_local_collaboration_compatibility_tool(name));
+            assert!(!is_publicly_advertised_tool(name));
+        }
+        assert!(!is_local_collaboration_compatibility_tool("ctx_session"));
+        assert!(is_publicly_advertised_tool("ctx_session"));
     }
 
     #[test]

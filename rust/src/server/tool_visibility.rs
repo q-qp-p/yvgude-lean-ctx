@@ -181,9 +181,9 @@ pub fn is_tool_visible(
     if categorize_tool(name) == ToolCategory::Internal {
         return false;
     }
-    // #509: deprecated read-cluster aliases (ctx_smart_read, ctx_multi_read) are
-    // hidden from the advertised surface but stay callable for one release.
-    if super::dynamic_tools::is_deprecated_alias(name) {
+    // Deprecated aliases and the local-only collaboration substrate are hidden
+    // from every advertised surface but remain registered and directly callable.
+    if !super::dynamic_tools::is_publicly_advertised_tool(name) {
         return false;
     }
     if !profile.is_tool_enabled(name) {
@@ -372,6 +372,28 @@ mod tests {
             assert!(
                 !is_tool_visible(name, &ToolProfile::Power, &[], no_quirks(), true),
                 "{name} must be hidden from tools/list"
+            );
+        }
+    }
+
+    #[test]
+    fn local_collaboration_tools_stay_callable_but_are_never_advertised() {
+        // The local bus/task/workflow substrate remains installed for existing
+        // local integrations. It is not a public coordination product, even in
+        // an explicitly pinned Power profile.
+        let defs = crate::server::registry::build_registry().registered_tool_defs();
+        for name in super::super::dynamic_tools::LOCAL_COLLABORATION_COMPATIBILITY_TOOLS {
+            assert!(
+                ToolProfile::Power.is_tool_enabled(name),
+                "{name} must remain directly compatible with Power callers"
+            );
+            assert!(
+                defs.iter().any(|tool| tool.name.as_ref() == *name),
+                "{name} must stay registered for local compatibility"
+            );
+            assert!(
+                !is_tool_visible(name, &ToolProfile::Power, &[], no_quirks(), true),
+                "{name} must not be advertised from tools/list"
             );
         }
     }
