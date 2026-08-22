@@ -14,6 +14,7 @@ mod context_session;
 pub mod control_plane;
 pub mod decision;
 pub mod eligibility;
+mod engine_interface;
 mod execution;
 pub mod fleet_control;
 mod identity;
@@ -35,6 +36,7 @@ pub use context_session::{
 };
 pub use control_plane::*;
 pub use decision::*;
+pub use engine_interface::*;
 pub use evidence::{EvidenceKind, EvidenceRefV1, SignatureStatus};
 pub use execution::*;
 pub use experiment::{DataClassification, ExperimentArm, ExperimentAssignmentV1, SideEffectPolicy};
