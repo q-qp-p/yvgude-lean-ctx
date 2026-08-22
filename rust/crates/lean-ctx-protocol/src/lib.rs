@@ -10,11 +10,13 @@ pub mod auto_routing;
 mod capability;
 pub mod circuit_breaker;
 mod common;
+mod context_session;
 pub mod control_plane;
 pub mod decision;
 pub mod eligibility;
 mod execution;
 pub mod fleet_control;
+mod identity;
 pub mod knowledge;
 pub mod knowledge_routing;
 pub mod outcome;
@@ -26,6 +28,11 @@ pub mod value_share;
 
 pub use capability::*;
 pub use common::*;
+pub use context_session::{
+    ContextKitPinV1, ContextSdkIntegrationDepthV1, ContextSessionConfigurationV1,
+    ContextSessionPhaseV1, ContextSessionRecoveryStateV1, ContextSessionSnapshotV1,
+    ContextSessionStateV1, SessionIdentityV1, TuningProfilePinV1,
+};
 pub use control_plane::*;
 pub use decision::*;
 pub use evidence::{EvidenceKind, EvidenceRefV1, SignatureStatus};
@@ -33,6 +40,10 @@ pub use execution::*;
 pub use experiment::{DataClassification, ExperimentArm, ExperimentAssignmentV1, SideEffectPolicy};
 pub use fleet_control::*;
 pub use gap::{BillingPeriodStatus, EvidenceGapClosedV1, EvidenceGapOpenedV1, GapReason};
+pub use identity::{
+    EventId, HandoffId, KitId, PackageId, PolicyId, ProfileId, ProjectContextId, ProtocolReference,
+    RunId, SemanticVersion, Sha256Digest, SourceId, UtcTimestamp, ViewId, WorkspaceId,
+};
 pub use knowledge::{ClassificationLevel, KnowledgeObjectV1, ValidityWindow};
 pub use knowledge_routing::{
     ContextBundleV1, ContextCandidateV1, ContextReceiptV1, CostClass, KnowledgeSourceManifestV1,

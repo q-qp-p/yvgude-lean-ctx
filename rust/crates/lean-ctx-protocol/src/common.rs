@@ -9,6 +9,29 @@ pub const V1_SCHEMA_VERSION: u32 = 1;
 /// Maximum size for an opaque identifier on the wire.
 pub const MAX_IDENTIFIER_LENGTH: usize = 256;
 
+/// Validate an opaque wire identifier before it crosses a protocol boundary.
+pub(crate) fn validate_bounded_opaque_identifier(
+    value: &str,
+    type_name: &str,
+) -> Result<(), ValidationError> {
+    if value.trim().is_empty() {
+        return Err(ValidationError::new(format!(
+            "{type_name} must not be empty"
+        )));
+    }
+    if value.len() > MAX_IDENTIFIER_LENGTH {
+        return Err(ValidationError::new(format!(
+            "{type_name} exceeds the {MAX_IDENTIFIER_LENGTH} byte limit"
+        )));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(ValidationError::new(format!(
+            "{type_name} must not contain control characters"
+        )));
+    }
+    Ok(())
+}
+
 /// Error returned when a contract value cannot satisfy a wire invariant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError(pub(crate) String);
@@ -38,25 +61,7 @@ macro_rules! bounded_identifier {
             /// Construct an identifier after applying the wire bounds.
             pub fn new(value: impl Into<String>) -> Result<Self, ValidationError> {
                 let value = value.into();
-                if value.trim().is_empty() {
-                    return Err(ValidationError::new(concat!(
-                        stringify!($name),
-                        " must not be empty"
-                    )));
-                }
-                if value.len() > $crate::common::MAX_IDENTIFIER_LENGTH {
-                    return Err(ValidationError::new(format!(
-                        "{} exceeds the {} byte limit",
-                        stringify!($name),
-                        $crate::common::MAX_IDENTIFIER_LENGTH
-                    )));
-                }
-                if value.chars().any(char::is_control) {
-                    return Err(ValidationError::new(format!(
-                        "{} must not contain control characters",
-                        stringify!($name)
-                    )));
-                }
+                $crate::common::validate_bounded_opaque_identifier(&value, stringify!($name))?;
                 Ok(Self(value))
             }
 
