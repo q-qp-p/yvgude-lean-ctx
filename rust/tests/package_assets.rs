@@ -9,6 +9,8 @@ const MANIFESTS: &[&str] = &[
     "rtk/rtk-shell-v1.json",
 ];
 
+const KITS: &[&str] = &["code-review/kit.toml"];
+
 #[test]
 fn packaged_manifests_match_the_canonical_contracts() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -23,6 +25,21 @@ fn packaged_manifests_match_the_canonical_contracts() {
             fs::read_to_string(&packaged).expect("packaged manifest is present"),
             fs::read_to_string(&canonical).expect("canonical manifest is present"),
             "{manifest} diverged from its canonical contract"
+        );
+    }
+}
+
+#[test]
+fn packaged_kits_match_the_canonical_contracts() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for kit in KITS {
+        let packaged = crate_root.join("assets/kits").join(kit);
+        let canonical = crate_root.join("../kits").join(kit);
+        assert_eq!(
+            fs::read_to_string(&packaged).expect("packaged kit is present"),
+            fs::read_to_string(&canonical).expect("canonical kit is present"),
+            "{} diverged from its canonical source",
+            kit
         );
     }
 }

@@ -11,7 +11,10 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 
-const CODE_REVIEW_KIT: &str = include_str!("../../../kits/code-review/kit.toml");
+const CODE_REVIEW_KIT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/kits/code-review/kit.toml"
+));
 
 /// A fully parsed Context Kit.
 #[derive(Debug, Clone, Deserialize)]

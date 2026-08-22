@@ -54,7 +54,8 @@ jobs:
             assets/ocla/capability-manifests/leanctx/context-optimization-v1.json \
             assets/ocla/capability-manifests/leanctx/passthrough-v1.json \
             assets/ocla/capability-manifests/example/word-count-optimizer-v1.json \
-            assets/ocla/capability-manifests/rtk/rtk-shell-v1.json; do
+            assets/ocla/capability-manifests/rtk/rtk-shell-v1.json \
+            assets/kits/code-review/kit.toml; do
             grep -Fx "$asset" package-files.txt
           done
 

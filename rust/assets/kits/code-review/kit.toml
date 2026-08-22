@@ -1,0 +1,60 @@
+format_version = 1
+
+[kit]
+name = "code-review"
+description = "Focused context plan for reviewing a branch or pull request."
+version = "1.0.0"
+
+[read]
+# `map` is lean-ctx's outline view. Rust reviews start with the structural
+# outline and public signatures, then request full bodies only for a finding.
+default_modes = ["map", "signatures"]
+
+# Keep test rules ahead of the general Rust rule: the first matching rule wins.
+[[read.rules]]
+glob = "**/tests/**/*.rs"
+modes = ["signatures"]
+
+[[read.rules]]
+glob = "**/*_test.rs"
+modes = ["signatures"]
+
+[[read.rules]]
+glob = "**/*.rs"
+modes = ["map", "signatures"]
+
+[[read.rules]]
+glob = "**/*.toml"
+modes = ["full"]
+
+[priority]
+strategy = "git_changed"
+description = "Prioritize files changed between the current branch and its merge base."
+
+[shell]
+default_mode = "compressed"
+
+[[shell.commands]]
+command = "cargo test"
+focus = ["failing test names", "assertion diffs", "panic locations", "test summary"]
+
+[[shell.commands]]
+command = "cargo clippy"
+focus = ["warning level", "file and line", "lint name", "suggested fix"]
+
+[quality]
+criteria = [
+  "Report only actionable defects introduced or exposed by the change.",
+  "Give every finding a severity, file and line range, concrete impact, and a minimal remediation.",
+  "Check correctness, error handling, security boundaries, concurrency, performance regressions, and test coverage.",
+  "Distinguish confirmed defects from questions; do not invent failures without evidence from the diff or code.",
+  "If no actionable issue remains, state that explicitly and summarize residual test risk."
+]
+
+[system_prompt]
+template = '''You are reviewing a code change. Start with files changed in the current branch.
+
+For Rust source, inspect the structural outline and public signatures before expanding the smallest bodies needed to verify a concern. Read TOML files in full. Treat tests as behavioral evidence: inspect their signatures first, then expand relevant cases. Use compressed cargo test and cargo clippy output to ground findings.
+
+Return only actionable findings, ordered by severity. Each finding must include severity, file and line range, why the change is incorrect or risky, and a concise remediation. Verify a finding against the surrounding implementation before reporting it. Separate non-blocking questions from defects. If there are no findings, say so and name any tests or checks that were not run.
+'''
