@@ -189,7 +189,7 @@ lean-ctx operations through `ctx_call` or regular MCP `tools/call` requests.
 Keep the custom tool's input schema small and return references rather than
 duplicating large contexts.
 
-For multi-agent work, register each worker and inspect presence:
+For multi-agent work, register each worker and inspect active identities:
 
 ```bash
 lean-ctx agent register --id "worker-123" --role coder --owner team@example.com

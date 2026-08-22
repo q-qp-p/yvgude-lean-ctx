@@ -12,7 +12,7 @@ use std::io::Write;
 #[path = "../src/verify.rs"]
 mod verify;
 
-use verify::{verify_bundle, StepStatus};
+use verify::{verify_bundle, verify_bundle_with_test_limits, StepStatus};
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
@@ -27,6 +27,20 @@ fn hex_encode(bytes: &[u8]) -> String {
 struct Fixture {
     bundle: Vec<u8>,
     pubkey_hex: String,
+}
+
+fn stored_zip(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Vec<u8> {
+    let mut bundle = Vec::new();
+    let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .last_modified_time(zip::DateTime::default());
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut bundle));
+    for (path, bytes) in entries {
+        zip.start_file(path, options).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap();
+    bundle
 }
 
 /// Build a minimal, fully spec-conformant bundle: 3 chained + signed audit
@@ -139,6 +153,50 @@ fn wrong_out_of_band_key_fails_signature_step() {
     );
     let report = verify_bundle(&fx.bundle, Some(&wrong));
     assert!(!report.valid);
+}
+
+#[test]
+fn archive_entry_limit_fails_before_manifest_parse() {
+    let bundle = stored_zip((0..1_025).map(|index| (format!("extra/{index}"), Vec::new())));
+
+    let report = verify_bundle(&bundle, None);
+    assert!(!report.valid);
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.steps[0].name, "archive readable");
+    assert_eq!(report.steps[0].status, StepStatus::Fail);
+    assert_eq!(
+        report.steps[0].detail,
+        "archive has 1025 entries; limit is 1024"
+    );
+}
+
+#[test]
+fn archive_payload_limits_fail_closed() {
+    let single = stored_zip(vec![("payload".to_string(), vec![0; 17])]);
+    let report = verify_bundle_with_test_limits(&single, None, 1_024, 4, 16, 32);
+    assert!(!report.valid);
+    assert_eq!(
+        report.steps[0].detail,
+        "entry payload has 17 bytes; limit is 16"
+    );
+
+    let total = stored_zip(vec![
+        ("first".to_string(), vec![0; 16]),
+        ("second".to_string(), vec![0; 16]),
+    ]);
+    let report = verify_bundle_with_test_limits(&total, None, 1_024, 4, 16, 31);
+    assert!(!report.valid);
+    assert_eq!(
+        report.steps[0].detail,
+        "archive payload has 32 bytes; limit is 31"
+    );
+}
+
+#[test]
+fn archive_raw_size_limit_fails_before_zip_parsing() {
+    let report = verify_bundle_with_test_limits(b"not-a-zip", None, 8, 4, 16, 32);
+    assert!(!report.valid);
+    assert_eq!(report.steps[0].detail, "archive has 9 bytes; limit is 8");
 }
 
 /// AC 1 core: flip ONE byte at every offset class of the archive and

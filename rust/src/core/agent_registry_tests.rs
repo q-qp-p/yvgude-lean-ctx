@@ -1,6 +1,6 @@
 use super::{
-    AgentRecord, AgentStatus, check, decommission, gc, get, heartbeat, register, resume, spiffe_id,
-    suspend, suspend_agents_for_owner,
+    AgentRecord, AgentStatus, check, decommission, get, heartbeat, list, list_active, register,
+    resume, spiffe_id, suspend, suspend_agents_for_owner,
 };
 use std::collections::BTreeMap;
 
@@ -49,15 +49,23 @@ fn legacy_identity_registry_migrates_on_next_write() {
         last_heartbeat: None,
         suspended_reason: None,
         decommissioned_at: None,
-        pid: None,
-        last_seen: None,
     };
     let records = BTreeMap::from([(legacy.agent_id.clone(), legacy)]);
-    std::fs::write(&legacy_path, serde_json::to_string(&records).expect("JSON"))
-        .expect("legacy registry");
+    let mut legacy_json = serde_json::to_value(&records).expect("JSON");
+    legacy_json["legacy-1"]["pid"] = serde_json::json!(99_999_999_u32);
+    legacy_json["legacy-1"]["last_seen"] = serde_json::json!("2026-01-01T00:00:00Z");
+    std::fs::write(
+        &legacy_path,
+        serde_json::to_string(&legacy_json).expect("legacy JSON"),
+    )
+    .expect("legacy registry");
     assert!(get("legacy-1").is_some());
     heartbeat("legacy-1").expect("migrate heartbeat");
     assert!(agents_dir.join("identity-registry.json").exists());
+    let migrated = std::fs::read_to_string(agents_dir.join("identity-registry.json"))
+        .expect("migrated registry");
+    assert!(!migrated.contains("\"pid\""));
+    assert!(!migrated.contains("\"last_seen\""));
 }
 
 #[test]
@@ -116,8 +124,6 @@ fn spiffe_id_shape() {
         last_heartbeat: None,
         suspended_reason: None,
         decommissioned_at: None,
-        pid: None,
-        last_seen: None,
     };
     assert_eq!(
         spiffe_id(&record, "org.example"),
@@ -139,29 +145,20 @@ fn heartbeat_updates_liveness_and_reports_no_false_drift() {
 }
 
 #[test]
-fn gc_decommissions_dead_pid() {
+fn list_active_excludes_historical_identities() {
     let _iso = isolated();
-    register("dead-pid", "coder", "yves@org").expect("register");
-    super::with_registry(|reg| {
-        let record = reg.get_mut("dead-pid").expect("registered");
-        record.pid = Some(99_999_999);
-        Ok(())
-    })
-    .expect("set dead pid");
-    assert_eq!(gc().expect("gc"), 1);
-    assert_eq!(
-        get("dead-pid").expect("record").status,
-        AgentStatus::Decommissioned
-    );
-}
+    register("active", "coder", "yves@org").expect("active register");
+    register("suspended", "coder", "yves@org").expect("suspended register");
+    register("closed", "coder", "yves@org").expect("closed register");
+    suspend("suspended", "test").expect("suspend");
+    decommission("closed").expect("decommission");
 
-#[test]
-fn gc_leaves_active_alive() {
-    let _iso = isolated();
-    register("alive-pid", "coder", "yves@org").expect("register");
-    assert_eq!(gc().expect("gc"), 0);
     assert_eq!(
-        get("alive-pid").expect("record").status,
-        AgentStatus::Active
+        list_active()
+            .into_iter()
+            .map(|record| record.agent_id)
+            .collect::<Vec<_>>(),
+        vec!["active"]
     );
+    assert_eq!(list().len(), 3);
 }

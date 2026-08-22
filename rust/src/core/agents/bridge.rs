@@ -1,9 +1,7 @@
-//! Unified view of Identity + Presence registries.
+//! Unified identity and MCP-process presence view for the OCLA wire API.
 //!
-//! The identity registry (`agent_registry.rs`) tracks CLI-registered agents
-//! with attestation. The presence registry (`agents/registry.rs`) tracks MCP
-//! processes with PIDs. This bridge merges both into a single list for
-//! display/API.
+//! Durable identities intentionally do not claim process liveness. The
+//! presence registry remains the sole source for PID-backed `alive` state.
 
 use std::collections::HashSet;
 
@@ -29,21 +27,14 @@ pub(crate) enum AgentSource {
     Both,
 }
 
-/// Merge identity and presence registries into a unified list.
+/// Merge durable identities with live MCP-process presence.
 pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
     let mut result = Vec::new();
     let mut seen_ids = HashSet::new();
 
     for record in crate::core::agent_registry::list() {
-        let alive = record.pid.is_some_and(is_pid_alive);
         let status = match record.status {
-            crate::core::agent_registry::AgentStatus::Active => {
-                if alive {
-                    "active"
-                } else {
-                    "stale"
-                }
-            }
+            crate::core::agent_registry::AgentStatus::Active => "active",
             crate::core::agent_registry::AgentStatus::Suspended => "suspended",
             crate::core::agent_registry::AgentStatus::Decommissioned => "decommissioned",
         };
@@ -53,9 +44,9 @@ pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
             source: AgentSource::Identity,
             role: Some(record.role),
             status: status.to_string(),
-            pid: record.pid,
-            alive,
-            last_active: record.last_seen.or(record.last_heartbeat),
+            pid: None,
+            alive: false,
+            last_active: record.last_heartbeat,
             owner: Some(record.owner),
         });
     }
@@ -69,12 +60,12 @@ pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
                 {
                     existing.source = AgentSource::Both;
                     existing.pid = Some(agent.pid);
-                    existing.alive = is_pid_alive(agent.pid);
+                    existing.alive = crate::ipc::process::is_alive(agent.pid);
                 }
                 continue;
             }
 
-            let alive = is_pid_alive(agent.pid);
+            let alive = crate::ipc::process::is_alive(agent.pid);
             result.push(UnifiedAgent {
                 agent_id: agent.agent_id.clone(),
                 source: AgentSource::Presence,
@@ -93,20 +84,6 @@ pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
     }
 
     result
-}
-
-fn is_pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        // SAFETY: signal 0 only probes whether a process exists; it never
-        // delivers a signal or accesses process memory.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        true
-    }
 }
 
 #[cfg(test)]

@@ -133,7 +133,7 @@ reference. The most common integration and lifecycle commands are:
 | `daemon start`, `daemon stop`, `daemon status` | Manage the IPC daemon. |
 | `restart`, `dev-install` | Apply runtime changes or atomically install a development build. |
 | `status`, `doctor`, `stats`, `dashboard` | Inspect health, diagnose setup, view raw stats, or open the dashboard. |
-| `agent register`, `agent list` | Register an agent and inspect active peers. |
+| `agent register`, `agent list` | Register an agent and inspect active identities (`agent list --all` shows lifecycle history). |
 | `ledger status`, `ledger reset`, `ledger evict` | Inspect and manage the context ledger. |
 | `quality-lab` | Run a local quality assessment on original and compressed text. |
 

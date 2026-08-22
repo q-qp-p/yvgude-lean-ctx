@@ -14,7 +14,7 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -38,6 +38,7 @@ jobs:
           echo "## Security Pattern Scan" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           FOUND=0
+          FATAL=0
 
           # Check for unauthorized network libraries
           # Allowed: ureq (used for opt-in cloud sync, updates, error reports)
@@ -68,11 +69,13 @@ jobs:
             echo "::error::Found LD_PRELOAD manipulation — potential library hijacking"
             echo "- ❌ Found LD_PRELOAD manipulation" >> $GITHUB_STEP_SUMMARY
             FOUND=1
+            FATAL=1
           fi
           if grep -rn '\.env("DYLD_' rust/src/ 2>/dev/null; then
             echo "::error::Found DYLD manipulation — potential library hijacking"
             echo "- ❌ Found DYLD manipulation" >> $GITHUB_STEP_SUMMARY
             FOUND=1
+            FATAL=1
           fi
 
           # Check for hardcoded secrets patterns
@@ -80,6 +83,7 @@ jobs:
             echo "::error::Found potential hardcoded secrets"
             echo "- ❌ Found potential hardcoded secrets" >> $GITHUB_STEP_SUMMARY
             FOUND=1
+            FATAL=1
           fi
 
           # Check for shell injection vectors
@@ -97,6 +101,11 @@ jobs:
           if [ "$FOUND" -eq 0 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "✅ No dangerous patterns detected" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$FATAL" -eq 1 ]; then
+            echo "::error::Security pattern scan failed"
+            exit 1
           fi
 
       - name: Proprietary code guardrail

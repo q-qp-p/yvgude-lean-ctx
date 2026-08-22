@@ -33,7 +33,35 @@ pub struct Report {
 /// (future bundle versions), unknown files anywhere else are an error.
 const RESERVED_DIRS: &[&str] = &["slo/", "registry/"];
 
+pub(crate) const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES: usize = 1_024;
+const MAX_ENTRY_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct ArchiveLimits {
+    raw_bytes: u64,
+    entries: usize,
+    entry_bytes: u64,
+    total_bytes: u64,
+}
+
+const DEFAULT_ARCHIVE_LIMITS: ArchiveLimits = ArchiveLimits {
+    raw_bytes: MAX_ARCHIVE_BYTES,
+    entries: MAX_ARCHIVE_ENTRIES,
+    entry_bytes: MAX_ENTRY_BYTES,
+    total_bytes: MAX_TOTAL_BYTES,
+};
+
 pub fn verify_bundle(raw: &[u8], pubkey_override: Option<&str>) -> Report {
+    verify_bundle_with_limits(raw, pubkey_override, DEFAULT_ARCHIVE_LIMITS)
+}
+
+fn verify_bundle_with_limits(
+    raw: &[u8],
+    pubkey_override: Option<&str>,
+    limits: ArchiveLimits,
+) -> Report {
     let mut steps = Vec::new();
     let mut valid = true;
     let fail = |steps: &mut Vec<Step>, name: &'static str, detail: String| {
@@ -45,18 +73,63 @@ pub fn verify_bundle(raw: &[u8], pubkey_override: Option<&str>) -> Report {
     };
 
     // ── step 1: archive + manifest ───────────────────────────────────────
+    let raw_len = u64::try_from(raw.len()).expect("usize fits in u64");
+    if raw_len > limits.raw_bytes {
+        return archive_limit_failure(format!(
+            "archive has {raw_len} bytes; limit is {}",
+            limits.raw_bytes
+        ));
+    }
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     match zip::ZipArchive::new(std::io::Cursor::new(raw)) {
         Ok(mut archive) => {
+            if archive.len() > limits.entries {
+                return archive_limit_failure(format!(
+                    "archive has {} entries; limit is {}",
+                    archive.len(),
+                    limits.entries
+                ));
+            }
+            let mut total_bytes = 0_u64;
             for i in 0..archive.len() {
                 match archive.by_index(i) {
                     Ok(mut entry) => {
-                        let mut buf = Vec::new();
-                        if entry.read_to_end(&mut buf).is_err() {
+                        let name = entry.name().to_string();
+                        let declared_bytes = entry.size();
+                        if declared_bytes > limits.entry_bytes {
+                            return archive_limit_failure(format!(
+                                "entry {name} has {declared_bytes} bytes; limit is {}",
+                                limits.entry_bytes
+                            ));
+                        }
+                        total_bytes = match total_bytes.checked_add(declared_bytes) {
+                            Some(total) if total <= limits.total_bytes => total,
+                            Some(total) => {
+                                return archive_limit_failure(format!(
+                                    "archive payload has {total} bytes; limit is {}",
+                                    limits.total_bytes
+                                ));
+                            }
+                            None => {
+                                return archive_limit_failure(
+                                    "archive payload size overflowed".to_string(),
+                                );
+                            }
+                        };
+
+                        let capacity =
+                            usize::try_from(declared_bytes).expect("entry limit fits in usize");
+                        let mut buf = Vec::with_capacity(capacity);
+                        if entry
+                            .by_ref()
+                            .take(declared_bytes.saturating_add(1))
+                            .read_to_end(&mut buf)
+                            .is_err()
+                        {
                             fail(
                                 &mut steps,
                                 "archive readable",
-                                format!("entry {} unreadable", entry.name()),
+                                format!("entry {name} unreadable"),
                             );
                             return Report {
                                 valid: false,
@@ -64,7 +137,13 @@ pub fn verify_bundle(raw: &[u8], pubkey_override: Option<&str>) -> Report {
                                 steps,
                             };
                         }
-                        files.insert(entry.name().to_string(), buf);
+                        let actual_bytes = u64::try_from(buf.len()).expect("usize fits in u64");
+                        if actual_bytes != declared_bytes {
+                            return archive_limit_failure(format!(
+                                "entry {name} read {actual_bytes} bytes; declared {declared_bytes}"
+                            ));
+                        }
+                        files.insert(name, buf);
                     }
                     Err(e) => {
                         fail(&mut steps, "archive readable", format!("entry {i}: {e}"));
@@ -217,6 +296,42 @@ pub fn verify_bundle(raw: &[u8], pubkey_override: Option<&str>) -> Report {
         key_self_attested,
         steps,
     }
+}
+
+fn archive_limit_failure(detail: String) -> Report {
+    Report {
+        valid: false,
+        key_self_attested: false,
+        steps: vec![Step {
+            name: "archive readable",
+            status: StepStatus::Fail,
+            detail,
+        }],
+    }
+}
+
+#[cfg(test)]
+// Integration tests include this module directly and need small limits without
+// allocating production-sized fixtures; the binary's unit-test target does not.
+#[allow(dead_code)]
+pub(crate) fn verify_bundle_with_test_limits(
+    raw: &[u8],
+    pubkey_override: Option<&str>,
+    raw_bytes: u64,
+    entries: usize,
+    entry_bytes: u64,
+    total_bytes: u64,
+) -> Report {
+    verify_bundle_with_limits(
+        raw,
+        pubkey_override,
+        ArchiveLimits {
+            raw_bytes,
+            entries,
+            entry_bytes,
+            total_bytes,
+        },
+    )
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

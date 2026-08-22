@@ -1,5 +1,5 @@
-//! Background agent reaper: periodically GCs dead agents, expired scratchpad,
-//! and stale logical sessions across both registries.
+//! Background agent reaper: periodically GCs dead presence processes, expired
+//! scratchpad entries, and stale logical sessions.
 //!
 //! Spawned once by the daemon; runs until the process exits.
 //! Reaper TTLs are configured through `[agents]`; interval wiring remains pending.
@@ -12,9 +12,6 @@ static RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 
 /// Default reaper interval (10 minutes).
 const DEFAULT_INTERVAL: Duration = Duration::from_mins(10);
-/// Default identity TTL (48 hours).
-const DEFAULT_IDENTITY_TTL_HOURS: u64 = 48;
-
 fn load_config() -> crate::core::config::AgentsConfig {
     crate::core::config::Config::load().agents
 }
@@ -65,14 +62,9 @@ pub(crate) fn reap_cycle() -> Result<ReapStats, String> {
         stats.sessions_expired = sessions_before.saturating_sub(registry.logical_sessions.len());
     }) {}
 
-    // Identity registry: decommission agents with dead PIDs.
-    stats.identity_decommissioned = crate::core::agent_registry::gc().unwrap_or(0);
-
     tracing::debug!(
-        identity_ttl_hours = DEFAULT_IDENTITY_TTL_HOURS,
-        "reaper: presence={} identity={} scratchpad={} sessions={}",
+        "reaper: presence={} scratchpad={} sessions={}",
         stats.presence_removed,
-        stats.identity_decommissioned,
         stats.scratchpad_expired,
         stats.sessions_expired,
     );
@@ -84,17 +76,13 @@ pub(crate) fn reap_cycle() -> Result<ReapStats, String> {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ReapStats {
     pub presence_removed: usize,
-    pub identity_decommissioned: usize,
     pub scratchpad_expired: usize,
     pub sessions_expired: usize,
 }
 
 impl ReapStats {
     pub(crate) fn total(&self) -> usize {
-        self.presence_removed
-            + self.identity_decommissioned
-            + self.scratchpad_expired
-            + self.sessions_expired
+        self.presence_removed + self.scratchpad_expired + self.sessions_expired
     }
 }
 

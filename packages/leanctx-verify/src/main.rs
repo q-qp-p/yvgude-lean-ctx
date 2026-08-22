@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 mod verify;
 
-use verify::{verify_bundle, StepStatus};
+use verify::{verify_bundle, StepStatus, MAX_ARCHIVE_BYTES};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -39,8 +39,11 @@ Docs: docs/enterprise/reading-evidence.md in the LeanCTX repository."
 
     let mut raw = Vec::new();
     match std::fs::File::open(bundle_path) {
-        Ok(mut f) => {
-            if let Err(e) = f.read_to_end(&mut raw) {
+        Ok(f) => {
+            if let Err(e) = f
+                .take(MAX_ARCHIVE_BYTES.saturating_add(1))
+                .read_to_end(&mut raw)
+            {
                 eprintln!("cannot read {bundle_path}: {e}");
                 return ExitCode::from(2);
             }

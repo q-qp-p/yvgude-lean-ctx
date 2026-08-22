@@ -54,10 +54,6 @@ pub(crate) struct AgentRecord {
     pub suspended_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub decommissioned_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pid: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub last_seen: Option<String>,
 }
 
 /// Outcome of an identity check on a call path (team server middleware,
@@ -134,6 +130,15 @@ pub(crate) fn list() -> Vec<AgentRecord> {
     registry_path()
         .map(|p| load_registry(&p).into_values().collect())
         .unwrap_or_default()
+}
+
+/// Active identities are the peer view. Lifecycle history remains available
+/// through `list()` for audit and operator use.
+pub(crate) fn list_active() -> Vec<AgentRecord> {
+    list()
+        .into_iter()
+        .filter(|record| record.status == AgentStatus::Active)
+        .collect()
 }
 
 pub(crate) fn get(agent_id: &str) -> Option<AgentRecord> {
@@ -261,8 +266,6 @@ pub(crate) fn register(agent_id: &str, role: &str, owner: &str) -> Result<AgentR
         last_heartbeat: None,
         suspended_reason: None,
         decommissioned_at: None,
-        pid: Some(std::process::id()),
-        last_seen: Some(chrono::Utc::now().to_rfc3339()),
     };
 
     with_registry(|reg| {
@@ -302,64 +305,8 @@ pub(crate) fn heartbeat(agent_id: &str) -> Result<Option<String>, String> {
             _ => None,
         };
         record.last_heartbeat = Some(fresh.attested_at.clone());
-        record.pid = Some(std::process::id());
-        record.last_seen = Some(chrono::Utc::now().to_rfc3339());
         Ok(drift)
     })
-}
-
-/// Garbage-collect dead agents: check PID liveness for Active agents,
-/// decommission those whose process is gone. Returns decommissioned count.
-pub(crate) fn gc() -> Result<usize, String> {
-    with_registry(|reg| {
-        let mut count = 0;
-        let now = chrono::Utc::now().to_rfc3339();
-        for record in reg.values_mut() {
-            if record.status != AgentStatus::Active {
-                continue;
-            }
-            if let Some(pid) = record.pid
-                && !is_pid_alive(pid)
-            {
-                record.status = AgentStatus::Decommissioned;
-                record.decommissioned_at = Some(now.clone());
-                count += 1;
-            }
-        }
-        Ok(count)
-    })
-}
-
-fn is_pid_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        // SAFETY: kill with signal 0 only checks process existence, no side effects.
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        const STILL_ACTIVE: u32 = 259;
-        // SAFETY: OpenProcess with PROCESS_QUERY_LIMITED_INFORMATION is read-only.
-        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-        if handle.is_null() {
-            return false;
-        }
-        let mut exit_code: u32 = 0;
-        // SAFETY: handle is valid (non-null) and exit_code is a valid mutable pointer.
-        let ok = unsafe { GetExitCodeProcess(handle, &mut exit_code) };
-        // SAFETY: handle is valid and will not be used after this call.
-        unsafe { CloseHandle(handle) };
-        ok != 0 && exit_code == STILL_ACTIVE
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        true
-    }
 }
 
 pub(crate) fn suspend(agent_id: &str, reason: &str) -> Result<(), String> {

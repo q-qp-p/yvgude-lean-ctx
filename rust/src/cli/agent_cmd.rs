@@ -1,7 +1,7 @@
 //! `lean-ctx agent` — first-class agent identities (GL #433).
 //!
 //! Subcommands: register, list, show, heartbeat, suspend, resume,
-//! decommission, offboard-owner, check, gc.
+//! decommission, offboard-owner, check.
 
 use crate::core::agent_registry::{self, AgentStatus};
 
@@ -53,35 +53,11 @@ pub(crate) fn cmd_agent(args: &[String]) {
             }
         }
         Some("list") => {
-            if args.iter().any(|arg| arg == "--all") {
-                let unified = crate::core::agents::list_unified();
-                if as_json {
-                    print_json_or_exit(&unified);
-                    return;
-                }
-                if unified.is_empty() {
-                    println!("no agents registered anywhere");
-                    return;
-                }
-                println!(
-                    "{:<24} {:<10} {:<12} {:<14} {:<6} PID",
-                    "AGENT", "SOURCE", "ROLE", "STATUS", "ALIVE"
-                );
-                for agent in &unified {
-                    println!(
-                        "{:<24} {:<10} {:<12} {:<14} {:<6} {}",
-                        agent.agent_id,
-                        format!("{:?}", agent.source).to_lowercase(),
-                        agent.role.as_deref().unwrap_or("-"),
-                        agent.status,
-                        if agent.alive { "yes" } else { "no" },
-                        agent.pid.map_or("-".to_string(), |pid| pid.to_string()),
-                    );
-                }
-                return;
-            }
-            let _ = agent_registry::gc();
-            let records = agent_registry::list();
+            let records = if args.iter().any(|arg| arg == "--all") {
+                agent_registry::list()
+            } else {
+                agent_registry::list_active()
+            };
             if as_json {
                 print_json_or_exit(&records);
                 return;
@@ -112,11 +88,6 @@ pub(crate) fn cmd_agent(args: &[String]) {
                 );
             }
         }
-        Some("gc") => match agent_registry::gc() {
-            Ok(0) => println!("gc: all agents alive, nothing to clean"),
-            Ok(n) => println!("gc: decommissioned {n} dead agent(s)"),
-            Err(e) => exit_err(&e),
-        },
         Some("show") => {
             let Some(agent_id) = positional(0) else {
                 exit_usage("agent show <agent-id> [--trust-domain org.example]");
@@ -211,8 +182,7 @@ pub(crate) fn cmd_agent(args: &[String]) {
                 "lean-ctx agent — first-class agent identities (registered, attested, revocable)\n\n\
 USAGE:\n\
   lean-ctx agent register --id <agent-id> --role <role> --owner <user@org>\n\
-  lean-ctx agent list [--json] [--all]      list agents (--all: merged identity+presence)\n\
-  lean-ctx agent gc                          remove dead agents (PID check)\n\
+  lean-ctx agent list [--json] [--all]      list active identities (--all: lifecycle history)\n\
   lean-ctx agent show <agent-id> [--trust-domain org.example]\n\
   lean-ctx agent heartbeat <agent-id>        liveness + attestation drift check\n\
   lean-ctx agent suspend <agent-id> [--reason <text>]\n\
