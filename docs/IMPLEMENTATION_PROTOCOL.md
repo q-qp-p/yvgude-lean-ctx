@@ -1,39 +1,35 @@
 # Implementation Status
 
-> **This document replaces the original Implementation Protocol (archived at
-> [`docs/archive/IMPLEMENTATION_PROTOCOL_v3.4.7.md`](archive/IMPLEMENTATION_PROTOCOL_v3.4.7.md)).**
+> **Status: orientation index, not a product-status or release record.** The
+> authoritative product narrative, availability labels, and execution priority
+> are [`docs/internal/README.md`](internal/README.md) and its
+> [Product Architecture](internal/vision/PRODUCT-ARCHITECTURE.md). Historical
+> implementation snapshots live in [`docs/archive/`](archive/).
 
-## Current Execution Model
+## Current product boundary
 
-lean-ctx follows a structured phase execution model:
+- **Available:** the local Runtime, CLI, MCP, proxy, Attach paths, context
+  selection/compression/reuse/recovery, and local Receipt/offline-verification
+  primitives.
+- **Preview:** Python SDK v1 and its declared OpenAI Agents reference wrapper,
+  plus the converging session/Receipt contract.
+- **Research:** Performance Profiles, first-class Context Kits, Performance
+  Benchmark, AutoTune, organization control planes, marketplace, managed
+  execution, public rankings, and agent-building.
 
-- **Phases E2–E18**: Completed (Contract Kernel → Certification)
-- **Phases E19–E24**: Remaining (Governance → GA)
-- **R-Rounds**: Parallel agent work between phases
+Implementation substrate is not a public product claim. For the current source
+map, see [`ARCHITECTURE.md`](../ARCHITECTURE.md); for generated Runtime surface,
+see the [MCP tool inventory](reference/generated/mcp-tools.md) and
+[configuration inventory](reference/generated/config-keys.md).
 
-Detailed tracking: `docs/business/gateway-integration/road-to-finish.md` (private)
+## Development workflow
 
-## Quick Status
-
-| Area | State |
-|---|---|
-| Engine | v3.9.14, 560k+ LOC, 9500+ tests |
-| Pipeline | GREEN (GitHub Actions, 19 jobs) |
-| OCLA Traits | 14/14 production-wired |
-| SDKs | TypeScript, Python, Go (synced) |
-| Contracts | 80+ documents, frozen hashes verified |
-| Certification | 3-level system, Reference Verifier 18/18 |
-
-## Architecture
-
-See [`ARCHITECTURE.md`](../ARCHITECTURE.md) (1200 lines, complete module map).
-
-## Development Workflow
+Build and test without stopping the installed Runtime:
 
 ```bash
-lean-ctx stop                    # stop LaunchAgent
-cd rust && cargo build --release # build
-cargo test --lib                 # test
-cargo clippy --all-features -- -D warnings  # lint
-lean-ctx dev-install             # atomic rebuild
+cd rust && cargo build --release
+cargo test --lib
+cargo clippy --all-features -- -D warnings
+cargo fmt --check
+lean-ctx dev-install
 ```

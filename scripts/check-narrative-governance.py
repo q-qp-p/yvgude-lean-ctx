@@ -41,6 +41,17 @@ REQUIRED_TEXT: dict[str, tuple[str, ...]] = {
         "does not replace the agent or become an agent",
         "Context reduction depends on the file, mode, task, and recovery behavior.",
         "Embed — Preview",
+        "Codex, Claude Code, and Cursor are the",
+    ),
+    "docs/guides/codex-cli.md": ("Status: Available first-class local setup path.",),
+    "docs/guides/claude-code.md": ("Status: Available first-class local setup path.",),
+    "docs/guides/cursor.md": ("Status: Available first-class local setup path.",),
+    "docs/integrations/installation-matrix.md": (
+        "Codex, Claude Code, and Cursor are the current first-class local setup paths;",
+    ),
+    "docs/IMPLEMENTATION_PROTOCOL.md": (
+        "Status: orientation index, not a product-status or release record.",
+        "docs/internal/README.md",
     ),
     "docs/internal/vision/PRODUCT-ARCHITECTURE.md": (
         "The Context SDK for AI Agents",
@@ -70,8 +81,13 @@ STATUS_GUARDED_RECORDS = (
     "docs/reference/09-team-cloud-ci.md",
     "docs/reference/18-adaptive-learning.md",
     "docs/guides/addons.md",
+    "docs/guides/aider.md",
+    "docs/guides/gemini-cli.md",
     "docs/guides/hosted-index-slo.md",
+    "docs/guides/opencode.md",
     "docs/guides/org-sso-setup.md",
+    "docs/guides/pi.md",
+    "docs/guides/windsurf.md",
 )
 
 CANONICAL_FEATURE_STATUSES = {
@@ -114,7 +130,7 @@ def main() -> int:
 
     status_pattern = re.compile(
         r"(?im)^.{0,3}(?:\*\*)?status(?:\*\*)?\s*:\s*"
-        r"(?:available|preview|research|historical|retired|local runtime|target)",
+        r"(?:available|preview|research|historical|retired|local runtime|local implementation|experimental|target)",
     )
     status_heading_pattern = re.compile(
         r"(?im)^#\s+(?:historical|research|preview|retired|local runtime|target)\b",
@@ -129,6 +145,16 @@ def main() -> int:
             failures.append(
                 f"{relative_path}: retained or non-current surface needs a prominent status header"
             )
+
+    generated_tools = read("docs/reference/generated/mcp-tools.md")
+    if "avoids resending unchanged content" not in generated_tools:
+        failures.append(
+            "docs/reference/generated/mcp-tools.md: ctx_delta needs its bounded behavior description"
+        )
+    if "saves 90%+ tokens" in generated_tools:
+        failures.append(
+            "docs/reference/generated/mcp-tools.md: ctx_delta must not make an unqualified percentage claim"
+        )
 
     if failures:
         print("Narrative governance failed:", file=sys.stderr)

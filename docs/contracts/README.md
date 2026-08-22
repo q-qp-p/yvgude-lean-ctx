@@ -1,7 +1,15 @@
 # OCLA Contract Portal
 
+> **Status: local implementation-contract index — not a product catalogue.** A
+> contract marked “Current” describes a checked-in wire or implementation
+> artifact, not general availability or a public service. LeanCTX is **The
+> Context SDK for AI Agents**. Cloud, organization, marketplace, hosted-index,
+> public-ranking, agent-building, and broader OCLA capability surfaces remain
+> Research or unavailable unless the canonical status map explicitly promotes
+> them. See [`docs/internal/README.md`](../internal/README.md).
+
 > Single entry point for all OCLA wire contracts, schemas, and specifications.  
-> Version: aligned with lean-ctx v3.9.14
+> Version: aligned with lean-ctx v3.9.19
 
 This portal is the navigable index for the contracts in this directory. The
 Rust OCLA types, JSON Schema, and Protobuf definitions remain the authoritative

@@ -1,8 +1,16 @@
 # pi-lean-ctx
 
-[Pi Coding Agent](https://github.com/badlogic/pi-mono) extension that provides `ctx_`-prefixed tools backed by [lean-ctx](https://leanctx.com) for **60–90% token savings**.
+> **Status: Research / experimental integration.** LeanCTX makes its Rust core available to Pi through a local CLI and a small TypeScript client.
+> It exposes selected local Runtime tools in Pi; it does not provide a generic agent
+> platform, hosted service, shared team context, or a performance guarantee.
+> Measure a comparable workload with a declared quality threshold before making a
+> gain claim. Product scope and status are governed by
+> [`docs/internal/README.md`](../../docs/internal/README.md).
 
-- **Default**: embedded MCP bridge ON (persistent session cache → unchanged re-reads cost ~13 tokens), additive mode (Pi builtins preserved)
+[Pi Coding Agent](https://github.com/badlogic/pi-mono) extension that provides
+`ctx_`-prefixed tools backed by a local [lean-ctx](https://leanctx.com) Runtime.
+
+- **Default**: embedded MCP bridge ON (persistent session cache for unchanged re-reads), additive mode (Pi builtins preserved)
 - **Opt out**: `LEAN_CTX_PI_ENABLE_MCP=0` (or `"enableMcp": false`) forces the one-shot CLI path, which cannot cache across calls
 - **Optional**: replace mode (`LEAN_CTX_PI_MODE=replace`) disables Pi builtins
 
@@ -145,8 +153,8 @@ via `pi.setActiveTools()` so only the `ctx_` versions are available to the LLM.
 
 On by default, pi-lean-ctx spawns the `lean-ctx` binary as an MCP server (JSON-RPC over stdio).
 This persistent process holds the **session cache**: `ctx_read` (every mode, including line
-ranges) is routed through the bridge, so an unchanged re-read costs ~13 tokens instead of the
-full file and the read registers as a real CEP session (counted by `lean-ctx gain`). The bridge
+ranges) is routed through the bridge, allowing unchanged re-reads to use the Runtime's cached
+representation. Token use depends on the file, mode, cache policy, and host. The bridge
 also discovers the server's advertised tools (`ctx_overview`, `ctx_graph`, `ctx_session`, …),
 filters out those already exposed as `ctx_` CLI tools, and registers the rest as native Pi tools.
 By default that surface is the lean core + `ctx_call`; set `toolProfile: power` (see the
@@ -176,18 +184,19 @@ pi
 
 …or set `"enableMcp": false` in `~/.pi/agent/extensions/pi-lean-ctx/config.json`.
 
-## Verifying token savings
+## Verifying local cache behavior
 
-The session cache's headline claim — an **unchanged re-read costs ~13 tokens** —
-is now a one-command, machine-checkable self-test (issue #361). No manual
-transcript inspection required:
+Use this self-test to establish whether an unchanged re-read collapses to the
+Runtime's cache stub for a chosen file and policy. It verifies cache behavior;
+it does not establish a workload-level performance or savings claim.
 
 ```bash
 lean-ctx verify-cache
 ```
 
-It reads a file twice through the real session cache and asserts the second read
-collapses to a `[unchanged …]` stub:
+It reads a file twice through the real session cache and checks whether the
+second read collapses to a `[unchanged …]` stub. The following is illustrative
+diagnostic output, not a general result:
 
 ```text
 lean-ctx verify-cache
@@ -196,11 +205,11 @@ lean-ctx verify-cache
   Cache policy:  aggressive
   Read #1 (full):     3731 tokens
   Read #2 (re-read):  13 tokens  [unchanged stub]
-  Re-read savings:    100%
+  Cache comparison:   stub emitted
   Cache hits (run):   1/2
   CEP sessions:       42 (88% cross-call hit ratio)
 
-  PASS — session cache engaged: the unchanged re-read cost 13 tokens (≈13-token stub).
+  PASS — session cache engaged: the unchanged re-read returned a cache stub.
 ```
 
 - Exit code `0` = cache proven, `1` = no stub (cache not engaging), `2` =
@@ -213,9 +222,8 @@ lean-ctx verify-cache
 > cache across calls. If `verify-cache` fails, confirm the bridge is connected
 > via `/lean-ctx`; the one-shot CLI path cannot cache across calls.
 
-This check was added in response to the independent, pre-registered
-[tokbench](https://github.com/Entelligentsia/tokbench) benchmark, where the
-~13-token re-read previously had to be verified by hand.
+Use a comparable baseline, treatment, quality threshold, and visible methodology
+before turning any local measurement into a performance claim.
 
 ## pi-mcp-adapter compatibility
 
@@ -339,7 +347,7 @@ keep their stable names; only the bridge-discovered MCP tools are prefixed.
 
 | Concern | Owner | Why |
 |---------|-------|-----|
-| File reads, shell, grep/find/ls — **compression + session cache** | **lean-ctx** | ~13-token re-reads, 60–90% savings on every read/shell |
+| File reads, shell, grep/find/ls — **compression + session cache** | **lean-ctx** | Local behavior; measure a comparable workload with a quality gate before making a gain claim |
 | **Long-horizon memory** (`ctx_memory`, `ctx_expand`) | magic-context | purpose-built long-term memory |
 | **Symbol-aware file ops** (`aft_*`) | AFT | precise AST edits |
 

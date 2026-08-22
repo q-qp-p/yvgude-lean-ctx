@@ -1,5 +1,12 @@
 # Aider + lean-ctx Integration Guide
 
+> **Status: experimental local Attach reference — not a first-class LeanCTX
+> integration promise.** Codex, Claude Code, and Cursor are the current
+> first-class local setup paths. This generic MCP/CLI wiring must be verified
+> against the installed Aider version and observes only the context behavior it
+> can see. Product scope is governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 Complete guide to setting up and optimally using lean-ctx with Aider (AI pair programming in your terminal).
 
 ## Overview
@@ -110,11 +117,11 @@ Aider has its own repo map feature. lean-ctx's `ctx_read` with mode `map` or `si
 
 # lean-ctx fills in structural details for specific files
 ctx_read("src/database/connection.rs", "map")
-# Returns: deps, exports, key function signatures — ~60-80% fewer tokens than full read
+# Returns: deps, exports, and key function signatures; recover exact source when needed
 
 # For API surface only
 ctx_read("src/database/connection.rs", "signatures")
-# Returns: public function signatures only — ~70-90% fewer tokens
+# Returns: public function signatures only; use `full` when implementation detail matters
 ```
 
 ## Workflow: Large Refactors with Aider + lean-ctx
@@ -169,7 +176,8 @@ ctx_session(action="task", value="Database connection pooling refactor [100%]")
 Aider sends full file contents to the LLM. lean-ctx helps by:
 
 1. **Pre-filtering context** — use `map`/`signatures` to understand structure before adding files
-2. **Cached reads** — if Aider triggers a re-read through MCP, it costs ~13 tokens
+2. **Cached reads** — unchanged re-reads may use the local cache representation;
+   inspect local diagnostics before making any performance claim
 3. **Search efficiency** — `ctx_search` returns compact results vs. raw grep output
 4. **Knowledge persistence** — avoid re-discovering things in new sessions
 

@@ -1,5 +1,12 @@
 # OpenCode + lean-ctx Integration Guide
 
+> **Status: local implementation reference — not a first-class LeanCTX
+> integration promise.** Codex, Claude Code, and Cursor are the current
+> first-class local setup paths. Verify this generic Attach wiring against the
+> installed OpenCode version; compatibility alone is not a performance or
+> evidence guarantee. Product scope is governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 Complete guide to setting up and optimally using lean-ctx with OpenCode (open-source AI coding agent).
 
 ## Overview
@@ -377,4 +384,3 @@ lean-ctx init --agent opencode
 - [CLI Reference](https://leanctx.com/docs/cli-reference/)
 - [OpenCode Documentation](https://opencode.ai/docs)
 - [MCP Protocol](https://modelcontextprotocol.io/)
-

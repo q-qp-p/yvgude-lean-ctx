@@ -13,8 +13,11 @@ lean-ctx doctor
 ```
 
 Use `lean-ctx setup` for the guided path or `lean-ctx init --agent <name>` to
-configure one supported coding agent. Attach integrations are local Runtime
-capabilities; their visibility and evidence coverage depend on the integration.
+configure one detected coding agent. Codex, Claude Code, and Cursor are the
+current first-class local setup paths; other wiring is an implementation
+reference that requires a local compatibility check. Attach integrations are
+local Runtime capabilities; their visibility and evidence coverage depend on the
+integration.
 
 ## How the local Runtime helps
 

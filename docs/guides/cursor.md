@@ -1,5 +1,10 @@
 # Cursor + lean-ctx Integration Guide
 
+> **Status: Available first-class local setup path.** LeanCTX attaches to
+> Cursor through local Runtime wiring; its coverage is limited to observable
+> context behavior. Product scope and claim discipline are governed by
+> [`docs/internal/README.md`](../internal/README.md).
+
 Complete guide to setting up and optimally using lean-ctx with Cursor IDE.
 
 ## Overview

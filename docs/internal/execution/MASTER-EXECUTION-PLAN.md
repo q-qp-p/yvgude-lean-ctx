@@ -3,7 +3,7 @@
 **Status:** Active — single source of truth for all execution  
 **Owner:** Yves Gugger  
 **Created:** 2026-08-20  
-**Updated:** 2026-08-21  
+**Updated:** 2026-08-22
 **Tracking:** GitLab issues on `origin` (project ID 5, `gitlab.pounce.ch/root/lean-ctx`)
 
 ---
@@ -12,11 +12,14 @@
 
 ```text
 WS-1: CODEBASE CLEANUP          ██████████  DONE (2026-08-20)
-WS-2: SDK V1 + EVIDENCE         █████████░  v1.0.0 on PyPI; paid sprint **ON HOLD** (#1254 sales/pilot)
+WS-2: SDK V1 + EVIDENCE         ██████████  Technical v1 complete; commercial sprint separate
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     ████████░░  Engineering dogfood allowed; no public claim until #1254
+WS-4: OCLA + COMPOSABLE (B)     ██████████  Native + bounded external capability paths complete
 WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
-WS-6: BENCHMARK + CALIBRATOR    ███████░░░  LocalRunner + named-profile comparison implemented; next: quality evaluator + Receipt linkage
+WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; no automated selection claims
+WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
+WS-8: MANUAL SELECTION (D)      ████░░░░░░  Local record/apply/rollback primitives exist; evidence verification and full conformance remain
+WS-9: THINKERY CONTROL PLANE(E) ░░░░░░░░░░  Private commercial work; separate repository/infrastructure
 ```
 
 ---
@@ -51,7 +54,7 @@ cargo fmt --check
 
 ## WS-2: SDK v1 + Evidence (Phase A)
 
-**Goal:** One workload, baseline/treatment, quality gate, receipt, paid customer.  
+**Goal:** One workload, baseline/treatment, quality gate, and offline-verifiable Receipt; commercial conversion runs in parallel, not as an engineering prerequisite.
 **Timeline:** 2-3 weeks after cleanup  
 **Exit criterion:** Reproducible local Receipt with offline verification
 
@@ -66,7 +69,7 @@ cargo fmt --check
 | 2.7 | Implement offline Receipt verification | **done** (verify() local+Ed25519) |
 | 2.8 | Write Quickstart documentation | **done** (README 342 LOC) |
 | 2.9 | Publish v1.0 on PyPI | **done** (lean-ctx-python 1.0.0) |
-| 2.10 | Run first Thinkery Agent Tuning Sprint (CHF 7,500) | **ON HOLD** (sales/pilot; #1254) |
+| 2.10 | Run first Thinkery Agent Tuning Sprint (CHF 7,500) | **ON HOLD** (commercial track; #1254; does not block vision engineering or public Research releases) |
 
 ---
 
@@ -103,8 +106,8 @@ cargo fmt --check
 ## WS-4: OCLA + Composable Architecture (Phase B)
 
 **Goal:** First native capability through the full contract path.  
-**Timeline:** Engineering now (owner decision 2026-08-21); public claims still wait for #1254  
-**Prerequisite for marketing:** paid Receipt. **Prerequisite for code:** none — dogfood internally as Preview/Research.
+**Timeline:** Engineering now (owner decision 2026-08-22); public claims require reproducible, independently verifiable evidence, not a paid run.
+**Prerequisite for code:** none — dogfood internally as Preview/Research.
 **Open-core:** Class A/B only (manifest, registry, native CompressionProvider, conformance). No marketplace, no learned ranking, no Control Plane (Class D/E).
 
 | # | Task | Status |
@@ -158,9 +161,56 @@ entwickelt.
 | 6.7 | Implement calibrate CLI command | done |
 | 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | **done** (AgentConnector trait + Codex/Claude/Cursor connectors + detection; 3 tests) |
 | 6.9 | LocalRunner wiring and named-profile propagation for live calibration | **done** (LocalRunner, timeout, and `LEAN_CTX_PROFILE` propagation) |
-| 6.10 | Local verified comparison artifact: explicit quality evaluator + Receipt linkage | **in progress** (deterministic evaluator + `--spec` gate + canonical locally signed connector receipt from explicit provider usage/cost; live paid-provider evidence remains) |
+| 6.10 | Local verified comparison artifact: explicit quality evaluator + Receipt linkage | **done** (deterministic evaluator + `--spec` gate + canonical locally signed connector receipt from explicit provider usage/cost; a connector without explicit cost remains correctly OBSERVED) |
 
 **Anti-scope:** No gamification, social profiles, achievements, badges, community platform, marketplace. V1 = one agent, two profiles, controlled benchmark, Receipt, recommendation.
+
+## WS-7: Reproducible Evidence (Phase C, OSS)
+
+**Goal:** Make the Phase A/B primitives proveable over named, evaluated workloads without
+turning a local benchmark into a hosted ranking service.
+**Status:** Research. A paid run is not required; public claims need a reproducible workload,
+predeclared quality gate, complete provenance, and independently runnable verifier.
+**Open-core:** Class A/B/C: workload and evidence contracts, local runner, reference fixtures,
+report formatter, offline verifier. No learned ranking, fleet telemetry, customer data, or
+hosted history.
+
+| # | Task | Exit criterion | Status |
+|---:|---|---|---|
+| 7.1 | Versioned evaluated-workload manifest | Stable identity, declared QA/code evaluator, bounded code-test fixture, deterministic validation | in progress — versioned source-probe and code-repair manifests exist; hardened bounded fixture execution remains required |
+| 7.2 | Local suite loader and named-suite CLI | `benchmark-run --profile NAME --spec PATH` executes an evaluated manifest with explicit profile/agent identity | **done** (strict JSON loading, evaluator gate, deterministic profile binding, no `--suite`/`--repeats` overrides) |
+| 7.3 | Reproducible evidence bundle | Baseline/treatment outputs, evaluator result, receipt refs, artifact redaction classification, environment and verifier command are linked offline | in progress — signed local spec/result/receipt bundle and explicit redaction classification exist; invocation binding, output replay, and independent receipt/evidence verification remain required |
+| 7.4 | Capability coverage matrix | Native and bounded external capability paths show success, policy rejection, timeout, and disable behavior | in progress — deterministic, payload-free test matrix covers each state; a consumable evidence surface remains required |
+| 7.5 | Public research fixture pack | Redacted/self-contained fixtures pass on a clean checkout and make no universal-performance claim | in progress — manifests/assets are portable and provider-free; isolated code-repair proof currently requires the macOS sandbox, so cross-platform proof remains open |
+
+## WS-8: Manual Selection (Phase D, OSS)
+
+**Goal:** Convert evaluated local evidence into an explainable, reversible manual recommendation.
+**Status:** Research/Preview only after WS-7 evidence exists.
+**Open-core:** Class A/B/C deterministic candidate generation, Pareto calculation, explicit
+operator selection, exported profile, and rollback. Learned rankings, customer priors, and
+automatic promotion stay private Class D/E.
+
+| # | Task | Exit criterion | Status |
+|---:|---|---|---|
+| 8.1 | Evidence-qualified candidate input | Unevaluated or incomplete-cost runs cannot feed a recommendation | in progress — creation validates evaluated receipt-linked runs; independent evidence verification is still required before later apply |
+| 8.2 | Deterministic recommendation record | Candidate set, constraints, evidence refs, rationale, and profile hash serialize canonically | in progress — canonical serialization exists; its linked evidence requires independent validation |
+| 8.3 | Explicit apply/rollback CLI | Operator approves a named profile; prior profile is preserved and restorable | in progress — record/apply/rollback supports later-record apply and refuses stale state; independent evidence verification remains required |
+| 8.4 | Manual-selection conformance suite | Stable result across reordered inputs; all rejection paths are covered | in progress — ordering, later apply, stale state, and immediate rollback are covered; tampered/unavailable-evidence rejections remain |
+
+## WS-9: Thinkery Control Plane (Phase E, Commercial, private)
+
+**Goal:** Govern continuous optimization safely for organizations without exporting their
+private workloads, rankings, prices, or policy data into the OSS repository.
+**Repository boundary:** This work belongs in a separate private Thinkery repository and
+private infrastructure. It must not be scaffolded as a hidden feature in LeanCTX OSS.
+
+| # | Capability | Boundary | Status |
+|---:|---|---|---|
+| 9.1 | Organization registry, access control, audit and retention | Class D; private | blocked — private project not designated |
+| 9.2 | Scheduled experiment queue, budget, approval, rollback | Class D; private | blocked — private project not designated |
+| 9.3 | Learned ranking, customer priors, continuous optimization | Class E; private | blocked — governed data and private project not designated |
+| 9.4 | Fleet roll-out/canary and support/SLA operation | Class D/E; private | blocked — private infrastructure not designated |
 
 
 ## Tracking Rules

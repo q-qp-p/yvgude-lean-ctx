@@ -6,7 +6,11 @@
 > AI Agents**. Current product scope and status are governed by
 > [`docs/internal/README.md`](../internal/README.md).
 
-This document defines the **exact** wiring lean-ctx performs for every supported IDE/agent and for every installation path.
+This document records the **current local wiring** implemented by `setup` and
+`init`. A row proves neither first-class support nor a performance result:
+Codex, Claude Code, and Cursor are the current first-class local setup paths;
+every other row is an implementation reference that must be checked against the
+installed host with `lean-ctx doctor`.
 
 ## Installation paths (entry points)
 
