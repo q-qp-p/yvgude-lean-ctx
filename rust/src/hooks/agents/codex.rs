@@ -162,18 +162,39 @@ fn ensure_codex_observe_hooks(root: &mut serde_json::Value, observe_cmd: &str) -
         return false;
     };
 
-    let observe_hook = serde_json::json!({
-        "type": "command", "command": observe_cmd, "timeout": 5
-    });
-
+    // The observer is best-effort telemetry. Its process has an internal
+    // fail-open deadline; this host deadline leaves scheduling headroom while
+    // ensuring telemetry can never stall a tool result.
+    const OBSERVE_TIMEOUT_SECS: u64 = 4;
+    const SESSION_END_OBSERVE_TIMEOUT_SECS: u64 = 3;
+    // Shell output can be arbitrarily large and is already observed by
+    // ctx_shell/the MCP pipeline. Restrict Codex's PostToolUse observer to
+    // native edits, where code-health and provenance capture add unique value.
+    const POST_TOOL_EDIT_MATCHER: &str = "Write|Edit|MultiEdit|StrReplace|str_replace_editor|edit_file|str_replace|replace_in_file|create_file|write_file";
     let observe_events = ["PostToolUse", "SessionStart", "SessionEnd"];
     for event in observe_events {
+        let timeout_secs = if event == "SessionEnd" {
+            SESSION_END_OBSERVE_TIMEOUT_SECS
+        } else {
+            OBSERVE_TIMEOUT_SECS
+        };
+        let observe_hook = serde_json::json!({
+            "type": "command", "command": observe_cmd, "timeout": timeout_secs
+        });
         let arr = hooks_obj
             .entry(event.to_string())
             .or_insert_with(|| serde_json::json!([]));
         let Some(entries) = arr.as_array_mut() else {
             continue;
         };
+
+        normalize_codex_observe_hooks(
+            entries,
+            event,
+            observe_cmd,
+            timeout_secs,
+            POST_TOOL_EDIT_MATCHER,
+        );
 
         // Migration: if observe exists as a standalone entry (separate from the
         // lean-ctx session-start entry), merge it into the lean-ctx entry and
@@ -269,14 +290,63 @@ fn ensure_codex_observe_hooks(root: &mut serde_json::Value, observe_cmd: &str) -
         });
 
         if !merged {
+            let matcher = if event == "PostToolUse" {
+                POST_TOOL_EDIT_MATCHER
+            } else {
+                ".*"
+            };
             entries.push(serde_json::json!({
-                "matcher": ".*",
+                "matcher": matcher,
                 "hooks": [observe_hook.clone()]
             }));
         }
     }
 
     *root != original
+}
+
+/// Normalize installed observer hooks without touching unrelated user hooks.
+/// Existing installations used a universal PostToolUse matcher and a deadline
+/// equal to Codex's own timeout, creating avoidable user-visible failures.
+fn normalize_codex_observe_hooks(
+    entries: &mut [serde_json::Value],
+    event: &str,
+    observe_cmd: &str,
+    timeout_secs: u64,
+    post_tool_edit_matcher: &str,
+) {
+    for entry in entries {
+        let Some(hooks) = entry
+            .get_mut("hooks")
+            .and_then(|hooks| hooks.as_array_mut())
+        else {
+            continue;
+        };
+        let mut contains_observe = false;
+        let mut only_observe = true;
+        for hook in hooks {
+            let is_observe = hook
+                .get("command")
+                .and_then(|command| command.as_str())
+                .is_some_and(|command| command == observe_cmd || command.contains("hook observe"));
+            if is_observe {
+                contains_observe = true;
+                if let Some(object) = hook.as_object_mut() {
+                    object.insert("timeout".to_string(), serde_json::json!(timeout_secs));
+                }
+            } else {
+                only_observe = false;
+            }
+        }
+        if event == "PostToolUse" && contains_observe && only_observe {
+            if let Some(object) = entry.as_object_mut() {
+                object.insert(
+                    "matcher".to_string(),
+                    serde_json::json!(post_tool_edit_matcher),
+                );
+            }
+        }
+    }
 }
 
 /// Idempotent upsert of the `[mcp_servers.lean-ctx]` entry in Codex `config.toml`.
@@ -866,6 +936,7 @@ command = \"other\"
         let hooks = entries[0]["hooks"].as_array().unwrap();
         assert_eq!(hooks.len(), 2, "session-start + observe in one entry");
         assert!(hooks[1]["command"].as_str().unwrap().contains("observe"));
+        assert_eq!(hooks[1]["timeout"].as_u64(), Some(4));
     }
 
     #[test]
@@ -875,7 +946,53 @@ command = \"other\"
         assert!(changed);
         let entries = root["hooks"]["PostToolUse"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["matcher"].as_str().unwrap(), ".*");
+        assert_eq!(
+            entries[0]["matcher"].as_str().unwrap(),
+            "Write|Edit|MultiEdit|StrReplace|str_replace_editor|edit_file|str_replace|replace_in_file|create_file|write_file"
+        );
+        assert_eq!(entries[0]["hooks"][0]["timeout"].as_u64(), Some(4));
+    }
+
+    #[test]
+    fn observe_tightens_legacy_universal_post_tool_hook() {
+        let mut root = serde_json::json!({
+            "hooks": {
+                "PostToolUse": [{
+                    "matcher": ".*",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/bin/lean-ctx hook observe",
+                        "timeout": 5
+                    }]
+                }]
+            }
+        });
+
+        assert!(ensure_codex_observe_hooks(
+            &mut root,
+            "/bin/lean-ctx hook observe"
+        ));
+        let entry = &root["hooks"]["PostToolUse"][0];
+        assert_eq!(
+            entry["matcher"].as_str(),
+            Some(
+                "Write|Edit|MultiEdit|StrReplace|str_replace_editor|edit_file|str_replace|replace_in_file|create_file|write_file"
+            )
+        );
+        assert_eq!(entry["hooks"][0]["timeout"].as_u64(), Some(4));
+    }
+
+    #[test]
+    fn observe_writes_codex_compatible_session_end_timeout() {
+        let mut root = serde_json::json!({ "hooks": {} });
+        assert!(ensure_codex_observe_hooks(
+            &mut root,
+            "/bin/lean-ctx hook observe"
+        ));
+        assert_eq!(
+            root["hooks"]["SessionEnd"][0]["hooks"][0]["timeout"].as_u64(),
+            Some(3)
+        );
     }
 
     #[test]

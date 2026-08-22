@@ -5,6 +5,11 @@ use std::time::Duration;
 
 const HOOK_STDIN_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Post-tool observers are best-effort telemetry. They must yield well before
+/// the host's hook deadline so a slow filesystem, saturated CPU, or oversized
+/// tool payload can never surface as a failed user tool call.
+pub const OBSERVE_HOOK_BUDGET: Duration = Duration::from_secs(2);
+
 /// Hard wall-clock budget for a command-gating hook (rewrite/redirect) to produce
 /// its decision. Sized above the worst legitimate single read path (stdin 3s +
 /// redirect subprocess 10s) so valid work always completes; a true hang — or a
@@ -128,6 +133,16 @@ pub fn arm_watchdog(timeout: Duration) {
             timeout.as_secs()
         );
         std::process::exit(1);
+    });
+}
+
+/// Bound non-gating, best-effort hook work without turning a skipped telemetry
+/// event into a host-visible failure. Unlike [`arm_watchdog`], this deliberately
+/// exits successfully and emits nothing: the host may continue immediately.
+pub fn arm_fail_open_watchdog(timeout: Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(timeout);
+        std::process::exit(0);
     });
 }
 

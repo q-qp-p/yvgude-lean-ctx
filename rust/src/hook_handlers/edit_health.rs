@@ -270,10 +270,12 @@ const CORRUPTION_MARKERS: &[&str] = &[
     "use ctx_read with lines= parameter to see specific sections]",
 ];
 
-/// After a native edit, check if the written file contains lean-ctx compression
-/// markers. If so, restore the file from git HEAD and log a warning.
-/// This prevents accidental corruption when shadow-mode compressed content
-/// leaks through edit tools (StrReplace, Write).
+/// After a native edit, detect lean-ctx compression markers and report them.
+///
+/// Hooks must be bounded and non-destructive: invoking git from a PostToolUse
+/// hook can outlive the host deadline, and restoring HEAD would discard a
+/// user's just-written change. The normal edit path remains responsible for
+/// safe recovery; this hook only emits the actionable signal.
 fn check_and_restore_corrupted(v: &Value, root: &str) {
     let Some(args) = payload::resolve_tool_args(v) else {
         return;
@@ -291,33 +293,10 @@ fn check_and_restore_corrupted(v: &Value, root: &str) {
         return;
     }
 
+    let _ = root;
     eprintln!(
-        "[lean-ctx] CORRUPTION DETECTED in {file}: compression markers found after edit. Restoring from git HEAD."
+        "[lean-ctx] CORRUPTION DETECTED in {file}: compression markers found after edit; file left unchanged."
     );
-
-    let abs_path = if std::path::Path::new(&file).is_absolute() {
-        file.clone()
-    } else {
-        format!("{root}/{file}")
-    };
-
-    let restore = std::process::Command::new("git")
-        .args(["checkout", "HEAD", "--", &abs_path])
-        .current_dir(root)
-        .output();
-
-    match restore {
-        Ok(out) if out.status.success() => {
-            eprintln!("[lean-ctx] Restored {file} from git HEAD.");
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("[lean-ctx] CRITICAL: could not restore {file}: {stderr}");
-        }
-        Err(e) => {
-            eprintln!("[lean-ctx] CRITICAL: git restore failed for {file}: {e}");
-        }
-    }
 }
 
 #[cfg(test)]

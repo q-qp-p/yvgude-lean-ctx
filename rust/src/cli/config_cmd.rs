@@ -281,7 +281,11 @@ fn cmd_apply() {
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    let remaining = ipc::process::find_pids_by_name("lean-ctx");
+    // Preserve IDE-owned MCP stdio servers. Killing one here severs the active
+    // Codex connection and can leave the host stuck on "connecting" until it
+    // is restarted. `find_killable_pids` excludes those processes while still
+    // cleaning up stale daemon/proxy workers.
+    let remaining = ipc::process::find_killable_pids("lean-ctx");
     if !remaining.is_empty() {
         for &pid in &remaining {
             let _ = ipc::process::force_kill(pid);

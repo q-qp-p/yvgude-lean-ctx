@@ -509,6 +509,14 @@ mod tests {
     }
 
     #[test]
+    fn killable_pids_exclude_active_mcp_stdio_servers() {
+        assert_eq!(
+            killable_excluding_mcp(vec![11, 17, 23], &[11, 23]),
+            vec![17]
+        );
+    }
+
+    #[test]
     fn bogus_pid_is_not_alive() {
         assert!(!is_alive(u32::MAX - 42));
     }

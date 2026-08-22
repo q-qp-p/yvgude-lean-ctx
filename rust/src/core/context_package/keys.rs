@@ -28,21 +28,56 @@ pub(crate) fn load_or_create() -> Result<(SigningKey, bool), String> {
         return Ok((SigningKey::from_bytes(&seed), false));
     }
 
-    let dir = path.parent().expect("key path has a parent");
-    std::fs::create_dir_all(dir).map_err(|e| format!("create key dir: {e}"))?;
-
     let mut seed = [0u8; 32];
     getrandom::fill(&mut seed).map_err(|e| format!("entropy source failed: {e}"))?;
-    let encoded = hex_encode(&seed);
+    if persist_new_key(&path, &seed)? {
+        return Ok((SigningKey::from_bytes(&seed), true));
+    }
 
-    std::fs::write(&path, &encoded).map_err(|e| format!("write signing key: {e}"))?;
+    // Another process won the atomic creation race. Read its complete key
+    // rather than replacing publisher identity with our locally generated one.
+    let hex_seed =
+        std::fs::read_to_string(&path).map_err(|e| format!("read signing key after race: {e}"))?;
+    let seed = parse_seed(hex_seed.trim())?;
+    Ok((SigningKey::from_bytes(&seed), false))
+}
+
+/// Persist a complete new seed without exposing a partially written key path.
+///
+/// The temporary file is written before `hard_link` atomically publishes it at
+/// `path`. Only one concurrent writer can win that link creation; losing
+/// writers retain the already-published identity. This avoids both the empty
+/// file window of direct writes and identity replacement by `rename`.
+fn persist_new_key(path: &std::path::Path, seed: &[u8; 32]) -> Result<bool, String> {
+    let directory = path.parent().expect("key path has a parent");
+    std::fs::create_dir_all(directory).map_err(|e| format!("create key dir: {e}"))?;
+
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(|e| format!("entropy source failed: {e}"))?;
+    let temporary = directory.join(format!(".ctxpkg-ed25519-{}.tmp", hex_encode(&nonce)));
+    std::fs::write(&temporary, hex_encode(seed))
+        .map_err(|e| format!("write temporary signing key: {e}"))?;
+
+    let published = match std::fs::hard_link(&temporary, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("publish signing key atomically: {error}"));
+        }
+    };
+    let _ = std::fs::remove_file(&temporary);
+
+    if !published {
+        return Ok(false);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("chmod signing key: {e}"))?;
     }
-    Ok((SigningKey::from_bytes(&seed), true))
+    Ok(true)
 }
 
 /// Hex of the public verifying key — the publisher's stable identity.
@@ -98,5 +133,28 @@ mod tests {
         let k2 = SigningKey::from_bytes(&[7u8; 32]);
         assert_eq!(public_key_hex(&k1), public_key_hex(&k2));
         assert_eq!(public_key_hex(&k1).len(), 64);
+    }
+
+    #[test]
+    fn atomic_creation_keeps_one_complete_key_under_concurrency() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ctxpkg-ed25519.key");
+        let mut threads = Vec::new();
+        for byte in 1..=8 {
+            let path = path.clone();
+            threads.push(std::thread::spawn(move || {
+                persist_new_key(&path, &[byte; 32]).unwrap()
+            }));
+        }
+        let created = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|created| *created)
+            .count();
+
+        let stored = std::fs::read_to_string(path).unwrap();
+        assert_eq!(created, 1);
+        assert_eq!(stored.len(), 64);
+        assert!(parse_seed(&stored).is_ok());
     }
 }
