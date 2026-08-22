@@ -16,6 +16,16 @@ use lean_ctx::core::solution_types::{SolutionDecisionKind, SolutionStatus};
 use lean_ctx::instructions::solution::solution_ladder_text;
 use serde_json::{Value, json};
 
+// These tests mutate the same process-global tracker and its persisted store.
+// Keep their baseline/delta assertions isolated from the parallel test runner.
+static SOLUTION_TRACKER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_solution_tracker() -> std::sync::MutexGuard<'static, ()> {
+    SOLUTION_TRACKER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn solution_config_defaults_are_sane() {
     let config = SolutionConfig::default();
@@ -80,6 +90,7 @@ fn solution_ladder_text_covers_all_intensities() {
 
 #[test]
 fn solution_tracker_lifecycle() {
+    let _tracker_guard = lock_solution_tracker();
     solution_tracker::reset();
 
     let baseline = solution_tracker::snapshot();
@@ -424,6 +435,7 @@ fn auto_capture_ignores_existing_imports_and_ordinary_comments() {
     ignore = "Edit-tool path resolution uses Unix path conventions"
 )]
 fn native_edit_via_observe_hook_triggers_solution_capture() {
+    let _tracker_guard = lock_solution_tracker();
     let tmp = std::env::temp_dir().join("native_capture_test");
     let tmp_str = tmp.to_string_lossy().replace('\\', "/");
     let path = format!("{tmp_str}/src/main.rs");
@@ -455,6 +467,7 @@ fn native_edit_via_observe_hook_triggers_solution_capture() {
 
 #[test]
 fn native_write_tool_records_loc_addition() {
+    let _tracker_guard = lock_solution_tracker();
     let tmp = std::env::temp_dir().join("native_write_test");
     let tmp_str = tmp.to_string_lossy().replace('\\', "/");
     let path = format!("{tmp_str}/new_file.rs");
