@@ -15,7 +15,7 @@ impl McpTool for CtxWorkflowTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_workflow",
-            "Experimental local state tracker with evidence notes. It is not a public workflow-orchestration product.\n\
+            "Research-only local state tracker with evidence notes. It is not a public workflow-orchestration product.\n\
              Enable the session category explicitly before evaluating it.\n\
              transition to attach proof. Built-in plan_code_test when spec omitted.\n\
              Actions: start|status|transition|complete|evidence_add|evidence_list|stop.\n\

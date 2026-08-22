@@ -2,7 +2,8 @@
 
 > **Status: research architecture note — not a public product name or capability
 > claim.** LeanCTX is **The Context SDK for AI Agents**, a local
-> context-performance layer for existing agents. Current scope and status are
+> context layer for existing agents: it selects, shapes, reuses, and recovers
+> task-fit context. Current scope and status are
 > governed by [`docs/internal/README.md`](internal/README.md). Profiles,
 > autonomous orchestration, Team Server, and broader SDK surfaces referenced
 > below are Research or unavailable.

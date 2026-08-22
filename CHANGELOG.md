@@ -72,6 +72,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Installable crates.io release (#1508)** — package OCLA manifests with the
+  engine, publish its protocol dependencies before their consumers, and bump
+  all three crate versions so `cargo install lean-ctx` resolves matching APIs.
+- **Pi custom agent-directory config (#1506)** — resolve
+  `PI_CODING_AGENT_DIR` directly as Pi specifies, while retaining a legacy
+  nested-directory fallback.
 - Deprecated alias backward compatibility and benchmark signal matching.
 
 ### Changed

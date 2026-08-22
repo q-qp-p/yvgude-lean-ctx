@@ -2,8 +2,8 @@
 
 > **Status: research contract — not an available multi-agent product surface.**
 > The document records an internal coordination design. LeanCTX is **The Context
-> SDK for AI Agents**, an available local context-performance layer for existing
-> agents; generic orchestration, shared agent context, and agent-building are
+> SDK for AI Agents**, an available local context layer for existing agents;
+> generic orchestration, shared project context, and agent-building are
 > deferred. Current scope and status are governed by
 > [`docs/internal/README.md`](../internal/README.md).
 

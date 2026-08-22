@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   loadPiConfig,
+  piConfigPath,
   REPLACEABLE_BUILTIN_TOOLS,
   resolveRouteShell,
   resolveSuppressedBuiltins,
@@ -13,7 +17,34 @@ const PROFILE_ENV_KEYS = ["LEAN_CTX_PI_TOOL_PROFILE", "LEAN_CTX_TOOL_PROFILE"];
 
 afterEach(() => {
   delete process.env[ENV_KEY];
+  delete process.env.PI_CODING_AGENT_DIR;
   for (const key of PROFILE_ENV_KEYS) delete process.env[key];
+});
+
+describe("piConfigPath", () => {
+  it("uses PI_CODING_AGENT_DIR as the agent directory", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-lean-ctx-direct-"));
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      expect(piConfigPath()).toBe(join(agentDir, "extensions", "pi-lean-ctx", "config.json"));
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the legacy nested agent directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-lean-ctx-config-"));
+    const legacy = join(root, "agent", "extensions", "pi-lean-ctx");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "config.json"), "{}");
+    process.env.PI_CODING_AGENT_DIR = root;
+
+    try {
+      expect(piConfigPath()).toBe(join(legacy, "config.json"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveRouteShell", () => {

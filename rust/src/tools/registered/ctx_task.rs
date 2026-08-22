@@ -15,7 +15,7 @@ impl McpTool for CtxTaskTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_task",
-            "Experimental local task record for collaboration experiments. It is not a public agent-orchestration contract.\n\
+            "Research-only local task record for collaboration experiments. It is not a public agent-orchestration contract.\n\
              Enable the session category explicitly before evaluating it.\n\
              Actions: create|update|list|get|cancel|message|info.\n\
              States: working|input-required|completed|failed|canceled.\n\

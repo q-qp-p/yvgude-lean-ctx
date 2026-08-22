@@ -4,8 +4,8 @@ This directory documents the local LeanCTX Runtime and the work needed to
 converge its public contracts.
 
 LeanCTX is the **Context SDK for AI Agents**. It sits inside or alongside an
-existing agent loop and controls how context is selected, shaped, reused,
-recovered, and measured before inference. It does not replace an agent,
+existing agent loop and controls how context is selected, shaped, reused, and
+recovered before inference; it can expose evidence about those decisions. It does not replace an agent,
 orchestrate a fleet, choose a model, or host an agent platform.
 
 ## Product status

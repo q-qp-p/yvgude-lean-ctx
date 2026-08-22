@@ -21,9 +21,10 @@ use crate::core::ocla::types::{
 use crate::core::ocla_bus::{self, OclaEvent};
 use crate::core::tokens;
 
-const COMPRESSION_MANIFEST_JSON: &str = include_str!(
-    "../../../../../docs/contracts/ocla/capability-manifests/leanctx/context-optimization-v1.json"
-);
+const COMPRESSION_MANIFEST_JSON: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ocla/capability-manifests/leanctx/context-optimization-v1.json"
+));
 
 static COMPRESSION_MANIFEST: OnceLock<CapabilityManifestV1> = OnceLock::new();
 

@@ -1,9 +1,11 @@
 # LeanCTX as the local context layer
 
+> **Give every agent a context system.**
+
 LeanCTX is the **Context SDK for AI Agents**. It runs inside or alongside an
 existing agent and makes the context path before inference explicit:
 
-    select → shape → reuse → recover → measure
+    select → shape → reuse → recover
 
 The agent, task logic, model choice, tools, and retry policy remain with the
 integrator.
@@ -28,6 +30,18 @@ outside that visibility.
 | Attach | Available | Operate around a supported coding agent through local CLI, MCP, hooks, or proxy paths. |
 | Wrap | Preview | Use the declared Python SDK v1 reference-wrapper scope. |
 | Embed | Preview | Integrate natively into a custom host while the host retains ownership of its agent loop. |
+
+## Research: shared project context
+
+The local Runtime includes session, project knowledge, handoff, and
+agent-presence substrate. It can inform future **shared, scoped project
+context**: agents reuse bounded decisions, findings, and source references
+instead of passing complete transcripts.
+
+This is **Research**, not a supported agent-orchestration product. The host
+still assigns work, schedules agents, retries failures, and controls execution.
+LeanCTX does not yet provide a public cross-agent coordination, privacy,
+freshness, or interoperability contract.
 
 ## Scope boundaries
 

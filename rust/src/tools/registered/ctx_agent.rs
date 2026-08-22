@@ -15,7 +15,7 @@ impl McpTool for CtxAgentTool {
     fn tool_def(&self) -> Tool {
         tool_def(
             "ctx_agent",
-            "Experimental local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.\n\
+            "Research-only local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.\n\
             Enable the session category explicitly before evaluating it.\n\
             Actions: register (agent_type+role), post (message+category), read (poll),\n\
             status (active|idle|finished), handoff (task+summary), sync (agents+messages+scent),\n\

@@ -22,7 +22,7 @@ default-members = ["."]
 
 [package]
 name = "lean-ctx"
-version = "3.9.19"
+version = "3.9.20"
 edition = "2024"
 autobins = false
 description = "Local Context SDK for AI agents. Select, shape, reuse, recover, and measure context before inference."
@@ -168,8 +168,8 @@ tree-sitter = [
 wasm = ["dep:wasmi"]
 
 [dependencies]
-lean-ctx-ocla = { path = "crates/lean-ctx-ocla", version = "1.0.0" }
-lean-ctx-protocol = { path = "crates/lean-ctx-protocol", version = "0.1.0" }
+lean-ctx-ocla = { path = "crates/lean-ctx-ocla", version = "1.0.1" }
+lean-ctx-protocol = { path = "crates/lean-ctx-protocol", version = "0.1.1" }
 rmcp = { version = "2", features = [
   "server",
   "client",

@@ -33,9 +33,10 @@ const MAX_OUTPUT_BYTES: usize = 128;
 /// External reference processes must never receive an unbounded runtime.
 const MAX_PROCESS_TIMEOUT_MS: u64 = 30_000;
 
-const MANIFEST: &str = include_str!(
-    "../../../../../docs/contracts/ocla/capability-manifests/example/word-count-optimizer-v1.json"
-);
+const MANIFEST: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/ocla/capability-manifests/example/word-count-optimizer-v1.json"
+));
 
 fn manifest() -> &'static CapabilityManifestV1 {
     static MANIFEST_CACHE: OnceLock<CapabilityManifestV1> = OnceLock::new();

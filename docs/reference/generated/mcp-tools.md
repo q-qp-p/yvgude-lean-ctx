@@ -8,7 +8,7 @@ lean-ctx registers **83 MCP tools** (granular profile). Each entry below lists t
 
 ## `ctx_agent`
 
-Experimental local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.
+Research-only local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.
 Enable the session category explicitly before evaluating it.
 Actions: register (agent_type+role), post (message+category), read (poll),
 status (active|idle|finished), handoff (task+summary), sync (agents+messages+scent),
@@ -676,7 +676,7 @@ Parameters: `action`, `query`, `top_k`
 
 ## `ctx_task`
 
-Experimental local task record for collaboration experiments. It is not a public agent-orchestration contract.
+Research-only local task record for collaboration experiments. It is not a public agent-orchestration contract.
 Enable the session category explicitly before evaluating it.
 Actions: create|update|list|get|cancel|message|info.
 States: working|input-required|completed|failed|canceled.
@@ -732,7 +732,7 @@ Parameters: `action`, `format`
 
 ## `ctx_workflow`
 
-Experimental local state tracker with evidence notes. It is not a public workflow-orchestration product.
+Research-only local state tracker with evidence notes. It is not a public workflow-orchestration product.
 Enable the session category explicitly before evaluating it.
 transition to attach proof. Built-in plan_code_test when spec omitted.
 Actions: start|status|transition|complete|evidence_add|evidence_list|stop.

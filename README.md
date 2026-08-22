@@ -1,20 +1,22 @@
 # LeanCTX
 
-> **The Context SDK for AI Agents.**
+> **The Context SDK for AI Agents. Give every agent a context system.**
 
-LeanCTX is a local context-performance layer for existing AI agents. It controls
-how an agent selects, shapes, reuses, recovers, and measures context before
-inference. Your agent, model, tools, and task logic remain yours.
+LeanCTX is a local context layer for existing AI agents. It selects, shapes,
+reuses, and recovers the project context an agent needs inside the agent loop
+you own. Your agent, model, tools, and task logic remain yours.
 
-**Performance starts before inference.**
+Your framework runs the agent. LeanCTX manages the context path routed through
+it.
 
 LeanCTX supports three ways to integrate:
 
-- **Attach** — add LeanCTX around a supported coding agent through CLI, MCP, or
-  a local proxy.
-- **Wrap** — use a declared adapter with an explicit lifecycle and evidence
-  boundary.
-- **Embed** — integrate the Context Engine inside a custom agent or application.
+- **Attach — Available** — add LeanCTX around a supported coding agent through
+  CLI, MCP, or a local proxy.
+- **Wrap — Preview** — use the declared Python SDK v1 reference-wrapper path
+  with an explicit lifecycle and evidence boundary.
+- **Embed — Preview** — integrate the Context Engine inside a custom host; the
+  host keeps ownership of its full agent loop.
 
 It is not an agent platform, a generic agent builder, a hosted execution
 service, or a marketplace.
@@ -30,6 +32,9 @@ The **Python SDK v1** and its declared OpenAI Agents reference-wrapper are
 **Preview**. Performance Profiles, first-class Context Kits, the Performance
 Benchmark product flow, AutoTune, public rankings, and organization-scale
 operation are **Research**. An implementation directory is not a product claim.
+Local agent-presence, handoff, and related coordination substrate are also
+**Research**; LeanCTX does not currently provide a public multi-agent
+orchestration contract.
 
 ## The loop
 

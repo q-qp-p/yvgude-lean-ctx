@@ -1,6 +1,6 @@
 [package]
 name = "lean-ctx-ocla"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -18,7 +18,7 @@ name = "lean_ctx_ocla"
 async-trait = "0.1"
 blake3 = "1.8"
 getrandom = "0.4"
-lean-ctx-protocol = { path = "../lean-ctx-protocol" }
+lean-ctx-protocol = { path = "../lean-ctx-protocol", version = "0.1.1" }
 semver = "1.0.28"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

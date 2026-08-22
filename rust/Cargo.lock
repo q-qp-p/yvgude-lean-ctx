@@ -2041,7 +2041,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lean-ctx"
-version = "3.9.19"
+version = "3.9.20"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2158,7 +2158,7 @@ dependencies = [
 
 [[package]]
 name = "lean-ctx-ocla"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2172,7 +2172,7 @@ dependencies = [
 
 [[package]]
 name = "lean-ctx-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

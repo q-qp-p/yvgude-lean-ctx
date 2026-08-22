@@ -34,7 +34,7 @@ const TIMEOUT_MARKER: &str = "ERROR: command timed out after ";
 
 const MANIFEST_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../docs/contracts/ocla/capability-manifests/rtk/rtk-shell-v1.json"
+    "/assets/ocla/capability-manifests/rtk/rtk-shell-v1.json"
 ));
 
 /// Configuration for the external shell optimizer.

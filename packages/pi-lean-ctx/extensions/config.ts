@@ -102,8 +102,18 @@ export interface ResolvedPiConfig {
 /** Absolute path to the Pi override file (Pi's per-extension config convention).
  *  Respects `PI_CODING_AGENT_DIR` when set (#930). */
 export function piConfigPath(): string {
-  const piHome = process.env.PI_CODING_AGENT_DIR || resolve(homedir(), ".pi");
-  return resolve(piHome, "agent", "extensions", "pi-lean-ctx", "config.json");
+  const agentDir = process.env.PI_CODING_AGENT_DIR;
+  if (!agentDir) {
+    return resolve(homedir(), ".pi", "agent", "extensions", "pi-lean-ctx", "config.json");
+  }
+
+  // Pi defines PI_CODING_AGENT_DIR as the agent directory itself. Keep the
+  // pre-#1506 nested location as a fallback for existing profile managers.
+  const direct = resolve(agentDir, "extensions", "pi-lean-ctx", "config.json");
+  if (existsSync(direct)) return direct;
+
+  const legacy = resolve(agentDir, "agent", "extensions", "pi-lean-ctx", "config.json");
+  return existsSync(legacy) ? legacy : direct;
 }
 
 function envFlag(name: string): boolean {

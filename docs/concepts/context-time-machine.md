@@ -4,8 +4,8 @@
 > claim.** This proposal predates LeanCTX's current product boundary and must not
 > be used to advertise a dashboard, hosted registry, Context Snapshot product,
 > public sharing, or universal performance proof. LeanCTX is **The Context SDK
-> for AI Agents**: an available local context-performance layer for existing
-> agents. Current scope and status are governed by
+> for AI Agents**: an available local context system for existing agents that
+> selects, shapes, reuses, and recovers task-fit context. Current scope and status are governed by
 > [`docs/internal/README.md`](../internal/README.md).
 
 ## TL;DR

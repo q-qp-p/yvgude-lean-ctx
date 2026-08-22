@@ -8,8 +8,8 @@
 
 An integrator owns the agent loop, task assignment, model choice, tools, retry
 policy, and any coordination between agents. LeanCTX may run inside or alongside
-each of those agents to control how that agent selects, shapes, reuses, recovers,
-and measures context before inference.
+each of those agents to control how that agent selects, shapes, reuses, and
+recovers context before inference, with local evidence about those decisions.
 
 The public integration depths remain:
 
@@ -37,4 +37,6 @@ A future coordination capability needs an explicit product decision, a bounded
 contract, security and privacy ownership, observable evidence limits, and the
 status gate in [Product Architecture](../internal/vision/PRODUCT-ARCHITECTURE.md).
 Until then, agents integrate LeanCTX for their own context path; they do not
-depend on LeanCTX to coordinate the work itself.
+depend on LeanCTX to coordinate the work itself. The Research direction may be
+described internally as **shared, scoped project context**, never as an agent
+bus, scheduler, or agent-to-agent communication platform.

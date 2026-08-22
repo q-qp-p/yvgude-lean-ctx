@@ -28,10 +28,23 @@ jobs:
       - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - name: Check SDK ↔ engine coupling
         run: python3 scripts/check-sdk-versions.py
       - name: Check npm package ↔ engine version coupling
         run: python3 scripts/check-package-versions.py
+      - name: Verify published crate assets
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          cargo package --locked --no-verify --list -p lean-ctx > package-files.txt
+          for asset in \
+            assets/ocla/capability-manifests/leanctx/context-optimization-v1.json \
+            assets/ocla/capability-manifests/leanctx/passthrough-v1.json \
+            assets/ocla/capability-manifests/example/word-count-optimizer-v1.json \
+            assets/ocla/capability-manifests/rtk/rtk-shell-v1.json; do
+            grep -Fx "$asset" package-files.txt
+          done
 
   build:
     name: Build ${{ matrix.artifact || matrix.target }}
@@ -367,28 +380,31 @@ jobs:
             echo "crates.io already has lean-ctx ${CRATE_VERSION} — skipping publish."
             exit 0
           fi
-          # Publish lean-ctx-ocla first (workspace dependency).
-          OCLA_VERSION="$(grep -m1 '^version' crates/lean-ctx-ocla/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
-          if ! curl -fsSL -H "User-Agent: lean-ctx-release" \
-               "https://crates.io/api/v1/crates/lean-ctx-ocla/${OCLA_VERSION}" >/dev/null 2>&1; then
-            echo "Publishing lean-ctx-ocla ${OCLA_VERSION} to crates.io first..."
-            cargo publish --allow-dirty --no-verify --token "${CARGO_REGISTRY_TOKEN}" -p lean-ctx-ocla
-            echo "Waiting 30s for crates.io index propagation..."
-            sleep 30
-          fi
-          # Publish lean-ctx-protocol (workspace dependency).
+          # Publish the dependency graph from leaves to the engine.
           PROTO_VERSION="$(grep -m1 '^version' crates/lean-ctx-protocol/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
           if ! curl -fsSL -H "User-Agent: lean-ctx-release" \
                "https://crates.io/api/v1/crates/lean-ctx-protocol/${PROTO_VERSION}" >/dev/null 2>&1; then
             echo "Publishing lean-ctx-protocol ${PROTO_VERSION} to crates.io first..."
-            cargo publish --allow-dirty --no-verify --token "${CARGO_REGISTRY_TOKEN}" -p lean-ctx-protocol
+            cargo publish --allow-dirty --token "${CARGO_REGISTRY_TOKEN}" -p lean-ctx-protocol
             echo "Waiting 30s for crates.io index propagation..."
             sleep 30
           fi
-          # --no-verify: rmcp 2.2.0 on crates.io has a compile bug (from_bytes_stream
-          # vs from_byte_stream); our [patch.crates-io] fixes it but is stripped by
-          # cargo package. Binary builds use --locked and are unaffected.
-          cargo publish --allow-dirty --no-verify --token "${CARGO_REGISTRY_TOKEN}"
+          OCLA_VERSION="$(grep -m1 '^version' crates/lean-ctx-ocla/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          if ! curl -fsSL -H "User-Agent: lean-ctx-release" \
+               "https://crates.io/api/v1/crates/lean-ctx-ocla/${OCLA_VERSION}" >/dev/null 2>&1; then
+            echo "Publishing lean-ctx-ocla ${OCLA_VERSION} to crates.io..."
+            cargo publish --allow-dirty --token "${CARGO_REGISTRY_TOKEN}" -p lean-ctx-ocla
+            echo "Waiting 30s for crates.io index propagation..."
+            sleep 30
+          fi
+          # `cargo package` verifies the engine from its packaged source after
+          # its published protocol dependencies are available and local
+          # `[patch.crates-io]` entries have been stripped. This must pass
+          # before we promise that `cargo install lean-ctx` works.
+          cargo package --locked -p lean-ctx
+          # Verification is intentionally mandatory: source packages cannot rely
+          # on this repository's local `[patch.crates-io]` entries.
+          cargo publish --allow-dirty --token "${CARGO_REGISTRY_TOKEN}"
 
   publish-npm:
     name: Publish to npm
@@ -419,7 +435,21 @@ jobs:
           fi
           npm publish --access public
 
-      # pi-lean-ctx publish removed: package archived (2026-08-20)
+      - name: Publish pi-lean-ctx
+        working-directory: packages/pi-lean-ctx
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "pi-lean-ctx@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "npm already has pi-lean-ctx@${PKG_VERSION} — skipping publish."
+            exit 0
+          fi
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm publish --access public
   update-homebrew:
     name: Update Homebrew
     needs: release
