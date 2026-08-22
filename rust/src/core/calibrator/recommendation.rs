@@ -33,7 +33,11 @@ pub(crate) fn recommend(
     _config: &CalibrationConfig,
 ) -> Option<Recommendation> {
     let baseline = all_results.first()?;
-    if let Some(best) = frontier.iter().min_by(|a, b| compare_by_preference(a, b)) {
+    if let Some(best) = frontier
+        .iter()
+        .filter(|result| result.receipt_evidence_complete)
+        .min_by(|a, b| compare_by_preference(a, b))
+    {
         let comparison = BaselineComparison {
             cost_delta_pct: if baseline.cost_per_task > 0.0 {
                 (best.cost_per_task - baseline.cost_per_task) / baseline.cost_per_task * 100.0
@@ -94,7 +98,7 @@ mod tests {
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
             quality_evaluated: true,
-            receipt_evidence_complete: false,
+            receipt_evidence_complete: true,
         }
     }
 
@@ -115,6 +119,21 @@ mod tests {
     #[test]
     fn empty_none() {
         assert!(recommend(&[], &[], &CalibrationConfig::default()).is_none());
+    }
+
+    #[test]
+    fn incomplete_receipt_evidence_cannot_produce_recommendation() {
+        let mut incomplete = result("incomplete", 0.10, 0.99);
+        incomplete.receipt_evidence_complete = false;
+
+        assert!(
+            recommend(
+                &[incomplete.clone()],
+                &[incomplete],
+                &CalibrationConfig::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]

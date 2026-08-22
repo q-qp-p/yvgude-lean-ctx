@@ -45,6 +45,7 @@ pub(crate) fn compute_pareto_frontier(
             r.cost_per_task.is_finite()
                 && r.mean_quality.is_finite()
                 && r.quality_evaluated
+                && r.receipt_evidence_complete
                 && r.mean_quality >= quality_floor
         })
         .cloned()
@@ -89,7 +90,7 @@ mod tests {
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
             quality_evaluated: true,
-            receipt_evidence_complete: false,
+            receipt_evidence_complete: true,
         }
     }
 
@@ -113,6 +114,14 @@ mod tests {
     fn all_below_floor() {
         let results = vec![result("a", 0.10, 0.80), result("b", 0.20, 0.85)];
         assert!(compute_pareto_frontier(&results, 0.95).is_empty());
+    }
+
+    #[test]
+    fn observed_or_incompletely_receipted_results_cannot_reach_frontier() {
+        let mut incomplete = result("incomplete", 0.10, 0.99);
+        incomplete.receipt_evidence_complete = false;
+
+        assert!(compute_pareto_frontier(&[incomplete], 0.95).is_empty());
     }
 
     #[test]

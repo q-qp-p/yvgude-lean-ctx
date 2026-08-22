@@ -2,7 +2,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod cursor;
 pub(crate) mod detection;
-mod receipt;
+pub(crate) mod receipt;
 mod timeout;
 pub(crate) mod traits;
 

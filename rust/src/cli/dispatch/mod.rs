@@ -681,8 +681,16 @@ pub fn run() {
                 // inside the handler (#1035), so they must NOT also carry the
                 // force-exit watchdog (which would `exit(1)` with no decision and
                 // wedge the host). The remaining hooks keep the simple zombie-guard.
-                if !matches!(action, "rewrite" | "redirect" | "deny" | "vibe-pre-tool") {
-                    hook_handlers::arm_watchdog(std::time::Duration::from_secs(5));
+                match action {
+                    // Observation is loss-tolerant telemetry. It gets a shorter,
+                    // successful fail-open watchdog so it can never make Codex
+                    // report a PostToolUse timeout under load.
+                    "observe" => {
+                        hook_handlers::arm_fail_open_watchdog(hook_handlers::OBSERVE_HOOK_BUDGET);
+                    }
+                    // Gating hooks self-bound and fail open inside their handlers.
+                    "rewrite" | "redirect" | "deny" | "vibe-pre-tool" => {}
+                    _ => hook_handlers::arm_watchdog(std::time::Duration::from_secs(5)),
                 }
                 match action {
                     "rewrite" => hook_handlers::handle_rewrite(),

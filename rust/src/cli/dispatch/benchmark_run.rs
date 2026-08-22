@@ -4,6 +4,7 @@ use crate::core::benchmark_spec::types::BenchmarkSpecV1;
 use crate::core::benchmark_spec::{profile_bridge, report};
 use crate::core::local_runner::runner::{LocalRunner, RunConfig};
 use crate::core::profiles;
+use std::fs;
 use std::path::PathBuf;
 
 pub(crate) fn cmd_benchmark_run(args: &[String]) -> i32 {
@@ -12,40 +13,44 @@ pub(crate) fn cmd_benchmark_run(args: &[String]) -> i32 {
         return 0;
     }
 
-    let profile_name = parse_flag_str(args, "--profile").unwrap_or_else(|| "coder".into());
+    let explicit_profile_name = parse_flag_str(args, "--profile");
+    let profile_name = explicit_profile_name
+        .clone()
+        .unwrap_or_else(|| "coder".into());
     let suite_name = parse_flag_str(args, "--suite").unwrap_or_else(|| "coding-v1".into());
-    let repeats = parse_flag_u32(args, "--repeats").unwrap_or(1);
     let requested_agent = first_positional(args);
 
     eprintln!("lean-ctx benchmark-run");
     eprintln!("  Profile: {profile_name}");
     eprintln!("  Suite:   {suite_name}");
-    eprintln!("  Repeats: {repeats}");
     if let Some(agent) = requested_agent {
         eprintln!("  Agent:   {agent}");
     }
     eprintln!();
 
-    let Some(_profile) = profiles::load_profile(&profile_name) else {
+    let Some(profile) = profiles::load_profile(&profile_name) else {
         eprintln!("error: profile '{profile_name}' not found");
         return 2;
     };
 
-    let suite = if suite_name == "coding-v1" {
-        profile_bridge::default_coding_suite()
-    } else {
-        eprintln!("error: benchmark suite '{suite_name}' not found");
-        return 2;
-    };
-
-    let mut spec = match profile_bridge::create_spec(&profile_name, suite) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: {e}");
+    let mut spec = match load_spec(
+        args,
+        explicit_profile_name.as_deref(),
+        &profile_name,
+        &suite_name,
+    ) {
+        Ok(spec) => spec,
+        Err(error) => {
+            eprintln!("error: {error}");
             return 2;
         }
     };
-    spec.configuration.repeats = repeats;
+    eprintln!("  Repeats: {}", spec.configuration.repeats);
+
+    if let Err(error) = bind_profile_hash(&mut spec, &profile) {
+        eprintln!("error: {error}");
+        return 2;
+    }
 
     if args.iter().any(|a| a == "--dry-run") {
         if let Ok(json) = dry_run_spec_json(&spec) {
@@ -93,13 +98,22 @@ pub(crate) fn cmd_benchmark_run(args: &[String]) -> i32 {
         eprintln!("error: agent '{agent}' was not detected");
         return 2;
     };
+    if let Some(expected_agent) = spec.configuration.agent.as_deref()
+        && !connector_matches(expected_agent, connector.name())
+    {
+        eprintln!(
+            "error: benchmark spec requires agent '{expected_agent}', but selected '{}'",
+            connector.name()
+        );
+        return 2;
+    }
     let config = RunConfig {
         agent_name: connector.name().to_owned(),
         profile_name,
         suite_name: Some(suite_name),
         timeout_override_ms: None,
         working_dir,
-        repeats,
+        repeats: spec.configuration.repeats,
     };
     match run_with_connector(&spec, config, connector, format) {
         Ok((exit_code, output)) => {
@@ -111,6 +125,63 @@ pub(crate) fn cmd_benchmark_run(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+fn bind_profile_hash(
+    spec: &mut BenchmarkSpecV1,
+    profile: &crate::core::profiles::Profile,
+) -> Result<(), String> {
+    let expected = profile_bridge::configuration_from_profile(profile)
+        .profile_hash
+        .expect("profile bridge always hashes a loaded profile");
+    match spec.configuration.profile_hash.as_deref() {
+        None => spec.configuration.profile_hash = Some(expected),
+        Some(actual) if actual == expected => {}
+        Some(_) => {
+            return Err("benchmark spec profile_hash does not match the explicit --profile".into());
+        }
+    }
+    Ok(())
+}
+
+fn load_spec(
+    args: &[String],
+    explicit_profile_name: Option<&str>,
+    profile_name: &str,
+    suite_name: &str,
+) -> Result<BenchmarkSpecV1, String> {
+    let Some(path) = parse_flag_str(args, "--spec") else {
+        let suite = if suite_name == "coding-v1" {
+            profile_bridge::default_coding_suite()
+        } else {
+            return Err(format!("benchmark suite '{suite_name}' not found"));
+        };
+        let mut spec =
+            profile_bridge::create_spec(profile_name, suite).map_err(|error| error.to_string())?;
+        spec.configuration.repeats = parse_flag_u32(args, "--repeats").unwrap_or(1);
+        spec.validate()
+            .map_err(|error| format!("invalid generated benchmark spec: {error}"))?;
+        return Ok(spec);
+    };
+
+    if explicit_profile_name.is_none() {
+        return Err(
+            "--spec requires an explicit --profile so its profile identity is reproducible".into(),
+        );
+    }
+    if args.iter().any(|arg| arg == "--suite") {
+        return Err("--spec and --suite cannot be used together".into());
+    }
+    if args.iter().any(|arg| arg == "--repeats") {
+        return Err("--spec controls repeats; remove --repeats".into());
+    }
+    let source = fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read benchmark spec '{path}': {error}"))?;
+    let spec: BenchmarkSpecV1 = serde_json::from_str(&source)
+        .map_err(|error| format!("invalid benchmark spec '{path}': {error}"))?;
+    spec.validate_evidence()
+        .map_err(|error| format!("invalid evidence benchmark spec '{path}': {error}"))?;
+    Ok(spec)
 }
 
 fn dry_run_spec_json(spec: &BenchmarkSpecV1) -> serde_json::Result<String> {
@@ -178,6 +249,7 @@ fn first_positional(args: &[String]) -> Option<&str> {
         "--suite",
         "--working-dir",
         "--repeats",
+        "--spec",
         "--output",
         "--format",
     ];
@@ -226,6 +298,7 @@ OPTIONS:
     --profile NAME      Performance Profile (default: active)
     --suite NAME        Benchmark suite (default: coding-v1)
     --repeats N         Repetitions (default: 1)
+    --spec PATH         Evaluated BenchmarkSpecV1 JSON (requires --profile)
     --working-dir PATH  Agent working directory (default: current directory)
     --format FORMAT     Report format: terminal or json (default: terminal)
     --dry-run           Print BenchmarkSpec JSON and exit
@@ -233,7 +306,8 @@ OPTIONS:
 
 EXAMPLES:
     lean-ctx benchmark-run
-    lean-ctx benchmark-run codex --profile monorepo --repeats 3"
+    lean-ctx benchmark-run codex --profile monorepo --repeats 3
+    lean-ctx benchmark-run codex --profile monorepo --spec evidence.json"
     );
 }
 
@@ -267,6 +341,93 @@ mod tests {
 
         assert_eq!(parsed.id, spec.id);
         assert_eq!(parsed.suite.tasks.len(), spec.suite.tasks.len());
+    }
+
+    #[test]
+    fn loaded_evidence_spec_is_validated_and_keeps_its_repeat_count() {
+        let spec = BenchmarkSpecV1 {
+            id: "evidence-1".into(),
+            version: "1.0.0".into(),
+            name: "Evaluated evidence".into(),
+            description: "Self-contained quality task".into(),
+            suite: crate::core::benchmark_spec::types::BenchmarkSuite {
+                kind: crate::core::benchmark_spec::types::BenchmarkKind::TaskScore,
+                tasks: vec![crate::core::benchmark_spec::types::BenchmarkTask {
+                    id: "t1".into(),
+                    name: "Answer".into(),
+                    description: "Answer the declared question".into(),
+                    kind: crate::core::benchmark_spec::types::TaskKind::Custom,
+                    timeout_ms: Some(1_000),
+                    evaluation: Some(crate::core::benchmark_spec::types::EvaluationSpecV1::Qa {
+                        answers: vec!["correct answer".into()],
+                        minimum_f1: 1.0,
+                    }),
+                }],
+            },
+            configuration: crate::core::benchmark_spec::types::BenchmarkConfiguration {
+                profile_hash: Some("profile-hash".into()),
+                agent: None,
+                model: None,
+                runtime_version: "1.0.0".into(),
+                repeats: 2,
+                quality_floor: 0.95,
+            },
+            created_at: "2026-08-22T00:00:00Z".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("evidence.json");
+        fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        let args = vec![
+            "--profile".into(),
+            "coder".into(),
+            "--spec".into(),
+            path.display().to_string(),
+        ];
+
+        let loaded = load_spec(&args, Some("coder"), "coder", "coding-v1").unwrap();
+
+        assert_eq!(loaded.configuration.repeats, 2);
+    }
+
+    #[test]
+    fn spec_loader_rejects_implicit_profile_and_unevaluated_tasks() {
+        let args = vec!["--spec".into(), "evidence.json".into()];
+        let error = load_spec(&args, None, "coder", "coding-v1").unwrap_err();
+        assert!(error.contains("explicit --profile"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unevaluated.json");
+        let spec = test_spec();
+        fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        let args = vec![
+            "--profile".into(),
+            "coder".into(),
+            "--spec".into(),
+            path.display().to_string(),
+        ];
+        let error = load_spec(&args, Some("coder"), "coder", "coding-v1").unwrap_err();
+        assert!(error.contains("requires a deterministic evaluator"));
+    }
+
+    #[test]
+    fn explicit_profile_binds_an_unpinned_workload_and_rejects_a_wrong_pin() {
+        let mut spec = test_spec();
+        spec.suite.tasks[0].evaluation =
+            Some(crate::core::benchmark_spec::types::EvaluationSpecV1::Qa {
+                answers: vec!["answer".into()],
+                minimum_f1: 1.0,
+            });
+        spec.configuration.profile_hash = None;
+        let profile = profiles::load_profile("coder").unwrap();
+
+        bind_profile_hash(&mut spec, &profile).unwrap();
+        assert_eq!(
+            spec.configuration.profile_hash,
+            profile_bridge::configuration_from_profile(&profile).profile_hash
+        );
+
+        spec.configuration.profile_hash = Some("wrong".into());
+        assert!(bind_profile_hash(&mut spec, &profile).is_err());
     }
 
     #[test]

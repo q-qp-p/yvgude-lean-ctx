@@ -388,7 +388,7 @@ impl Config {
                 .map(|s| s.to_lowercase())
                 .collect();
         }
-        vec!["core".to_string(), "session".to_string()]
+        vec!["core".to_string()]
     }
 
     /// Returns the effective tool profile.

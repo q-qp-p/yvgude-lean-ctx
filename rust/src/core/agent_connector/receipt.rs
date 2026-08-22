@@ -139,6 +139,33 @@ pub(crate) fn verify_receipt_reference(reference: &str) -> anyhow::Result<bool> 
     verify_receipt_signature(&receipt, &public_key).map_err(anyhow::Error::msg)
 }
 
+/// Load the complete, locally persisted evidence for a receipt reference.
+///
+/// The caller receives only fixed, safe archive paths. It can include these
+/// bytes in a portable evidence bundle without reopening the host data
+/// directory to path traversal. A receipt that fails local verification is
+/// never exported as evidence.
+pub(crate) fn receipt_artifacts(reference: &str) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    let receipt_id = receipt_id_from_reference(reference)?;
+    let directory = receipt_directory()?;
+    let verified = verify_receipt_reference(reference)?;
+    if !verified {
+        anyhow::bail!("execution receipt '{receipt_id}' failed local verification");
+    }
+    let names = [
+        ("receipt", format!("{receipt_id}.json")),
+        ("provider-evidence", format!("{receipt_id}.evidence.json")),
+        ("public-key", format!("{receipt_id}.pub")),
+    ];
+    names
+        .into_iter()
+        .map(|(kind, file_name)| {
+            let contents = fs::read(directory.join(&file_name))?;
+            Ok((format!("execution-receipts/{receipt_id}/{kind}"), contents))
+        })
+        .collect()
+}
+
 fn observed_provider_evidence(
     connector: &str,
     provider: &str,
@@ -391,6 +418,11 @@ mod tests {
         assert_eq!(link.tokens_used.input_tokens, 100);
         assert_eq!(link.tokens_used.cache_read_tokens, 25);
         assert!(verify_receipt_reference(&link.reference).expect("offline verifier should run"));
+        let artifacts = receipt_artifacts(&link.reference).expect("receipt artifacts export");
+        assert_eq!(artifacts.len(), 3);
+        assert!(artifacts.iter().all(|(path, bytes)| {
+            path.starts_with("execution-receipts/receipt-") && !bytes.is_empty()
+        }));
     }
 
     #[test]

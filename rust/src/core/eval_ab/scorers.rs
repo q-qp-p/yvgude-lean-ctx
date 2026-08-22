@@ -16,6 +16,10 @@ use serde::{Deserialize, Serialize};
 
 use super::suite::{Domain, Task};
 
+const MAX_EVALUATION_FIXTURE_FILES: usize = 128;
+const MAX_EVALUATION_FIXTURE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_EVALUATION_FIXTURE_DEPTH: usize = 16;
+
 /// A scored answer. `value` is the continuous metric in `[0,1]`; `passed` is the binary verdict
 /// used for win/tie/loss accounting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +156,8 @@ fn token_f1(pred: &[&str], gold: &[&str]) -> f64 {
 pub struct CodeScorer {
     /// Wall-clock cap for the test command.
     pub timeout: Duration,
+    /// New benchmark-spec code evaluators require process and filesystem isolation.
+    require_isolation: bool,
 }
 
 impl Default for CodeScorer {
@@ -160,6 +166,18 @@ impl Default for CodeScorer {
         #[allow(clippy::duration_suboptimal_units)]
         Self {
             timeout: Duration::from_secs(60),
+            require_isolation: false,
+        }
+    }
+}
+
+impl CodeScorer {
+    /// Runs a code fixture with the platform sandbox enabled, or fails closed
+    /// when the host cannot provide the required isolation.
+    pub fn isolated() -> Self {
+        Self {
+            require_isolation: true,
+            ..Self::default()
         }
     }
 }
@@ -176,7 +194,8 @@ impl Scorer for CodeScorer {
             .ok_or_else(|| anyhow!("code task {} has no test_cmd", task.id))?;
 
         let sandbox = tempfile::tempdir().context("creating sandbox")?;
-        copy_dir_all(workspace, sandbox.path())
+        let mut copy_budget = CopyBudget::default();
+        copy_dir_all(workspace, sandbox.path(), 0, &mut copy_budget)
             .with_context(|| format!("copying workspace {}", workspace.display()))?;
 
         let target_path = sandbox.path().join(target);
@@ -186,7 +205,12 @@ impl Scorer for CodeScorer {
         std::fs::write(&target_path, extract_code(output))
             .with_context(|| format!("writing solution to {}", target_path.display()))?;
 
-        let passed = run_with_timeout(test_cmd, sandbox.path(), self.timeout)?;
+        let passed = run_with_timeout(
+            test_cmd,
+            sandbox.path(),
+            self.timeout,
+            self.require_isolation,
+        )?;
         Ok(Score {
             value: f64::from(u8::from(passed)),
             passed,
@@ -210,30 +234,101 @@ fn extract_code(output: &str) -> String {
     trimmed.to_string()
 }
 
-/// Recursively copies `src` into `dst` (which must already exist).
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+#[derive(Default)]
+struct CopyBudget {
+    files: usize,
+    bytes: u64,
+}
+
+/// Recursively copies a deliberately small, regular-file-only fixture into
+/// `dst` (which must already exist).  A benchmark evaluator never needs a full
+/// repository checkout, device, FIFO, symlink, or unbounded file tree.
+fn copy_dir_all(
+    src: &Path,
+    dst: &Path,
+    depth: usize,
+    budget: &mut CopyBudget,
+) -> std::io::Result<()> {
+    if depth > MAX_EVALUATION_FIXTURE_DEPTH {
+        return Err(std::io::Error::other(
+            "code-evaluation fixture is nested too deeply",
+        ));
+    }
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            return Err(std::io::Error::other(format!(
+                "refusing symlink in code-evaluation workspace: {}",
+                from.display()
+            )));
+        }
+        if file_type.is_dir() {
             std::fs::create_dir_all(&to)?;
-            copy_dir_all(&from, &to)?;
-        } else {
+            copy_dir_all(&from, &to, depth + 1, budget)?;
+        } else if file_type.is_file() {
+            let file_bytes = entry.metadata()?.len();
+            budget.files = budget.files.saturating_add(1);
+            budget.bytes = budget.bytes.saturating_add(file_bytes);
+            if budget.files > MAX_EVALUATION_FIXTURE_FILES
+                || budget.bytes > MAX_EVALUATION_FIXTURE_BYTES
+            {
+                return Err(std::io::Error::other(
+                    "code-evaluation fixture exceeds file or byte limit",
+                ));
+            }
             std::fs::copy(&from, &to)?;
+        } else {
+            return Err(std::io::Error::other(format!(
+                "refusing non-regular entry in code-evaluation workspace: {}",
+                from.display()
+            )));
         }
     }
     Ok(())
 }
 
 /// Runs `cmd` via the POSIX shell in `dir`, returning `true` iff it exits 0 within `timeout`.
-fn run_with_timeout(cmd: &str, dir: &Path, timeout: Duration) -> Result<bool> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(dir)
+fn run_with_timeout(
+    cmd: &str,
+    dir: &Path,
+    timeout: Duration,
+    require_isolation: bool,
+) -> Result<bool> {
+    // macOS temporary directories are commonly exposed through `/var`, a
+    // symlink to `/private/var`. sandbox-exec evaluates canonical paths, so
+    // grant and enter the same canonical fixture directory or a valid fixture
+    // can be denied as outside the sandbox.
+    let execution_dir = if require_isolation {
+        std::fs::canonicalize(dir)
+            .with_context(|| format!("canonicalizing isolated fixture {}", dir.display()))?
+    } else {
+        dir.to_path_buf()
+    };
+    let mut command = if require_isolation {
+        isolated_test_command(cmd, &execution_dir)?
+    } else {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(cmd);
+        command
+    };
+    let stderr_path = require_isolation.then(|| execution_dir.join(".leanctx-evaluator-stderr"));
+    if let Some(path) = &stderr_path {
+        let stderr = std::fs::File::create(path).with_context(|| {
+            format!(
+                "creating isolated evaluator diagnostics at {}",
+                path.display()
+            )
+        })?;
+        command.stderr(Stdio::from(stderr));
+    } else {
+        command.stderr(Stdio::null());
+    }
+    let mut child = command
+        .current_dir(&execution_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
         .stdin(Stdio::null())
         .spawn()
         .with_context(|| format!("spawning test command: {cmd}"))?;
@@ -241,7 +336,19 @@ fn run_with_timeout(cmd: &str, dir: &Path, timeout: Duration) -> Result<bool> {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(status.success());
+            if status.success() {
+                return Ok(true);
+            }
+            if let Some(path) = stderr_path {
+                let diagnostics = std::fs::read_to_string(path).unwrap_or_default();
+                if !diagnostics.trim().is_empty() {
+                    anyhow::bail!(
+                        "isolated evaluator could not execute test command: {}",
+                        diagnostics.trim()
+                    );
+                }
+            }
+            return Ok(false);
         }
         if start.elapsed() > timeout {
             let _ = child.kill();
@@ -250,6 +357,43 @@ fn run_with_timeout(cmd: &str, dir: &Path, timeout: Duration) -> Result<bool> {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[cfg(target_os = "macos")]
+fn isolated_test_command(cmd: &str, dir: &Path) -> Result<Command> {
+    let directory = dir
+        .to_str()
+        .ok_or_else(|| anyhow!("code-evaluation directory is not valid UTF-8"))?
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    // The evaluator owns the copied fixture. The sandbox can read that fixture
+    // plus the system shell/runtime only; it cannot read the caller's home,
+    // repository, or arbitrary user-readable files. The fixture may fork a
+    // bounded shell child and receives strict CPU, file-size, and descriptor
+    // limits. macOS applies `RLIMIT_NPROC` per user, so setting a tiny process
+    // limit would deny a valid fixture whenever the user already has more
+    // processes than that limit.
+    let profile = format!(
+        "(version 1)\n(deny default)\n(allow process*)\n(allow file-read* (literal \"/\") (subpath \"{directory}\") (subpath \"/bin\") (subpath \"/usr/bin\") (subpath \"/usr/lib\") (subpath \"/System\") (subpath \"/private/var/db\") (subpath \"/private/var/select\") (subpath \"/private/var/folders\") (subpath \"/var/folders\") (literal \"/dev/null\"))\n(allow file-write* (subpath \"{directory}\"))\n(deny network*)"
+    );
+    let mut command = Command::new("/usr/bin/sandbox-exec");
+    command.args([
+        "-p",
+        &profile,
+        "/bin/sh",
+        "-c",
+        "ulimit -t 5 -f 8192 -n 16; exec /bin/sh -c \"$1\"",
+        "leanctx-code-evaluator",
+        cmd,
+    ]);
+    Ok(command)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn isolated_test_command(_cmd: &str, _dir: &Path) -> Result<Command> {
+    Err(anyhow!(
+        "isolated code evaluation requires a supported local sandbox; this host has none"
+    ))
 }
 
 #[cfg(test)]

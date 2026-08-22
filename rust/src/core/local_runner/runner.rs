@@ -9,7 +9,7 @@ use crate::core::benchmark_spec::types::{
     BenchmarkEvaluation, BenchmarkOutcome, BenchmarkResult, BenchmarkSpecV1, BenchmarkSummary,
     BenchmarkTask, EvaluationSpecV1, TaskKind,
 };
-use crate::core::eval_ab::scorers::score_task;
+use crate::core::eval_ab::scorers::{CodeScorer, Scorer, score_task};
 use crate::core::eval_ab::suite::{Domain, Task as EvaluationTask};
 
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
@@ -154,15 +154,18 @@ impl LocalRunner {
     where
         F: Fn(RunProgress),
     {
+        spec.validate()
+            .map_err(|error| anyhow::anyhow!("invalid benchmark spec: {error}"))?;
         on_progress(RunProgress::Starting);
         let total = spec.suite.tasks.len();
-        let mut outcomes = Vec::with_capacity(total * self.config.repeats as usize);
+        let repeats = spec.configuration.repeats;
+        let mut outcomes = Vec::with_capacity(total * repeats as usize);
 
-        for repeat in 0..self.config.repeats {
+        for repeat in 0..repeats {
             for (idx, task) in spec.suite.tasks.iter().enumerate() {
                 on_progress(RunProgress::RunningTask {
                     task_index: idx + (repeat as usize * total),
-                    total: total * self.config.repeats as usize,
+                    total: total * repeats as usize,
                     task_id: task.id.clone(),
                 });
                 let request = self.task_request_for_profile(spec, task, profile_name);
@@ -306,6 +309,30 @@ fn evaluate_task(
                 output_digest: blake3::hash(output.as_bytes()).to_hex().to_string(),
             })
         }
+        EvaluationSpecV1::Code {
+            target_file,
+            test_cmd,
+        } => {
+            let evaluation_task = EvaluationTask {
+                id: task.id.clone(),
+                domain: Domain::Code,
+                prompt: task.description.clone(),
+                workspace: working_dir.display().to_string(),
+                retrieval_query: None,
+                answers: Vec::new(),
+                target_file: Some(target_file.clone()),
+                test_cmd: Some(test_cmd.clone()),
+            };
+            let score = CodeScorer::isolated().score(&evaluation_task, output, working_dir)?;
+            Ok(BenchmarkEvaluation {
+                evaluator_id: spec.id().to_owned(),
+                metric: score.metric,
+                score: score.value,
+                passed: score.passed,
+                detail: score.detail,
+                output_digest: blake3::hash(output.as_bytes()).to_hex().to_string(),
+            })
+        }
     }
 }
 
@@ -415,6 +442,50 @@ mod tests {
             Some("receipt:task-1")
         );
         assert_eq!(outcome.error.as_deref(), Some("agent exited with code 1"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn isolated_code_evaluator_scores_a_fixture_without_touching_the_workspace() {
+        let workspace = tempfile::tempdir().expect("temporary fixture workspace");
+        std::fs::write(
+            workspace.path().join("solution.sh"),
+            "add() { printf '%s\\n' 0; }\n",
+        )
+        .expect("write broken fixture");
+        std::fs::write(
+            workspace.path().join("test.sh"),
+            ". ./solution.sh\n[ \"$(add 2 3)\" = \"5\" ]\n",
+        )
+        .expect("write deterministic test");
+        let task = BenchmarkTask {
+            id: "repair".into(),
+            name: "Repair".into(),
+            description: "Return the repaired solution.".into(),
+            kind: TaskKind::FixBug,
+            timeout_ms: None,
+            evaluation: Some(EvaluationSpecV1::Code {
+                target_file: "solution.sh".into(),
+                test_cmd: "sh test.sh".into(),
+            }),
+        };
+
+        let evaluation = evaluate_task(
+            &task,
+            task.evaluation.as_ref().expect("evaluator"),
+            "add() { printf '%s\\n' \"$(( $1 + $2 ))\"; }",
+            workspace.path(),
+        )
+        .expect("isolated evaluator must run");
+
+        assert_eq!(evaluation.evaluator_id, "code-unit-test-v1");
+        assert_eq!(evaluation.metric, "unit_test");
+        assert!(evaluation.passed);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("solution.sh"))
+                .expect("original fixture remains readable"),
+            "add() { printf '%s\\n' 0; }\n"
+        );
     }
 
     #[test]

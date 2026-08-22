@@ -8,11 +8,16 @@ use crate::core::ocla::OclaError;
 use crate::core::ocla::OclaResult;
 use crate::core::tokens;
 
+pub mod coverage;
 pub(crate) mod external_process;
 pub mod native_context;
 pub mod passthrough;
 pub mod registry;
 
+pub use coverage::{
+    CAPABILITY_COVERAGE_SCHEMA_VERSION, CapabilityCoverageCaseV1, CapabilityCoverageReportV1,
+    CapabilityCoverageResult, CapabilityCoverageScenario,
+};
 pub use native_context::NativeContextAdapter;
 pub use passthrough::PassthroughAdapter;
 pub use registry::{AdapterHealth, AdapterKey, AdapterRegistry};

@@ -82,12 +82,9 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
     }
 }
 
-fn profile_hash(profile: &Profile) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let json = serde_json::to_string(profile).unwrap_or_default();
-    json.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+pub(crate) fn profile_hash(profile: &Profile) -> String {
+    let json = serde_json::to_vec(profile).unwrap_or_default();
+    blake3::hash(&json).to_hex().to_string()
 }
 
 fn chrono_stub() -> String {
@@ -151,6 +148,6 @@ mod tests {
         let h1 = profile_hash(&profile);
         let h2 = profile_hash(&profile);
         assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 16);
+        assert_eq!(h1.len(), 64);
     }
 }

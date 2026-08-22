@@ -174,7 +174,8 @@ pub struct Config {
     /// Values: "core" (always on), "arch", "debug", "memory", "metrics", "session".
     /// Example: `default_tool_categories = ["core", "arch", "memory"]`
     /// Override via LCTX_DEFAULT_CATEGORIES env var (comma-separated).
-    /// Empty = lean-ctx default (core + session).
+    /// Empty = lean-ctx default (`core`). Add `session` explicitly to evaluate
+    /// experimental local collaboration tools.
     #[serde(default)]
     pub default_tool_categories: Vec<String>,
     /// Disable all automatic read-mode degradation (auto_degrade + context_gate pressure).

@@ -3,6 +3,7 @@ pub(crate) mod config;
 pub(crate) mod pareto;
 pub(crate) mod recommendation;
 pub(crate) mod report;
+pub(crate) mod selection;
 
 pub(crate) use config::CalibrationConfig;
 use pareto::CalibratedResult;
@@ -49,7 +50,7 @@ mod tests {
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
             quality_evaluated: true,
-            receipt_evidence_complete: false,
+            receipt_evidence_complete: true,
         }
     }
 
@@ -65,7 +66,7 @@ mod tests {
         let report = calibrate(results, &CalibrationConfig::default());
         assert!(!report.frontier.is_empty());
         assert!(report.recommendation.is_some());
-        assert!(report.report_text.contains("OBSERVED"));
+        assert!(report.report_text.contains("LINKED"));
     }
 
     #[test]

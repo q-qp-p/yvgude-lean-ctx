@@ -34,7 +34,10 @@ impl AgentConnector for CodexConnector {
         let mut cmd = Command::new(&self.info.path);
         cmd.arg("exec")
             .arg("--json")
-            .arg("--approve-for-me")
+            // Benchmark tasks score the final response in an isolated evaluator;
+            // they must never mutate the caller's working directory.
+            .arg("--sandbox")
+            .arg("read-only")
             .arg(&request.prompt)
             .current_dir(&request.working_dir);
         if let Some(model) = &request.model {

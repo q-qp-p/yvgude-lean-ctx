@@ -1,10 +1,18 @@
 use crate::core::agent_connector;
 use crate::core::agent_connector::traits::AgentConnector;
+use crate::core::benchmark_spec::evidence::{
+    ArtifactRedaction, EvidenceArm, write_comparison_bundle,
+};
 use crate::core::benchmark_spec::profile_bridge;
-use crate::core::benchmark_spec::types::{BenchmarkSpecV1, BenchmarkSuite};
+use crate::core::benchmark_spec::types::{BenchmarkResult, BenchmarkSpecV1};
 use crate::core::calibrator::candidate::CandidateProfile;
 use crate::core::calibrator::pareto::CalibratedResult;
+use crate::core::calibrator::selection::{
+    ManualSelectionRecordV1, SelectionEvidenceArmV1, SelectionPolicyV1, SelectionRationaleV1,
+    apply_record, read_record, rollback_record, write_record,
+};
 use crate::core::calibrator::{self, CalibrationConfig};
+use crate::core::canonical::canonical_serialize;
 use crate::core::local_runner::runner::{LocalRunner, RunConfig};
 use crate::core::profiles;
 use std::path::PathBuf;
@@ -12,6 +20,13 @@ use std::path::PathBuf;
 struct LiveCandidate {
     candidate: CandidateProfile,
     profile_name: String,
+}
+
+struct LiveBenchmarkRun {
+    candidate: CandidateProfile,
+    profile_name: String,
+    spec: BenchmarkSpecV1,
+    benchmark: BenchmarkResult,
 }
 
 pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
@@ -30,7 +45,69 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
     let max_candidates = parse_flag_usize(args, "--max-candidates").unwrap_or(12);
     let live = args.iter().any(|arg| arg == "--live");
     let export_spec = args.iter().any(|arg| arg == "--export-spec");
+    let evidence_out = parse_flag_str(args, "--evidence-out");
+    let selection_record_out = parse_flag_str(args, "--selection-record");
+    let apply_selection = args.iter().any(|arg| arg == "--apply");
+    let rollback_selection = args.iter().any(|arg| arg == "--rollback");
+    if apply_selection && rollback_selection {
+        eprintln!("error: --apply and --rollback cannot be combined");
+        return 2;
+    }
+    if rollback_selection {
+        let Some(path) = selection_record_out else {
+            eprintln!("error: --rollback requires --selection-record PATH");
+            return 2;
+        };
+        return match read_record(std::path::Path::new(&path))
+            .and_then(|record| rollback_record(&record))
+        {
+            Ok(()) => {
+                eprintln!("restored the profile recorded in {path}");
+                0
+            }
+            Err(error) => {
+                eprintln!("error: rollback selection: {error}");
+                2
+            }
+        };
+    }
+    if apply_selection && !live {
+        let Some(path) = selection_record_out.as_deref() else {
+            eprintln!("error: --apply requires --selection-record PATH");
+            return 2;
+        };
+        return match read_record(std::path::Path::new(path))
+            .and_then(|record| apply_record(&record))
+        {
+            Ok(()) => {
+                eprintln!("applied the profile recorded in {path}");
+                0
+            }
+            Err(error) => {
+                eprintln!("error: apply selection: {error}");
+                2
+            }
+        };
+    }
+    if selection_record_out.is_some() && (!live || evidence_out.is_none()) {
+        eprintln!(
+            "error: --selection-record requires --live and --evidence-out with evaluated receipt-linked runs"
+        );
+        return 2;
+    }
+    if apply_selection && selection_record_out.is_none() {
+        eprintln!("error: --apply requires --selection-record PATH");
+        return 2;
+    }
+    let evidence_redaction = match parse_evidence_redaction(args, evidence_out.is_some()) {
+        Ok(redaction) => redaction,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 2;
+        }
+    };
     let requested_agent = parse_flag_str(args, "--agent");
+    let mut selection_material: Option<(Vec<LiveBenchmarkRun>, String, PathBuf)> = None;
 
     eprintln!("lean-ctx calibrate");
     eprintln!("  Profile:        {profile_name}");
@@ -50,17 +127,21 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         eprintln!("  available: lean-ctx profile list");
         return 1;
     };
-    let suite = if live {
-        match live_calibration_suite(args) {
-            Ok(suite) => suite,
+    let live_spec = if live {
+        match live_calibration_spec(args, profile_name) {
+            Ok(spec) => Some(spec),
             Err(error) => {
                 eprintln!("error: {error}");
                 return 2;
             }
         }
     } else {
-        profile_bridge::default_coding_suite()
+        None
     };
+    let suite = live_spec
+        .as_ref()
+        .map(|spec| spec.suite.clone())
+        .unwrap_or_else(profile_bridge::default_coding_suite);
     if live && suite.tasks.iter().any(|task| task.evaluation.is_none()) {
         eprintln!(
             "  Warning: suite has no deterministic evaluator; results remain observed, not eligible."
@@ -132,15 +213,78 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
 
         eprintln!("  Using agent:    {}", connector.name());
         eprintln!();
-        match run_live_benchmark_results(&live_candidates, &config, working_dir, connector, &suite)
-        {
-            Ok(results) => results,
+        match run_live_benchmark_results(
+            &live_candidates,
+            &config,
+            working_dir,
+            connector,
+            live_spec
+                .as_ref()
+                .expect("live spec exists when --live is set"),
+        ) {
+            Ok(runs) => {
+                let evidence_sha256 = match (evidence_out.as_deref(), evidence_redaction) {
+                    (Some(path), Some(redaction)) => {
+                        let arms = evidence_arms(&runs);
+                        match write_comparison_bundle(std::path::Path::new(path), &arms, redaction)
+                        {
+                            Ok(bundle) => {
+                                eprintln!(
+                                    "  Evidence bundle: {} (sha256 {})",
+                                    bundle.path.display(),
+                                    bundle.sha256
+                                );
+                                Some(bundle.sha256)
+                            }
+                            Err(error) => {
+                                eprintln!("error: evidence bundle failed: {error:#}");
+                                return 2;
+                            }
+                        }
+                    }
+                    (Some(_), None) => {
+                        eprintln!("error: --evidence-out requires --artifact-redaction");
+                        return 2;
+                    }
+                    (None, _) => None,
+                };
+                if let Some(path) = selection_record_out.as_deref() {
+                    let Some(bundle_sha256) = evidence_sha256 else {
+                        eprintln!("error: --selection-record requires an evidence bundle");
+                        return 2;
+                    };
+                    let calibrated = runs
+                        .iter()
+                        .map(|run| {
+                            CalibratedResult::from_benchmark_result(
+                                run.candidate.clone(),
+                                &run.benchmark,
+                            )
+                        })
+                        .collect();
+                    selection_material = Some((runs, bundle_sha256, PathBuf::from(path)));
+                    calibrated
+                } else {
+                    runs.iter()
+                        .map(|run| {
+                            CalibratedResult::from_benchmark_result(
+                                run.candidate.clone(),
+                                &run.benchmark,
+                            )
+                        })
+                        .collect()
+                }
+            }
             Err(error) => {
                 eprintln!("error: live calibration failed: {error}");
                 return 2;
             }
         }
     } else {
+        if evidence_out.is_some() {
+            eprintln!("error: --evidence-out requires --live with evaluated receipt-linked runs");
+            return 2;
+        }
         simulate_benchmark_results(&candidates, &profile)
     };
 
@@ -159,6 +303,55 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
             eprintln!("  Cost delta:    {:+.1}%", bl.cost_delta_pct);
             eprintln!("  Quality delta: {:+.4}", bl.quality_delta);
             eprintln!("  Latency delta: {:+.1}%", bl.latency_delta_pct);
+        }
+    }
+
+    if let Some((runs, evidence_bundle_sha256, path)) = selection_material {
+        let Some(recommendation) = &report.recommendation else {
+            eprintln!(
+                "error: selection record not written because no evidence-qualified recommendation was produced"
+            );
+            return 2;
+        };
+        let Some(selected) = runs
+            .iter()
+            .find(|run| run.candidate.id == recommendation.candidate_id)
+        else {
+            eprintln!("error: recommendation does not match a live candidate");
+            return 2;
+        };
+        let previous_profile = crate::core::config::setter::current_value("profile")
+            .unwrap_or_else(|| "coder".to_string());
+        let record = match ManualSelectionRecordV1::create(
+            previous_profile,
+            selected.profile_name.clone(),
+            recommendation.candidate_id.clone(),
+            evidence_bundle_sha256,
+            selection_policy(quality_floor),
+            selection_rationale(recommendation),
+            selection_evidence_arms(&runs),
+        ) {
+            Ok(record) => record,
+            Err(error) => {
+                eprintln!("error: create selection record: {error}");
+                return 2;
+            }
+        };
+        if let Err(error) = write_record(&path, &record) {
+            eprintln!("error: write selection record: {error}");
+            return 2;
+        }
+        eprintln!(
+            "  Selection record: {} ({})",
+            path.display(),
+            record.selection_id
+        );
+        if apply_selection {
+            if let Err(error) = apply_record(&record) {
+                eprintln!("error: apply selection: {error}");
+                return 2;
+            }
+            eprintln!("  Applied profile:   {}", record.selected_profile);
         }
     }
 
@@ -238,8 +431,8 @@ fn run_live_benchmark_results(
     calibration_config: &CalibrationConfig,
     working_dir: PathBuf,
     connector: Box<dyn AgentConnector>,
-    suite: &BenchmarkSuite,
-) -> anyhow::Result<Vec<CalibratedResult>> {
+    source_spec: &BenchmarkSpecV1,
+) -> anyhow::Result<Vec<LiveBenchmarkRun>> {
     let agent_name = connector.name().to_owned();
     let runner = LocalRunner::new(
         RunConfig {
@@ -256,58 +449,114 @@ fn run_live_benchmark_results(
         connector,
     );
 
-    candidates
-        .iter()
-        .enumerate()
-        .map(|(index, candidate)| {
-            eprintln!(
-                "Running candidate {}/{}: {}...",
-                index + 1,
-                candidates.len(),
-                candidate.candidate.label
-            );
-            let mut spec = profile_bridge::create_spec(&candidate.profile_name, suite.clone())?;
-            spec.id = format!("{}-{}", spec.id, candidate.candidate.id);
-            spec.name = format!("{} ({})", spec.name, candidate.candidate.label);
-            spec.configuration.quality_floor = calibration_config.quality_floor;
+    let mut runs = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates.iter().enumerate() {
+        eprintln!(
+            "Running candidate {}/{}: {}...",
+            index + 1,
+            candidates.len(),
+            candidate.candidate.label
+        );
+        let profile = profiles::load_profile(&candidate.profile_name)
+            .ok_or_else(|| anyhow::anyhow!("profile '{}' not found", candidate.profile_name))?;
+        let mut spec = source_spec.clone();
+        spec.id = format!("{}-{}", source_spec.id, candidate.candidate.id);
+        spec.name = format!("{} ({})", source_spec.name, candidate.candidate.label);
+        spec.configuration.profile_hash = Some(profile_bridge::profile_hash(&profile));
+        spec.configuration.quality_floor = calibration_config.quality_floor;
 
-            let benchmark = runner.run_with_profile(&spec, &candidate.profile_name)?;
-            Ok(CalibratedResult::from_benchmark_result(
-                candidate.candidate.clone(),
-                &benchmark,
-            ))
+        let benchmark = runner.run_with_profile(&spec, &candidate.profile_name)?;
+        runs.push(LiveBenchmarkRun {
+            candidate: candidate.candidate.clone(),
+            profile_name: candidate.profile_name.clone(),
+            spec,
+            benchmark,
+        });
+    }
+    Ok(runs)
+}
+
+fn evidence_arms(runs: &[LiveBenchmarkRun]) -> Vec<EvidenceArm<'_>> {
+    runs.iter()
+        .enumerate()
+        .map(|(index, run)| EvidenceArm {
+            label: match index {
+                0 => "baseline".into(),
+                1 => "treatment".into(),
+                _ => format!("candidate-{index}"),
+            },
+            spec: &run.spec,
+            result: &run.benchmark,
         })
         .collect()
 }
 
-fn live_calibration_suite(args: &[String]) -> Result<BenchmarkSuite, String> {
+fn selection_evidence_arms(runs: &[LiveBenchmarkRun]) -> Vec<SelectionEvidenceArmV1> {
+    runs.iter()
+        .map(|run| SelectionEvidenceArmV1 {
+            candidate_id: run.candidate.id.clone(),
+            profile_name: run.profile_name.clone(),
+            profile_hash: run.benchmark.profile_hash.clone(),
+            spec_id: run.spec.id.clone(),
+            spec_version: run.spec.version.clone(),
+            spec_digest: format!(
+                "blake3:{}",
+                blake3::hash(&canonical_serialize(&run.spec)).to_hex()
+            ),
+            result_digest: format!(
+                "blake3:{}",
+                blake3::hash(&canonical_serialize(&run.benchmark)).to_hex()
+            ),
+            receipt_refs: run
+                .benchmark
+                .outcomes
+                .iter()
+                .filter_map(|outcome| outcome.execution_receipt_ref.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        })
+        .collect()
+}
+
+fn selection_policy(quality_floor: f64) -> SelectionPolicyV1 {
+    SelectionPolicyV1 {
+        quality_floor,
+        requires_evaluated_quality: true,
+        requires_complete_receipts: true,
+    }
+}
+
+fn selection_rationale(
+    recommendation: &crate::core::calibrator::recommendation::Recommendation,
+) -> SelectionRationaleV1 {
+    let kind = match &recommendation.reason {
+        crate::core::calibrator::recommendation::RecommendationReason::LowestCostAboveFloor => {
+            "lowest-cost-above-floor"
+        }
+        crate::core::calibrator::recommendation::RecommendationReason::OnlyCandidate => {
+            "only-candidate"
+        }
+    };
+    SelectionRationaleV1 {
+        kind: kind.to_string(),
+        selected_cost_per_task: recommendation.cost_per_task,
+        selected_mean_quality: recommendation.mean_quality,
+        selected_mean_latency_ms: recommendation.mean_latency_ms,
+    }
+}
+
+fn live_calibration_spec(args: &[String], profile_name: &str) -> Result<BenchmarkSpecV1, String> {
     let Some(path) = parse_flag_str(args, "--spec") else {
-        return Ok(profile_bridge::default_coding_suite());
+        return profile_bridge::create_spec(profile_name, profile_bridge::default_coding_suite())
+            .map_err(|error| error.to_string());
     };
     let source = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read benchmark spec '{path}': {error}"))?;
     let spec: BenchmarkSpecV1 = serde_json::from_str(&source)
         .map_err(|error| format!("invalid benchmark spec '{path}': {error}"))?;
-    validate_evaluated_suite(&spec.suite)?;
-    Ok(spec.suite)
-}
-
-fn validate_evaluated_suite(suite: &BenchmarkSuite) -> Result<(), String> {
-    if suite.tasks.is_empty() {
-        return Err("benchmark spec must contain at least one task".into());
-    }
-    for task in &suite.tasks {
-        let evaluator = task.evaluation.as_ref().ok_or_else(|| {
-            format!(
-                "benchmark task '{}' has no explicit evaluator; live selection requires one",
-                task.id
-            )
-        })?;
-        evaluator
-            .validate()
-            .map_err(|error| format!("invalid evaluator for task '{}': {error}", task.id))?;
-    }
-    Ok(())
+    spec.validate_evidence()?;
+    Ok(spec)
 }
 
 fn build_live_candidates(
@@ -379,6 +628,23 @@ fn parse_profile_names(raw_profiles: &str) -> Result<Vec<String>, String> {
     Ok(profile_names)
 }
 
+fn parse_evidence_redaction(
+    args: &[String],
+    evidence_requested: bool,
+) -> Result<Option<ArtifactRedaction>, String> {
+    let redaction = parse_flag_str(args, "--artifact-redaction")
+        .map(|value| ArtifactRedaction::parse(&value).map_err(|error| error.to_string()))
+        .transpose()?;
+    match (evidence_requested, redaction) {
+        (true, None) => Err(
+            "--evidence-out requires --artifact-redaction self-contained|redacted|restricted"
+                .into(),
+        ),
+        (false, Some(_)) => Err("--artifact-redaction requires --evidence-out".into()),
+        (_, redaction) => Ok(redaction),
+    }
+}
+
 fn parse_flag_f64(args: &[String], flag: &str) -> Option<f64> {
     args.iter()
         .position(|a| a == flag)
@@ -441,6 +707,13 @@ OPTIONS:
     --agent NAME        Agent to use with --live (default: first detected)
     --working-dir PATH  Agent working directory with --live (default: current directory)
     --spec PATH         Evaluated BenchmarkSpec JSON for --live selection
+    --evidence-out PATH Write signed offline evidence bundle for live comparison
+    --artifact-redaction CLASS
+                        Required with --evidence-out: self-contained, redacted, or restricted
+    --selection-record PATH
+                        Write an immutable selection record from a live evidence bundle
+    --apply             Apply the selected profile after writing --selection-record
+    --rollback          Restore the prior profile from --selection-record
     --export-spec       Print BenchmarkSpec JSON to stdout
     -h, --help          Show this help
 
@@ -448,11 +721,16 @@ EXAMPLES:
     lean-ctx calibrate
     lean-ctx calibrate coder --quality-floor 0.90
     lean-ctx calibrate --live --profiles coder,exploration --agent codex --spec bench.json
+    lean-ctx calibrate --live --profiles coder,exploration --spec bench.json --evidence-out proof.zip --artifact-redaction redacted
+    lean-ctx calibrate --live --profiles coder,exploration --spec bench.json --evidence-out proof.zip --artifact-redaction restricted --selection-record selection.json --apply
+    lean-ctx calibrate --selection-record selection.json --rollback
     lean-ctx calibrate monorepo --max-candidates 20 --export-spec > spec.json
 
 NOTE:
     Live calibration applies each selected profile through LEAN_CTX_PROFILE.
     --spec requires a deterministic evaluator per task; otherwise runs are observed only.
+    --selection-record requires --live, --evidence-out, and complete receipt evidence.
+    --apply and --rollback refuse when LEAN_CTX_PROFILE overrides config.
     Without --live, calibration uses simulated benchmark results."
     );
 }
@@ -460,7 +738,9 @@ NOTE:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::benchmark_spec::types::{BenchmarkTask, EvaluationSpecV1, TaskKind};
+    use crate::core::benchmark_spec::types::{
+        BenchmarkSuite, BenchmarkTask, EvaluationSpecV1, TaskKind,
+    };
     use crate::core::local_runner::runner::MockConnector;
 
     fn candidate() -> CandidateProfile {
@@ -494,6 +774,10 @@ mod tests {
     #[test]
     fn live_calibration_runs_mock_connector_for_each_candidate() {
         let config = CalibrationConfig::default();
+        let mut source_spec = profile_bridge::create_spec("coder", evaluated_suite()).unwrap();
+        source_spec.id = "fixture-manifest".into();
+        source_spec.name = "Fixture manifest".into();
+        source_spec.configuration.model = Some("fixture-model".into());
         let results = run_live_benchmark_results(
             &[LiveCandidate {
                 candidate: candidate(),
@@ -502,20 +786,29 @@ mod tests {
             &config,
             std::env::current_dir().expect("test working directory"),
             Box::new(MockConnector::new(true)),
-            &evaluated_suite(),
+            &source_spec,
         )
         .expect("mock connector must complete live calibration");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].candidate.id, "candidate-001");
-        assert_eq!(results[0].pass_rate, 1.0);
-        assert!(results[0].quality_floor_met);
+        assert_eq!(results[0].spec.id, "fixture-manifest-candidate-001");
+        assert_eq!(
+            results[0].spec.configuration.model.as_deref(),
+            Some("fixture-model")
+        );
+        assert_eq!(results[0].benchmark.summary.pass_rate, 1.0);
+        assert!(results[0].benchmark.summary.quality_floor_met);
     }
 
     #[test]
     fn live_selection_requires_an_evaluator_for_each_task() {
-        assert!(validate_evaluated_suite(&profile_bridge::default_coding_suite()).is_err());
-        assert!(validate_evaluated_suite(&evaluated_suite()).is_ok());
+        let observed = profile_bridge::create_spec("coder", profile_bridge::default_coding_suite())
+            .expect("built-in profile creates a benchmark spec");
+        let evaluated = profile_bridge::create_spec("coder", evaluated_suite())
+            .expect("built-in profile creates a benchmark spec");
+        assert!(observed.validate_evidence().is_err());
+        assert!(evaluated.validate_evidence().is_ok());
     }
 
     #[test]
@@ -523,6 +816,26 @@ mod tests {
         assert!(parse_profile_names("coder,exploration").is_ok());
         assert!(parse_profile_names("coder,coder").is_err());
         assert!(parse_profile_names("coder,").is_err());
+    }
+
+    #[test]
+    fn evidence_export_requires_an_explicit_artifact_classification() {
+        let no_classification = vec!["--evidence-out".into(), "proof.zip".into()];
+        assert!(parse_evidence_redaction(&no_classification, true).is_err());
+
+        let class_without_bundle = vec!["--artifact-redaction".into(), "redacted".into()];
+        assert!(parse_evidence_redaction(&class_without_bundle, false).is_err());
+
+        let classified = vec![
+            "--evidence-out".into(),
+            "proof.zip".into(),
+            "--artifact-redaction".into(),
+            "redacted".into(),
+        ];
+        assert_eq!(
+            parse_evidence_redaction(&classified, true).unwrap(),
+            Some(ArtifactRedaction::Redacted)
+        );
     }
 
     #[test]
