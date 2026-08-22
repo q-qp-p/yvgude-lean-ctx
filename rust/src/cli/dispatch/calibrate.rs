@@ -46,6 +46,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
     let live = args.iter().any(|arg| arg == "--live");
     let export_spec = args.iter().any(|arg| arg == "--export-spec");
     let evidence_out = parse_flag_str(args, "--evidence-out");
+    let evidence_bundle = parse_flag_str(args, "--evidence-bundle");
     let selection_record_out = parse_flag_str(args, "--selection-record");
     let apply_selection = args.iter().any(|arg| arg == "--apply");
     let rollback_selection = args.iter().any(|arg| arg == "--rollback");
@@ -76,8 +77,14 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
             eprintln!("error: --apply requires --selection-record PATH");
             return 2;
         };
+        let Some(evidence_path) = evidence_bundle.as_deref() else {
+            eprintln!(
+                "error: --apply requires --evidence-bundle PATH to verify selection evidence"
+            );
+            return 2;
+        };
         return match read_record(std::path::Path::new(path))
-            .and_then(|record| apply_record(&record))
+            .and_then(|record| apply_record(&record, std::path::Path::new(evidence_path)))
         {
             Ok(()) => {
                 eprintln!("applied the profile recorded in {path}");
@@ -99,6 +106,12 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         eprintln!("error: --apply requires --selection-record PATH");
         return 2;
     }
+    if evidence_bundle.is_some() && (live || !apply_selection) {
+        eprintln!(
+            "error: --evidence-bundle is only valid with a later --apply; live apply verifies --evidence-out directly"
+        );
+        return 2;
+    }
     let evidence_redaction = match parse_evidence_redaction(args, evidence_out.is_some()) {
         Ok(redaction) => redaction,
         Err(error) => {
@@ -107,7 +120,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         }
     };
     let requested_agent = parse_flag_str(args, "--agent");
-    let mut selection_material: Option<(Vec<LiveBenchmarkRun>, String, PathBuf)> = None;
+    let mut selection_material: Option<(Vec<LiveBenchmarkRun>, String, PathBuf, PathBuf)> = None;
 
     eprintln!("lean-ctx calibrate");
     eprintln!("  Profile:        {profile_name}");
@@ -223,7 +236,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
                 .expect("live spec exists when --live is set"),
         ) {
             Ok(runs) => {
-                let evidence_sha256 = match (evidence_out.as_deref(), evidence_redaction) {
+                let evidence_bundle = match (evidence_out.as_deref(), evidence_redaction) {
                     (Some(path), Some(redaction)) => {
                         let arms = evidence_arms(&runs);
                         match write_comparison_bundle(std::path::Path::new(path), &arms, redaction)
@@ -234,7 +247,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
                                     bundle.path.display(),
                                     bundle.sha256
                                 );
-                                Some(bundle.sha256)
+                                Some((bundle.sha256, bundle.path))
                             }
                             Err(error) => {
                                 eprintln!("error: evidence bundle failed: {error:#}");
@@ -249,7 +262,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
                     (None, _) => None,
                 };
                 if let Some(path) = selection_record_out.as_deref() {
-                    let Some(bundle_sha256) = evidence_sha256 else {
+                    let Some((bundle_sha256, bundle_path)) = evidence_bundle else {
                         eprintln!("error: --selection-record requires an evidence bundle");
                         return 2;
                     };
@@ -262,7 +275,8 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
                             )
                         })
                         .collect();
-                    selection_material = Some((runs, bundle_sha256, PathBuf::from(path)));
+                    selection_material =
+                        Some((runs, bundle_sha256, PathBuf::from(path), bundle_path));
                     calibrated
                 } else {
                     runs.iter()
@@ -306,7 +320,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         }
     }
 
-    if let Some((runs, evidence_bundle_sha256, path)) = selection_material {
+    if let Some((runs, evidence_bundle_sha256, path, evidence_path)) = selection_material {
         let Some(recommendation) = &report.recommendation else {
             eprintln!(
                 "error: selection record not written because no evidence-qualified recommendation was produced"
@@ -347,7 +361,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
             record.selection_id
         );
         if apply_selection {
-            if let Err(error) = apply_record(&record) {
+            if let Err(error) = apply_record(&record, &evidence_path) {
                 eprintln!("error: apply selection: {error}");
                 return 2;
             }
@@ -713,6 +727,8 @@ OPTIONS:
     --selection-record PATH
                         Write an immutable selection record from a live evidence bundle
     --apply             Apply the selected profile after writing --selection-record
+    --evidence-bundle PATH
+                        Required for a later --apply; verifies the immutable evidence bundle
     --rollback          Restore the prior profile from --selection-record
     --export-spec       Print BenchmarkSpec JSON to stdout
     -h, --help          Show this help
@@ -723,6 +739,7 @@ EXAMPLES:
     lean-ctx calibrate --live --profiles coder,exploration --agent codex --spec bench.json
     lean-ctx calibrate --live --profiles coder,exploration --spec bench.json --evidence-out proof.zip --artifact-redaction redacted
     lean-ctx calibrate --live --profiles coder,exploration --spec bench.json --evidence-out proof.zip --artifact-redaction restricted --selection-record selection.json --apply
+    lean-ctx calibrate --selection-record selection.json --apply --evidence-bundle proof.zip
     lean-ctx calibrate --selection-record selection.json --rollback
     lean-ctx calibrate monorepo --max-candidates 20 --export-spec > spec.json
 
@@ -730,6 +747,8 @@ NOTE:
     Live calibration applies each selected profile through LEAN_CTX_PROFILE.
     --spec requires a deterministic evaluator per task; otherwise runs are observed only.
     --selection-record requires --live, --evidence-out, and complete receipt evidence.
+    A later --apply requires --evidence-bundle and fails closed on unavailable, tampered,
+    unsigned, or semantically mismatched evidence.
     --apply and --rollback refuse when LEAN_CTX_PROFILE overrides config.
     Without --live, calibration uses simulated benchmark results."
     );

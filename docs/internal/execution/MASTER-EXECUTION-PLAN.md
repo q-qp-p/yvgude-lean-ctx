@@ -18,7 +18,7 @@ WS-4: OCLA + COMPOSABLE (B)     ██████████  Native + bounded
 WS-5: PARTNERSHIP (C)           —— CANCELLED (monopoly strategy)
 WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; no automated selection claims
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
-WS-8: MANUAL SELECTION (D)      ████░░░░░░  Local record/apply/rollback primitives exist; evidence verification and full conformance remain
+WS-8: MANUAL SELECTION (D)      ██████░░░░  Signed evidence is revalidated at apply time; independent verification and cross-implementation conformance remain
 WS-9: THINKERY CONTROL PLANE(E) ░░░░░░░░░░  Private commercial work; separate repository/infrastructure
 ```
 
@@ -193,10 +193,10 @@ automatic promotion stay private Class D/E.
 
 | # | Task | Exit criterion | Status |
 |---:|---|---|---|
-| 8.1 | Evidence-qualified candidate input | Unevaluated or incomplete-cost runs cannot feed a recommendation | in progress — creation validates evaluated receipt-linked runs; independent evidence verification is still required before later apply |
+| 8.1 | Evidence-qualified candidate input | Unevaluated or incomplete-cost runs cannot feed a recommendation | in progress — creation validates evaluated receipt-linked runs; apply replays the pinned bundle's signed inventory, exact specs/results, and receipt artifacts, while independent verification remains required for public claims |
 | 8.2 | Deterministic recommendation record | Candidate set, constraints, evidence refs, rationale, and profile hash serialize canonically | in progress — canonical serialization exists; its linked evidence requires independent validation |
-| 8.3 | Explicit apply/rollback CLI | Operator approves a named profile; prior profile is preserved and restorable | in progress — record/apply/rollback supports later-record apply and refuses stale state; independent evidence verification remains required |
-| 8.4 | Manual-selection conformance suite | Stable result across reordered inputs; all rejection paths are covered | in progress — ordering, later apply, stale state, and immediate rollback are covered; tampered/unavailable-evidence rejections remain |
+| 8.3 | Explicit apply/rollback CLI | Operator approves a named profile; prior profile is preserved and restorable | in progress — a later apply requires an explicit bundle path and rejects unavailable, changed, unsigned, semantically mismatched, stale, or profile-hash-mismatched evidence; independent verification remains required |
+| 8.4 | Manual-selection conformance suite | Stable result across reordered inputs; all rejection paths are covered | in progress — ordering, verified later apply, stale state, immediate rollback, and tampered/unavailable/mismatched-evidence rejections are covered; full cross-implementation conformance remains |
 
 ## WS-9: Thinkery Control Plane (Phase E, Commercial, private)
 
@@ -263,4 +263,4 @@ private infrastructure. It must not be scaffolded as a hidden feature in LeanCTX
 ```
 
 When all six are true, we have earned the right to talk about
-"Context Performance Infrastructure" publicly.
+"The Context SDK for AI Agents" publicly.
