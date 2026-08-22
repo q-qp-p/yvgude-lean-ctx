@@ -1,9 +1,13 @@
-# Release Checklist
+# OSS Release Checklist
 
-> **Status: historical operations checklist.** It does not authorize website,
-> Cloud, managed-service, or control-plane deployment. Use the root
-> [`DEPLOY_CHECKLIST.md`](../../DEPLOY_CHECKLIST.md) for the current local Runtime
-> release boundary.
+> **Status: active OSS release gate, not a completion record.** Every unchecked
+> item remains pending; this checklist does not authorize website, Cloud,
+> managed-service, control-plane, or Research capability deployment. Delivery
+> order and capability status are governed by the
+> [OSS Vision Delivery Plan](../internal/execution/OSS-VISION-DELIVERY-PLAN.md)
+> and the [internal canonical entry point](../internal/README.md). Use the root
+> [`DEPLOY_CHECKLIST.md`](../../DEPLOY_CHECKLIST.md) for the local Runtime release
+> boundary.
 
 ## Overview
 
@@ -28,19 +32,66 @@ release assets, and verification commands.
 - [ ] All library tests pass.
 
   ```bash
-  cargo test --lib
+  cargo test --manifest-path rust/Cargo.toml --lib
   ```
 
 - [ ] Clippy reports zero warnings.
 
   ```bash
-  cargo clippy --all-features -- -D warnings
+  cargo clippy --manifest-path rust/Cargo.toml --all-features -- -D warnings
   ```
 
 - [ ] Formatting is clean.
 
   ```bash
-  cargo fmt --check
+  cargo fmt --manifest-path rust/Cargo.toml --check
+  ```
+
+- [ ] The standalone W1 customer-proof verifier passes its own contract tests.
+
+  ```bash
+  cargo test --manifest-path packages/leanctx-verify/Cargo.toml
+  cargo clippy --manifest-path packages/leanctx-verify/Cargo.toml --all-targets -- -D warnings
+  ```
+
+  If a release contains a customer-facing V2 proof, verify the assembled
+  document through the standalone binary with its external trust store and
+  bounded artifact root. A self-attested key, an engine-side check, or schema
+  validation alone is not proof.
+
+  ```bash
+  cargo run --manifest-path packages/leanctx-verify/Cargo.toml -- \
+    v2 <customer-proof.json> --trust-store <customer-trust.json> \
+    --artifact-root <proof-directory> --json
+  ```
+
+- [ ] Python remains labelled **Preview** and passes its package test suite;
+  it must not be released as a broad framework or agent-runtime guarantee.
+
+  ```bash
+  cd packages/python-lean-ctx && python3 -m pytest
+  ```
+
+- [ ] The committed provider-free fixture boundary remains reproducible and
+  fails closed for drift/path violations.
+
+  ```bash
+  cargo test --manifest-path rust/Cargo.toml --lib benchmark_spec::types
+  ```
+
+- [ ] If a release exposes a profile/Kit selection or rollback path, rehearse
+  the corresponding local rollback tests before publication. Profiles and
+  first-class Context Kits remain **Research** until their separate W4/W5 exit
+  criteria are met.
+
+  ```bash
+  cargo test --manifest-path rust/Cargo.toml --lib calibrator::selection
+  ```
+
+- [ ] Narrative and claim language matches the internal authority.
+
+  ```bash
+  python3 scripts/check-narrative-governance.py
   ```
 
 - [ ] `CHANGELOG.md` describes the new version and user-visible changes.
@@ -77,6 +128,14 @@ release assets, and verification commands.
 
 Do not tag a release with a failing gate. Correct the failure, commit it, and
 repeat the relevant checks.
+
+### Claim promotion gate
+
+Do not turn a local measurement, receipt, cache diagnostic, fixture pass, or
+code path into a public quality or savings claim. A customer-facing claim must
+name its metric, matched workload, quality threshold, methodology, limitations,
+and evidence state. “Verified” additionally requires the independently runnable
+W1 verifier with external signer trust. A release may ship without such a claim.
 
 ### 2. Release process
 
@@ -117,6 +176,11 @@ schema and failure behavior.
   ```
 
 - [ ] Update the compatibility matrix if platform, agent, or protocol support changed.
+- [ ] Preserve Python’s **Preview** status in release notes and compatibility
+  material; do not infer broader support from package tests.
+- [ ] Record the exact offline fixture and rollback commands/results when the
+  release changes those boundaries. A green unit test does not establish a
+  customer-proof or a capability promotion.
 - [ ] Close GitHub issues associated with the completed milestone.
 - [ ] Update `install.sh` if a platform or installation flag changed.
 - [ ] Push final protected-branch state to both remotes.
@@ -160,6 +224,12 @@ A release is complete only when:
 - The release-integrity verifier accepts the published release directory.
 - The compatibility matrix and milestone state are current.
 - Both remotes contain the final `main` commit and version tag.
+
+It may describe only the capability status that is actually shipped: local
+Runtime/CLI/MCP paths are Available, Python SDK v1 is Preview, and Profiles,
+first-class Context Kits, benchmark/performance claims, managed operation, and
+control-plane capabilities remain Research unless their explicit delivery gates
+are complete.
 
 Record the tag, source commit, verification output, and approved exceptions with
 release evidence. Reject a release for any manifest, checksum, size, or tag

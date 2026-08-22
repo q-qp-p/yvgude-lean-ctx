@@ -17,14 +17,14 @@ AUTHORITY = "docs/internal/README.md"
 REQUIRED_TEXT: dict[str, tuple[str, ...]] = {
     "README.md": (
         "The Context SDK for AI Agents.",
-        "Connect → Measure → Tune → Prove → Deploy → Repeat",
+        "Select → Shape → Reuse → Recover",
         "It is not an agent platform, a generic agent builder, a hosted execution",
         "Performance Profiles, first-class Context Kits, the Performance",
     ),
     "VISION.md": (
         AUTHORITY,
         "Context SDK for AI Agents",
-        "Connect → Measure → Tune → Prove → Deploy → Repeat",
+        "Select → Shape → Reuse → Recover",
         "first-class Context Kits",
     ),
     "docs/README.md": (
@@ -68,6 +68,21 @@ REQUIRED_TEXT: dict[str, tuple[str, ...]] = {
     "docs/internal/vision/02-OSS-VS-PAID.md": ("Status: Research",),
     "docs/internal/vision/04-GO-TO-MARKET.md": ("Status: Research",),
     "docs/contracts/http-mcp-contract-v1.md": ("Status: Local runtime contract",),
+    "docs/releases/v1.0-runbook.md": (
+        "Historical — superseded release draft.",
+        "OSS Vision Delivery Plan",
+    ),
+    "docs/ga/release-checklist.md": (
+        "Status: active OSS release gate, not a completion record.",
+        "standalone W1 customer-proof verifier",
+        "Python remains labelled **Preview**",
+        "Claim promotion gate",
+    ),
+    "packages/pi-lean-ctx/README.md": (
+        "embedded MCP bridge enabled",
+        "Embedded MCP Tools (enabled by default)",
+        "diagnostic output, not a general result",
+    ),
 }
 
 # These retained records may discuss superseded systems only when the reader sees

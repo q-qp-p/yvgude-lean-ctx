@@ -10,7 +10,7 @@
 [Pi Coding Agent](https://github.com/badlogic/pi-mono) extension that provides
 `ctx_`-prefixed tools backed by a local [lean-ctx](https://leanctx.com) Runtime.
 
-- **Default**: embedded MCP bridge ON (persistent session cache for unchanged re-reads), additive mode (Pi builtins preserved)
+- **Default**: embedded MCP bridge enabled; additive mode preserves Pi builtins
 - **Opt out**: `LEAN_CTX_PI_ENABLE_MCP=0` (or `"enableMcp": false`) forces the one-shot CLI path, which cannot cache across calls
 - **Optional**: replace mode (`LEAN_CTX_PI_MODE=replace`) disables Pi builtins
 
@@ -27,13 +27,13 @@ export LEAN_CTX_PI_MODE=replace
 ## Tool surface (lean / standard / power)
 
 The embedded bridge advertises whatever tool surface it requests from lean-ctx —
-by default the **lean core** (the essential tools) plus the `ctx_call` gateway,
-exactly like a normal lean-ctx install. Every other tool, including the editors
-`ctx_edit` / `ctx_patch`, stays reachable through `ctx_call`, and Pi's own native
-`edit` / `write` builtins are available in every mode regardless of this setting.
+by default the **lean core** (including `ctx_patch`) plus the `ctx_call` gateway,
+exactly like a normal lean-ctx install. Other tools, including `ctx_edit`, stay
+reachable through `ctx_call`, and Pi's own native `edit` / `write` builtins are
+available in every mode regardless of this setting.
 
-To promote the **whole** lean-ctx registry (`ctx_edit`, `ctx_patch`, architecture
-and quality tools, …) to first-class Pi tools, set `toolProfile`:
+To promote the **whole** lean-ctx registry (`ctx_edit`, architecture, and
+quality tools, …) to first-class Pi tools, set `toolProfile`:
 
 ```bash
 export LEAN_CTX_PI_TOOL_PROFILE=power   # or "standard" for the balanced 15-tool set
@@ -97,10 +97,10 @@ Use it for commands like:
 - `lean_ctx gain` / `lean_ctx stats`
 - `lean_ctx index …`
 
-### Optional MCP Tools (Embedded Bridge)
+### Embedded MCP Tools (enabled by default)
 
-By default, pi-lean-ctx does **not** start an MCP server. If enabled, it spawns `lean-ctx` as an MCP
-server and registers advanced tools directly in Pi:
+By default, pi-lean-ctx starts its embedded MCP bridge. It spawns `lean-ctx` as
+an MCP server and registers its available advanced tools directly in Pi:
 
 | Tool | Purpose |
 |------|---------|
@@ -109,12 +109,13 @@ server and registers advanced tools directly in Pi:
 | `ctx_semantic_search` | Find code by meaning, not exact text |
 | `ctx_overview` | Codebase overview and architecture analysis |
 | `ctx_compress` | Manual compression control |
-| `ctx_metrics` | Token savings dashboard |
+| `ctx_metrics` | Local usage diagnostics |
 | `ctx_multi_read` | Batch file reads |
 | `ctx_search` | MCP-native search |
 | `ctx_tree` | File tree listing |
 
-If you don't want MCP: keep it disabled and use the `ctx_` CLI tools + `lean_ctx` tool only.
+To opt out, set `LEAN_CTX_PI_ENABLE_MCP=0` (or `"enableMcp": false`) and use
+the one-shot `ctx_` CLI tools plus `lean_ctx` instead.
 
 ## Install
 
@@ -146,8 +147,9 @@ shared npm prefix rewriting `node_modules` on every `pi install`/`pi remove`
 ### ctx_ tools (CLI-backed)
 
 These tools invoke the `lean-ctx` binary via CLI with `LEAN_CTX_COMPRESS=1`.
-The built-in tools they replace (`read`, `bash`, `ls`, `find`, `grep`) are disabled
-via `pi.setActiveTools()` so only the `ctx_` versions are available to the LLM.
+In the default additive mode, Pi’s native tools remain available alongside the
+`ctx_` tools. Replace mode hides the replaceable Pi builtins; additive mode with
+shell routing enabled hides only `bash`.
 
 ### Embedded MCP bridge (session cache + advanced tools)
 
@@ -158,8 +160,8 @@ representation. Token use depends on the file, mode, cache policy, and host. The
 also discovers the server's advertised tools (`ctx_overview`, `ctx_graph`, `ctx_session`, …),
 filters out those already exposed as `ctx_` CLI tools, and registers the rest as native Pi tools.
 By default that surface is the lean core + `ctx_call`; set `toolProfile: power` (see the
-[Tool surface](#tool-surface-lean--standard--power) section) to also surface `ctx_edit` /
-`ctx_patch` and the rest of the registry as first-class Pi tools.
+[Tool surface](#tool-surface-lean--standard--power) section) to also surface `ctx_edit`
+and the rest of the registry as first-class Pi tools.
 
 The bridge wins over `~/.pi/agent/mcp.json`: a `lean-ctx` entry there (written by
 `lean-ctx init --agent pi`) does **not** disable the embedded bridge, because Pi has no native
@@ -203,11 +205,10 @@ lean-ctx verify-cache
 
   Target:        src/main.rs
   Cache policy:  aggressive
-  Read #1 (full):     3731 tokens
-  Read #2 (re-read):  13 tokens  [unchanged stub]
+  Read #1:            response observed locally
+  Read #2:            unchanged stub emitted
   Cache comparison:   stub emitted
-  Cache hits (run):   1/2
-  CEP sessions:       42 (88% cross-call hit ratio)
+  Cache scope:        this file and active local policy
 
   PASS — session cache engaged: the unchanged re-read returned a cache stub.
 ```
@@ -227,7 +228,7 @@ before turning any local measurement into a performance claim.
 
 ## pi-mcp-adapter compatibility
 
-If you prefer using [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) to manage your MCP servers, lean-ctx integrates automatically:
+If you prefer using [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) to manage your MCP servers, configure it explicitly:
 
 ```bash
 # Option A: lean-ctx writes the config for you
@@ -248,7 +249,10 @@ lean-ctx init --agent pi
 }
 ```
 
-When pi-mcp-adapter manages the lean-ctx MCP server, pi-lean-ctx detects this and only registers its CLI-based tool overrides, leaving MCP tool management to the adapter.
+A `lean-ctx` entry in `mcp.json` does not disable the embedded bridge. If you
+choose `pi-mcp-adapter` to own the MCP server, explicitly set
+`"enableMcp": false` (or `LEAN_CTX_PI_ENABLE_MCP=0`) to avoid duplicate MCP
+tools; pi-lean-ctx then keeps only its CLI-backed tools.
 
 ## Binary Resolution
 
@@ -368,6 +372,6 @@ the active prefix plus any handed-off (`Disabled`) and skipped tools.
 
 ## Links
 
-- [lean-ctx](https://leanctx.com) — the Cognitive Context Layer for AI coding agents
+- [lean-ctx](https://leanctx.com) — the Context SDK for AI Agents
 - [GitHub](https://github.com/yvgude/lean-ctx)
 - [Discord](https://discord.gg/pTHkG9Hew9)
