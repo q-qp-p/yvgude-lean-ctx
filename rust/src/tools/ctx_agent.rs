@@ -4,7 +4,9 @@ use crate::core::agents::{AgentDiary, AgentRegistry, AgentStatus, DiaryEntryType
 use crate::core::evidence_ledger::EvidenceLedgerV1;
 use crate::core::ocla::capsule::global_capsule_store;
 use crate::core::ocla::registry::OclaRegistry;
-use crate::core::ocla::types::{AGENT_ENVELOPE_SCHEMA_VERSION, AgentEnvelope, OclaRequestContext};
+use crate::core::ocla::types::{
+    AGENT_ENVELOPE_SCHEMA_VERSION, AgentEnvelope, AgentMessageRequest, OclaRequestContext,
+};
 
 fn presence_ttl_hours() -> u64 {
     crate::core::config::Config::load()
@@ -96,15 +98,17 @@ pub fn handle(
             if msg_privacy == PrivacyLevel::Private && to_agent.is_none() {
                 return "Error: private messages require to_agent".to_string();
             }
-            match OclaRegistry::global().agent_gateway.route_message(
-                from,
-                to_agent,
-                cat,
-                msg,
-                msg_privacy,
-                msg_priority,
+            let request = AgentMessageRequest {
+                project_root: project_root.to_string(),
+                from_agent_id: from.to_string(),
+                to_agent_id: to_agent.map(str::to_string),
+                category: cat.to_string(),
+                message: msg.to_string(),
+                privacy: msg_privacy,
+                priority: msg_priority,
                 ttl_hours,
-            ) {
+            };
+            match OclaRegistry::global().agent_gateway.route_message(&request) {
                 Ok(msg_id) => {
                     let target = to_agent.unwrap_or("all agents (broadcast)");
                     format!("Posted [{cat}] to {target}: {msg} (id: {msg_id})")
@@ -119,7 +123,7 @@ pub fn handle(
             };
             let messages = match AgentRegistry::mutate_locked(|registry| {
                 registry
-                    .read_unread(agent_id)
+                    .read_unread_scoped(agent_id, project_root)
                     .into_iter()
                     .cloned()
                     .collect::<Vec<_>>()
@@ -164,15 +168,17 @@ pub fn handle(
             let status_msg = message;
 
             match AgentRegistry::mutate_locked(|registry| {
-                registry.set_status(agent_id, new_status.clone(), status_msg);
-            }) {
-                Ok(_) => format!(
+                registry.set_status(agent_id, new_status.clone(), status_msg)
+            })
+            .and_then(|(_, result)| result)
+            {
+                Ok(()) => format!(
                     "Status updated: {} → {}{}",
                     agent_id,
                     new_status,
                     status_msg.map(|m| format!(" ({m})")).unwrap_or_default()
                 ),
-                Err(e) => format!("Status set but save failed: {e}"),
+                Err(e) => format!("Status update rejected: {e}"),
             }
         }
 
@@ -201,8 +207,10 @@ pub fn handle(
             let summary = message.unwrap_or("(no summary provided)");
             let scratchpad_ttl = scratchpad_default_ttl_hours();
 
-            let _ = AgentRegistry::mutate_locked(|registry| {
-                registry.post_message_full(
+            if let Err(error) = AgentRegistry::mutate_locked(|registry| {
+                registry.set_status(from, AgentStatus::Finished, Some("handed off"))?;
+                registry.post_message_scoped(
+                    Some(project_root),
                     from,
                     Some(target),
                     "handoff",
@@ -211,8 +219,12 @@ pub fn handle(
                     MessagePriority::Normal,
                     Some(scratchpad_ttl),
                 );
-                registry.set_status(from, AgentStatus::Finished, Some("handed off"));
-            });
+                Ok(())
+            })
+            .and_then(|(_, result)| result)
+            {
+                return format!("Handoff rejected: {error}");
+            }
 
             // Route through OCLA AgentGateway for cross-process visibility.
             let handoff_message = format!("HANDOFF: {summary}");
@@ -373,6 +385,7 @@ pub fn handle(
                         !e.read_by.contains(&id.to_string())
                             && e.from_agent != id
                             && (e.to_agent.is_none() || e.to_agent.as_deref() == Some(id))
+                            && e.project_root.as_deref() == Some(project_root)
                     })
                     .count()
             });
@@ -547,7 +560,10 @@ pub fn handle(
             let mut messages: Vec<ExportMessageV1> = registry
                 .scratchpad
                 .iter()
-                .filter(|e| e.to_agent.is_none() || e.to_agent.as_deref() == Some(agent_id))
+                .filter(|e| {
+                    e.project_root.as_deref() == Some(project_root)
+                        && (e.to_agent.is_none() || e.to_agent.as_deref() == Some(agent_id))
+                })
                 .take(200)
                 .map(|m| ExportMessageV1 {
                     id: m.id.clone(),

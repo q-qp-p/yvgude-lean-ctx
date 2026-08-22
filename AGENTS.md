@@ -2,6 +2,39 @@
 
 lean-ctx optimizes LLM context by compressing file reads, shell output, and search results.
 
+## Mandatory Multi-Agent Delivery
+
+For every substantive task in this repository, load and follow
+`docs/internal/skills/agent-orchestration.md` before taking task actions.
+Use a coordinated Codex CLI swarm of 2 to 15 agents for the work; do not
+silently fall back to a single-agent workflow. Fifteen agents is a hard
+concurrent maximum; choose the smallest effective swarm and give every agent a
+distinct role.
+
+This rule is owned by the orchestration lead. Agents with a concrete delegated
+subtask are swarm workers: they coordinate through lean-ctx and complete their
+assigned role, but do not recursively launch another swarm unless the lead
+explicitly asks them to do so.
+
+- **Runtime:** every Codex CLI agent MUST use `--model gpt-5.6-luna` and
+  `-c 'model_reasoning_effort="max"'`.
+- **LeanCTX coordination:** every agent registers on the lean-ctx agent bus,
+  checks directives, and uses lean-ctx context tools; the lead records the
+  integrated decision and progress through lean-ctx.
+- **Topology:** assign independent, non-duplicative roles. Use a mapper or
+  reviewer alongside the implementer; for non-parallel changes, the reviewer
+  validates the implementer's result after it is ready.
+- **Safe ownership:** only one agent may edit a given file or shared worktree at
+  a time. Parallel agents investigate, test, or review in isolation unless
+  explicit file ownership or separate worktrees are assigned.
+- **Completion:** the lead integrates the findings, runs the relevant quality
+  gates, and reports the agents' evidence. A task is not complete merely
+  because an agent returned successfully.
+
+Direct conversational answers, status updates, and clarification questions are
+not substantive tasks and do not require a swarm. The user may explicitly
+request a different runtime or a single-agent exception.
+
 ## Integration Mode: Replace
 
 Native Read/Grep/Glob/Shell are **denied by policy**. lean-ctx MCP tools are the
@@ -87,19 +120,17 @@ and `ctx_read` shows cross-source hints (e.g. "Issue #42 references this file").
 
 ## Agent Bus Registration (mandatory, first action)
 
-Every agent MUST register on the lean-ctx agent bus at session start:
+Every ephemeral coding worker MUST register through the local MCP bus as its
+first MCP operation: call `ctx_agent` with `action="register"`, its host type
+(`codex`, `cursor`, or `claude`), and its assigned role. Retain the returned
+local ID, then call `ctx_agent` with `action="read"` to check directives.
 
-```bash
-lean-ctx agent register --id "<type>-$$" --role coder --owner yves@lean-ctx
-```
-
-Replace `<type>` with `codex`, `cursor`, or `claude`. `$$` is your shell PID.
-This enables coordination, directives, and prevents duplicate work.
-
-After registration, check for pending directives:
-```bash
-lean-ctx agent list
-```
+`lean-ctx agent register --id "<type>-$$" ...` is intentionally **not** for
+ephemeral workers: it creates a durable, attested identity and using a shell
+PID there turns normal short-lived worker history into misleading "active
+agents". Reserve that CLI command for a deliberately provisioned, long-lived
+identity with an owner. Use `ctx_agent action="list"` for project-scoped
+workers, or `lean-ctx agent presence` for the local process view.
 
 ## Branch Hygiene (mandatory)
 
@@ -114,8 +145,8 @@ GitHub remote must stay clean: only `main` + `cla-signatures` + max 1 active PR 
 ## Compression Safety
 
 lean-ctx shadow-mode compresses file reads. Edit tools (StrReplace, Write) can
-write compressed content back to disk, embedding `[lean-ctx: omitted N lines]`
-markers as literal text. The pre-commit hook blocks such commits.
+write compression omission markers back to disk as literal text. The pre-commit
+hook blocks such commits.
 
 **If a commit is blocked or a file looks corrupted:**
 ```bash

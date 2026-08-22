@@ -26,6 +26,7 @@ pub fn handle_observe() {
     // three agents register `hook observe` on SessionStart, so this is the single
     // emit point (the Codex-specific handler stays silent in dedicated mode).
     emit_dedicated_session_context(&input);
+    record_session_lifecycle_presence(&input);
 
     // Native-edit code-health notice (#1085): when the agent edits code with the
     // host's native Edit/MultiEdit tools (bypassing ctx_edit's gate), surface an
@@ -55,6 +56,79 @@ pub fn handle_observe() {
     {
         crate::core::output_echo::analyze_and_record(text);
     }
+}
+
+/// Records durable logical presence for every host SessionStart and SessionEnd hook.
+///
+/// This is deliberately separate from the MCP-process presence registered by
+/// `LeanCtxServer`: a host session can own several short-lived MCP connections.
+/// Hook telemetry remains fail-open so a registry lock cannot wedge an editor;
+/// the MCP ingress itself is fail-closed before any tool executes.
+fn record_session_lifecycle_presence(input: &str) {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(input) else {
+        return;
+    };
+    let Some((event, source, workspace, session_id)) = session_lifecycle_presence_fields(&payload)
+    else {
+        return;
+    };
+    if let Err(error) = crate::core::agents::AgentRegistry::record_logical_session_presence(
+        event,
+        &source,
+        &workspace,
+        &session_id,
+    ) {
+        tracing::warn!(
+            %error,
+            source,
+            workspace = %workspace,
+            event,
+            "lean-ctx: failed to record logical session presence"
+        );
+    }
+}
+
+fn session_lifecycle_presence_fields(
+    payload: &serde_json::Value,
+) -> Option<(&'static str, String, String, String)> {
+    let event = match payload
+        .get("hook_event_name")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("SessionStart") => "open",
+        Some("SessionEnd") => "close",
+        _ => return None,
+    };
+
+    let session_id = ["session_id", "conversation_id"]
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(serde_json::Value::as_str))
+        .filter(|value| !value.trim().is_empty())?
+        .to_string();
+    let workspace = ["cwd", "workspace", "project_root"]
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(serde_json::Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })?;
+    let source = if payload.get("conversation_id").is_some() {
+        "cursor"
+    } else if std::env::var_os("CODEX_THREAD_ID").is_some()
+        || std::env::var_os("CODEX_PROFILE").is_some()
+    {
+        "codex"
+    } else if std::env::var_os("CLAUDE_SESSION_ID").is_some() {
+        "claude"
+    } else if std::env::var_os("CODEBUDDY_SESSION_ID").is_some() {
+        "codebuddy"
+    } else {
+        "agent"
+    };
+    Some((event, source.to_string(), workspace, session_id))
 }
 
 fn emit_dedicated_session_context(input: &str) {
@@ -782,6 +856,84 @@ mod tests {
         });
         let event = detect_event_type(&v, 1000).unwrap();
         assert_eq!(event.event_type, "session");
+    }
+
+    #[test]
+    fn session_lifecycle_presence_fields_scope_cursor_session_to_workspace() {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "conversation_id": "cursor-session-1",
+            "cwd": "/workspace/lean-ctx"
+        });
+
+        let fields = session_lifecycle_presence_fields(&payload).expect("session presence fields");
+        assert_eq!(fields.0, "open");
+        assert_eq!(fields.1, "cursor");
+        assert_eq!(fields.2, "/workspace/lean-ctx");
+        assert_eq!(fields.3, "cursor-session-1");
+    }
+
+    #[test]
+    fn session_end_closes_logical_presence() {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionEnd",
+            "conversation_id": "cursor-session-1",
+            "cwd": "/workspace/lean-ctx"
+        });
+
+        let fields = session_lifecycle_presence_fields(&payload).expect("session presence fields");
+        assert_eq!(fields.0, "close");
+        assert_eq!(fields.1, "cursor");
+        assert_eq!(fields.2, "/workspace/lean-ctx");
+        assert_eq!(fields.3, "cursor-session-1");
+    }
+
+    #[test]
+    fn session_lifecycle_hook_opens_and_closes_registry_presence() {
+        let _isolated_data_dir = crate::core::data_dir::isolated_data_dir();
+        let start = r#"{
+            "hook_event_name":"SessionStart",
+            "conversation_id":"cursor-session-1",
+            "cwd":"/workspace/lean-ctx"
+        }"#;
+        record_session_lifecycle_presence(start);
+
+        let registry = crate::core::agents::AgentRegistry::load().expect("registry persisted");
+        assert!(registry.logical_session_telemetry_seen);
+        assert!(registry.logical_sessions.iter().any(|presence| {
+            presence.source == "cursor"
+                && presence.workspace == "/workspace/lean-ctx"
+                && presence.session_id == "cursor-session-1"
+        }));
+
+        let end = r#"{
+            "hook_event_name":"SessionEnd",
+            "conversation_id":"cursor-session-1",
+            "cwd":"/workspace/lean-ctx"
+        }"#;
+        record_session_lifecycle_presence(end);
+
+        let registry = crate::core::agents::AgentRegistry::load().expect("registry persisted");
+        assert!(registry.logical_sessions.is_empty());
+    }
+
+    #[test]
+    fn session_lifecycle_presence_fields_require_host_session_identity() {
+        let payload = serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "cwd": "/workspace/lean-ctx"
+        });
+        assert!(session_lifecycle_presence_fields(&payload).is_none());
+    }
+
+    #[test]
+    fn non_session_hook_does_not_record_logical_presence() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "session-1",
+            "cwd": "/workspace/lean-ctx"
+        });
+        assert!(session_lifecycle_presence_fields(&payload).is_none());
     }
 
     #[test]

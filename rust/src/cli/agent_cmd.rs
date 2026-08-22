@@ -88,6 +88,7 @@ pub(crate) fn cmd_agent(args: &[String]) {
                 );
             }
         }
+        Some("presence") => print_local_presence(as_json, args.iter().any(|arg| arg == "--all")),
         Some("show") => {
             let Some(agent_id) = positional(0) else {
                 exit_usage("agent show <agent-id> [--trust-domain org.example]");
@@ -183,6 +184,7 @@ pub(crate) fn cmd_agent(args: &[String]) {
 USAGE:\n\
   lean-ctx agent register --id <agent-id> --role <role> --owner <user@org>\n\
   lean-ctx agent list [--json] [--all]      list active identities (--all: lifecycle history)\n\
+  lean-ctx agent presence [--json] [--all]  inspect local MCP agent liveness\n\
   lean-ctx agent show <agent-id> [--trust-domain org.example]\n\
   lean-ctx agent heartbeat <agent-id>        liveness + attestation drift check\n\
   lean-ctx agent suspend <agent-id> [--reason <text>]\n\
@@ -194,6 +196,102 @@ Every identity has a mandatory human owner. Lifecycle transitions write\n\
 tamper-evident audit entries. Docs: docs/enterprise/agent-identity.md"
             );
         }
+    }
+}
+
+/// Runtime presence is intentionally separate from `agent list`: the latter
+/// is an identity/authorization registry, while this view answers the
+/// operational question "which local agents are actually connected and doing
+/// work?". A live but quiet MCP process is `idle`, not falsely `active`.
+#[derive(serde::Serialize)]
+struct LocalPresenceRow {
+    id: String,
+    agent_type: String,
+    role: Option<String>,
+    state: &'static str,
+    alive: bool,
+    last_active: chrono::DateTime<chrono::Utc>,
+    age_seconds: i64,
+    pid: u32,
+    project_root: String,
+    status_message: Option<String>,
+}
+
+fn local_presence_snapshot(
+    registry: &crate::core::agents::AgentRegistry,
+    now: chrono::DateTime<chrono::Utc>,
+    include_finished: bool,
+) -> Vec<LocalPresenceRow> {
+    const ACTIVE_WINDOW_SECONDS: i64 = 60;
+
+    let mut rows: Vec<_> = registry
+        .agents
+        .iter()
+        .filter_map(|agent| {
+            let alive = crate::core::agents::is_process_alive(agent.pid);
+            let age_seconds = (now - agent.last_active).num_seconds().max(0);
+            let state = if !alive || agent.status == crate::core::agents::AgentStatus::Finished {
+                "finished"
+            } else if age_seconds <= ACTIVE_WINDOW_SECONDS {
+                "active"
+            } else {
+                "idle"
+            };
+            (include_finished || state != "finished").then(|| LocalPresenceRow {
+                id: agent.agent_id.clone(),
+                agent_type: agent.agent_type.clone(),
+                role: agent.role.clone(),
+                state,
+                alive,
+                last_active: agent.last_active,
+                age_seconds,
+                pid: agent.pid,
+                project_root: agent.project_root.clone(),
+                status_message: agent.status_message.clone(),
+            })
+        })
+        .collect();
+    rows.sort_by(|left, right| {
+        left.age_seconds
+            .cmp(&right.age_seconds)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    rows
+}
+
+fn print_local_presence(as_json: bool, include_finished: bool) {
+    const ACTIVE_WINDOW_SECONDS: i64 = 60;
+
+    let registry = crate::core::agents::AgentRegistry::load_or_create();
+    let rows = local_presence_snapshot(&registry, chrono::Utc::now(), include_finished);
+
+    if as_json {
+        print_json_or_exit(&serde_json::json!({
+            "active_window_seconds": ACTIVE_WINDOW_SECONDS,
+            "presence": rows,
+        }));
+        return;
+    }
+
+    if rows.is_empty() {
+        println!("no local MCP agent presence detected");
+        return;
+    }
+
+    println!(
+        "{:<24} {:<14} {:<16} {:<10} {:>8}  PROJECT",
+        "AGENT", "TYPE", "ROLE", "STATE", "AGE"
+    );
+    for row in rows {
+        println!(
+            "{:<24} {:<14} {:<16} {:<10} {:>7}s  {}",
+            row.id,
+            row.agent_type,
+            row.role.as_deref().unwrap_or("-"),
+            row.state,
+            row.age_seconds,
+            row.project_root,
+        );
     }
 }
 
@@ -212,4 +310,70 @@ fn print_json_or_exit<T: serde::Serialize>(value: &T) {
 fn exit_err(message: &str) -> ! {
     eprintln!("agent: {message}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+
+    use super::local_presence_snapshot;
+    use crate::core::agents::{AgentEntry, AgentRegistry, AgentStatus};
+
+    #[test]
+    fn presence_snapshot_classifies_and_hides_finished_agents() {
+        let now = Utc::now();
+        let pid = std::process::id();
+        let registry = AgentRegistry {
+            agents: vec![
+                AgentEntry {
+                    agent_id: "active".to_string(),
+                    agent_type: "mcp".to_string(),
+                    role: Some("coder".to_string()),
+                    project_root: "/project".to_string(),
+                    started_at: now,
+                    last_active: now,
+                    pid,
+                    status: AgentStatus::Active,
+                    status_message: None,
+                },
+                AgentEntry {
+                    agent_id: "idle".to_string(),
+                    agent_type: "mcp".to_string(),
+                    role: None,
+                    project_root: "/project".to_string(),
+                    started_at: now,
+                    last_active: now - Duration::seconds(61),
+                    pid,
+                    status: AgentStatus::Active,
+                    status_message: None,
+                },
+                AgentEntry {
+                    agent_id: "finished".to_string(),
+                    agent_type: "mcp".to_string(),
+                    role: None,
+                    project_root: "/project".to_string(),
+                    started_at: now,
+                    last_active: now,
+                    pid,
+                    status: AgentStatus::Finished,
+                    status_message: None,
+                },
+            ],
+            scratchpad: vec![],
+            logical_sessions: vec![],
+            logical_session_telemetry_seen: false,
+            updated_at: now,
+        };
+
+        let visible = local_presence_snapshot(&registry, now, false);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, "active");
+        assert_eq!(visible[0].state, "active");
+        assert_eq!(visible[1].id, "idle");
+        assert_eq!(visible[1].state, "idle");
+
+        let all = local_presence_snapshot(&registry, now, true);
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().any(|row| row.state == "finished"));
+    }
 }

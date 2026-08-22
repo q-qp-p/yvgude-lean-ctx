@@ -792,10 +792,7 @@ async fn mcp_server_card() -> impl IntoResponse {
     Json(card)
 }
 
-async fn v1_agents_register(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> impl IntoResponse {
+async fn v1_agents_register(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let agent_type = body
         .get("agent_type")
         .and_then(|v| v.as_str())
@@ -806,24 +803,56 @@ async fn v1_agents_register(
         .and_then(|v| v.as_str())
         .unwrap_or(&state.project_root);
 
-    let agent_id = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+    match crate::core::agents::AgentRegistry::mutate_locked(|registry| {
         registry.register(agent_type, role, project_root)
-    })
-    .map(|(_, id)| id)
-    .unwrap_or_default();
-
-    Json(serde_json::json!({
-        "agent_id": agent_id,
-        "status": "registered"
-    }))
+    }) {
+        Ok((_, agent_id)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "agent_id": agent_id,
+                "status": "registered"
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(%error, "lean-ctx: agent registration failed");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "agent registry unavailable"})),
+            )
+                .into_response()
+        }
+    }
 }
 
-async fn v1_agents_heartbeat(Json(body): Json<Value>) -> impl IntoResponse {
+async fn v1_agents_heartbeat(Json(body): Json<Value>) -> Response {
     let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-    let _ = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
-        registry.update_heartbeat(agent_id);
-    });
-    Json(serde_json::json!({"status": "ok"}))
+    match crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.update_heartbeat(agent_id)
+    })
+    .and_then(|(_, result)| result)
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "ok"}))).into_response(),
+        Err(error) => {
+            tracing::warn!(%error, agent_id, "lean-ctx: rejected agent heartbeat");
+            let (status, message) = if error.starts_with("agent presence '") {
+                (StatusCode::NOT_FOUND, "unknown agent id")
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "agent registry unavailable",
+                )
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": message,
+                    "status": "rejected"
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn v1_agents_list() -> impl IntoResponse {
@@ -840,16 +869,42 @@ async fn v1_agents_list() -> impl IntoResponse {
     }))
 }
 
-async fn v1_agents_deregister(Json(body): Json<Value>) -> impl IntoResponse {
+async fn v1_agents_deregister(Json(body): Json<Value>) -> Response {
     let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
-    let _ = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+    match crate::core::agents::AgentRegistry::mutate_locked(|registry| {
         registry.set_status(
             agent_id,
             crate::core::agents::AgentStatus::Finished,
             Some("deregistered via API"),
-        );
-    });
-    Json(serde_json::json!({"status": "deregistered"}))
+        )
+    })
+    .and_then(|(_, result)| result)
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "deregistered"})),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(%error, agent_id, "lean-ctx: rejected agent deregistration");
+            let (status, message) = if error.starts_with("agent presence '") {
+                (StatusCode::NOT_FOUND, "unknown agent id")
+            } else {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "agent registry unavailable",
+                )
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": message,
+                    "status": "rejected"
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn v1_agents_events_sse()
@@ -1130,6 +1185,17 @@ mod tests {
             }
         }
         String::from_utf8_lossy(&buf).to_string()
+    }
+
+    #[tokio::test]
+    async fn agent_lifecycle_endpoints_reject_unknown_presence() {
+        let _isolated_data_dir = crate::core::data_dir::isolated_data_dir();
+
+        let heartbeat = v1_agents_heartbeat(Json(json!({"agent_id": "missing-agent"}))).await;
+        assert_eq!(heartbeat.status(), StatusCode::NOT_FOUND);
+
+        let deregister = v1_agents_deregister(Json(json!({"agent_id": "missing-agent"}))).await;
+        assert_eq!(deregister.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

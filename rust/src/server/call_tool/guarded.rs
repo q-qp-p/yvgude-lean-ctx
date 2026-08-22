@@ -95,6 +95,12 @@ impl LeanCtxServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, ErrorData> {
+        self.ensure_session_presence().await.map_err(|error| {
+            ErrorData::internal_error(
+                format!("agent bus registration is required before tool execution: {error}"),
+                None,
+            )
+        })?;
         self.check_idle_expiry().await;
         self.resolve_roots_once().await;
         elicitation::increment_call();

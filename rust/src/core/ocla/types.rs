@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -666,6 +667,23 @@ pub struct AgentEnvelope {
     pub to_agent_id: String,
     pub capsule_ref: String,
     pub budget_tokens: u64,
+}
+
+/// One scoped local agent-bus message request.
+///
+/// A project scope is part of the contract rather than an optional routing
+/// hint, preventing local messages from crossing workspace boundaries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentMessageRequest {
+    pub project_root: String,
+    pub from_agent_id: String,
+    pub to_agent_id: Option<String>,
+    pub category: String,
+    pub message: String,
+    pub privacy: PrivacyLevel,
+    pub priority: MessagePriority,
+    pub ttl_hours: Option<u64>,
 }
 
 impl AgentEnvelope {

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 #[cfg(test)]
 use super::diary::{AgentDiary, DiaryEntryType, truncate};
 use super::persistence::{
-    FileLock, agents_dir, generate_short_id, is_process_alive, mutate_persistent,
+    FileLock, agents_dir, generate_short_id, is_process_alive, load_registry_file,
+    mutate_persistent, save_registry_file,
 };
 use super::{AgentEntry, AgentRegistry, AgentStatus, LogicalSessionPresence, ScratchpadEntry};
 use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
@@ -92,20 +93,24 @@ impl AgentRegistry {
 
     /// Atomically refreshes a registered MCP process heartbeat.
     pub(crate) fn heartbeat_persistent(agent_id: &str) -> Result<(), String> {
-        mutate_persistent(|registry| registry.update_heartbeat(agent_id))
+        mutate_persistent(|registry| registry.update_heartbeat(agent_id))?
     }
 
     /// Atomically marks a registered MCP process as finished.
     pub(crate) fn finish_persistent(agent_id: &str) -> Result<(), String> {
         mutate_persistent(|registry| {
-            registry.set_status(agent_id, AgentStatus::Finished, Some("connection closed"));
-        })
+            registry.set_status(agent_id, AgentStatus::Finished, Some("connection closed"))
+        })?
     }
 
-    pub(crate) fn update_heartbeat(&mut self, agent_id: &str) {
-        if let Some(agent) = self.agents.iter_mut().find(|a| a.agent_id == agent_id) {
-            agent.last_active = Utc::now();
-        }
+    pub(crate) fn update_heartbeat(&mut self, agent_id: &str) -> Result<(), String> {
+        let agent = self
+            .agents
+            .iter_mut()
+            .find(|agent| agent.agent_id == agent_id)
+            .ok_or_else(|| format!("agent presence '{agent_id}' was not found"))?;
+        agent.last_active = Utc::now();
+        Ok(())
     }
 
     pub(crate) fn set_status(
@@ -113,13 +118,17 @@ impl AgentRegistry {
         agent_id: &str,
         status: AgentStatus,
         message: Option<&str>,
-    ) {
-        if let Some(agent) = self.agents.iter_mut().find(|a| a.agent_id == agent_id) {
-            agent.status = status;
-            agent.status_message = message.map(std::string::ToString::to_string);
-            agent.last_active = Utc::now();
-        }
+    ) -> Result<(), String> {
+        let agent = self
+            .agents
+            .iter_mut()
+            .find(|agent| agent.agent_id == agent_id)
+            .ok_or_else(|| format!("agent presence '{agent_id}' was not found"))?;
+        agent.status = status;
+        agent.status_message = message.map(std::string::ToString::to_string);
+        agent.last_active = Utc::now();
         self.updated_at = Utc::now();
+        Ok(())
     }
     /// Records explicit logical-session presence supplied by an owning editor
     /// integration. Tool activity is deliberately never treated as a session.
@@ -258,6 +267,23 @@ impl AgentRegistry {
         priority: MessagePriority,
         ttl_hours: Option<u64>,
     ) -> String {
+        self.post_message_scoped(
+            None, from_agent, to_agent, category, message, privacy, priority, ttl_hours,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn post_message_scoped(
+        &mut self,
+        project_root: Option<&str>,
+        from_agent: &str,
+        to_agent: Option<&str>,
+        category: &str,
+        message: &str,
+        privacy: PrivacyLevel,
+        priority: MessagePriority,
+        ttl_hours: Option<u64>,
+    ) -> String {
         let id = generate_short_id();
         let default_ttl_hours = crate::core::config::Config::load()
             .agents
@@ -276,7 +302,7 @@ impl AgentRegistry {
             privacy,
             message: message.to_string(),
             metadata: HashMap::new(),
-            project_root: None,
+            project_root: project_root.map(std::string::ToString::to_string),
             timestamp: Utc::now(),
             read_by: vec![from_agent.to_string()],
             expires_at,
@@ -321,6 +347,22 @@ impl AgentRegistry {
     }
 
     pub(crate) fn read_unread(&mut self, agent_id: &str) -> Vec<&ScratchpadEntry> {
+        self.read_unread_for_project(agent_id, None)
+    }
+
+    pub(crate) fn read_unread_scoped(
+        &mut self,
+        agent_id: &str,
+        project_root: &str,
+    ) -> Vec<&ScratchpadEntry> {
+        self.read_unread_for_project(agent_id, Some(project_root))
+    }
+
+    fn read_unread_for_project(
+        &mut self,
+        agent_id: &str,
+        project_root: Option<&str>,
+    ) -> Vec<&ScratchpadEntry> {
         let now = Utc::now();
         let unread_indices: Vec<usize> = self
             .scratchpad
@@ -330,6 +372,7 @@ impl AgentRegistry {
                 !e.read_by.contains(&agent_id.to_string())
                     && e.from_agent != agent_id
                     && (e.to_agent.is_none() || e.to_agent.as_deref() == Some(agent_id))
+                    && project_root.is_none_or(|root| e.project_root.as_deref() == Some(root))
                     && e.expires_at.is_none_or(|exp| exp > now)
             })
             .map(|(i, _)| i)
@@ -346,6 +389,7 @@ impl AgentRegistry {
             .filter(|e| {
                 e.from_agent != agent_id
                     && (e.to_agent.is_none() || e.to_agent.as_deref() == Some(agent_id))
+                    && project_root.is_none_or(|root| e.project_root.as_deref() == Some(root))
                     && e.read_by.contains(&agent_id.to_string())
                     && e.read_by.iter().filter(|r| *r == agent_id).count() == 1
                     && e.expires_at.is_none_or(|exp| exp > now)
@@ -396,15 +440,13 @@ impl AgentRegistry {
 
     fn save_locked(&self, dir: &std::path::Path) -> Result<(), String> {
         let path = dir.join("registry.json");
-        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(&path, json).map_err(|e| e.to_string())
+        save_registry_file(&path, self)
     }
 
     pub(crate) fn load() -> Option<Self> {
         let dir = agents_dir().ok()?;
         let path = dir.join("registry.json");
-        let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        load_registry_file(&path).ok().flatten()
     }
 
     pub(crate) fn load_or_create() -> Self {
@@ -427,7 +469,8 @@ impl AgentRegistry {
         let lock_path = dir.join("registry.lock");
         let _lock = FileLock::acquire(&lock_path)?;
 
-        let mut registry = Self::load().unwrap_or_default();
+        let path = dir.join("registry.json");
+        let mut registry = load_registry_file(&path)?.unwrap_or_default();
         let out = f(&mut registry);
         registry.save_locked(&dir)?;
         Ok((registry, out))
@@ -480,6 +523,27 @@ mod tests {
         let msgs = reg.read_unread("agent-a");
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].category, "request");
+    }
+
+    #[test]
+    fn scoped_messages_are_invisible_to_other_projects() {
+        let mut reg = AgentRegistry::new();
+        reg.post_message_scoped(
+            Some("/project-a"),
+            "agent-a",
+            Some("agent-b"),
+            "finding",
+            "private project-a finding",
+            PrivacyLevel::Private,
+            MessagePriority::Normal,
+            Some(1),
+        );
+
+        assert!(reg.read_unread_scoped("agent-b", "/project-b").is_empty());
+
+        let messages = reg.read_unread_scoped("agent-b", "/project-a");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].project_root.as_deref(), Some("/project-a"));
     }
 
     #[test]
@@ -548,12 +612,23 @@ mod tests {
     fn set_status() {
         let mut reg = AgentRegistry::new();
         let id = reg.register("claude", None, "/tmp/project");
-        reg.set_status(&id, AgentStatus::Idle, Some("waiting for review"));
+        reg.set_status(&id, AgentStatus::Idle, Some("waiting for review"))
+            .expect("registered agent exists");
         assert_eq!(reg.agents[0].status, AgentStatus::Idle);
         assert_eq!(
             reg.agents[0].status_message,
             Some("waiting for review".to_string())
         );
+    }
+
+    #[test]
+    fn unknown_status_update_fails_closed() {
+        let mut reg = AgentRegistry::new();
+        let error = reg
+            .set_status("missing-agent", AgentStatus::Finished, None)
+            .expect_err("unknown agent must be rejected");
+        assert!(error.contains("missing-agent"));
+        assert!(reg.agents.is_empty());
     }
 
     #[test]
@@ -805,6 +880,34 @@ mod presence_tests {
             AgentStatus::Finished
         );
         assert!(isolated.path().join("agents/registry.json").exists());
+    }
+
+    #[test]
+    fn unknown_persistent_heartbeat_fails_closed() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+
+        let error = AgentRegistry::heartbeat_persistent("missing-agent")
+            .expect_err("unknown presence must not report a successful heartbeat");
+
+        assert!(error.contains("was not found"));
+    }
+
+    #[test]
+    fn corrupt_registry_fails_closed_without_overwrite() {
+        let isolated = crate::core::data_dir::isolated_data_dir();
+        let agents_dir = isolated.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).expect("agents directory");
+        let registry_path = agents_dir.join("registry.json");
+        let corrupt = "{not valid json";
+        std::fs::write(&registry_path, corrupt).expect("corrupt fixture");
+
+        let error = AgentRegistry::mutate_locked(|registry| {
+            registry.register_process("mcp", Some("context-engine"), "/project", 101);
+        })
+        .expect_err("corrupt registry must reject mutation");
+
+        assert!(error.contains("agent registry is corrupt"));
+        assert_eq!(std::fs::read_to_string(registry_path).unwrap(), corrupt);
     }
 
     #[test]

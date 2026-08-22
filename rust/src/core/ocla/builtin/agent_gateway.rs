@@ -8,14 +8,14 @@
 use chrono::Utc;
 
 use crate::core::a2a::dlq::DeadLetter;
-use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
+use crate::core::a2a::message::PrivacyLevel;
 use crate::core::a2a::remote_transport::{RemoteTransport, RemoteTransportConfig};
 use crate::core::a2a_transport::{AgentIdentityV1, TransportContentType, TransportEnvelopeV1};
 use crate::core::agents::AgentRegistry;
 use crate::core::ocla::capsule::global_capsule_store;
 use crate::core::ocla::traits::{AgentGateway, OclaService};
 use crate::core::ocla::types::{
-    AgentEnvelope, OclaCapability, OclaCapabilityKind, OclaError, OclaResult,
+    AgentEnvelope, AgentMessageRequest, OclaCapability, OclaCapabilityKind, OclaError, OclaResult,
 };
 use crate::core::ocla_bus::{self, OclaEvent};
 
@@ -122,45 +122,56 @@ impl BuiltinAgentGateway {
     pub fn can_relay(&self, capsule_ref: &str, _to_agent_id: &str) -> bool {
         capsule_ref.is_empty() || global_capsule_store().resolve(capsule_ref).is_ok()
     }
-    pub fn route_message(
-        &self, // used for trait impl method grouping
-        from_agent: &str,
-        to_agent: Option<&str>,
-        category: &str,
-        message: &str,
-        privacy: PrivacyLevel,
-        priority: MessagePriority,
-        ttl_hours: Option<u64>,
-    ) -> OclaResult<String> {
-        AgentRegistry::mutate_locked(|registry| {
-            self.route_message_in_registry(
-                registry, from_agent, to_agent, category, message, privacy, priority, ttl_hours,
-            )
-        })
-        .map(|(_, message_id)| message_id)
-        .map_err(|error| {
-            OclaError::Rejected(
-                OclaCapabilityKind::AgentGateway,
-                format!("agent bus routing failed: {error}"),
-            )
-        })
+    pub fn route_message(&self, request: &AgentMessageRequest) -> OclaResult<String> {
+        Self::validate_message_request(request)?;
+        AgentRegistry::mutate_locked(|registry| self.route_message_in_registry(registry, request))
+            .map(|(_, message_id)| message_id)
+            .map_err(|error| {
+                OclaError::Rejected(
+                    OclaCapabilityKind::AgentGateway,
+                    format!("agent bus routing failed: {error}"),
+                )
+            })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn validate_message_request(request: &AgentMessageRequest) -> OclaResult<()> {
+        for (field, value) in [
+            ("project_root", request.project_root.as_str()),
+            ("from_agent_id", request.from_agent_id.as_str()),
+            ("category", request.category.as_str()),
+            ("message", request.message.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(OclaError::Rejected(
+                    OclaCapabilityKind::AgentGateway,
+                    format!("agent message {field} must not be empty"),
+                ));
+            }
+        }
+        if request.privacy == PrivacyLevel::Private && request.to_agent_id.is_none() {
+            return Err(OclaError::Rejected(
+                OclaCapabilityKind::AgentGateway,
+                "private agent messages require a target".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::unused_self)]
     fn route_message_in_registry(
         &self, // used for trait impl method grouping
         registry: &mut AgentRegistry,
-        from_agent: &str,
-        to_agent: Option<&str>,
-        category: &str,
-        message: &str,
-        privacy: PrivacyLevel,
-        priority: MessagePriority,
-        ttl_hours: Option<u64>,
+        request: &AgentMessageRequest,
     ) -> String {
-        registry.post_message_full(
-            from_agent, to_agent, category, message, privacy, priority, ttl_hours,
+        registry.post_message_scoped(
+            Some(&request.project_root),
+            &request.from_agent_id,
+            request.to_agent_id.as_deref(),
+            &request.category,
+            &request.message,
+            request.privacy.clone(),
+            request.priority.clone(),
+            request.ttl_hours,
         )
     }
 }
@@ -235,19 +246,8 @@ impl AgentGateway for BuiltinAgentGateway {
         Ok(envelope)
     }
 
-    fn route_message(
-        &self,
-        from: &str,
-        to: Option<&str>,
-        category: &str,
-        message: &str,
-        privacy: PrivacyLevel,
-        priority: MessagePriority,
-        ttl_hours: Option<u64>,
-    ) -> OclaResult<String> {
-        BuiltinAgentGateway::route_message(
-            self, from, to, category, message, privacy, priority, ttl_hours,
-        )
+    fn route_message(&self, request: &AgentMessageRequest) -> OclaResult<String> {
+        BuiltinAgentGateway::route_message(self, request)
     }
 }
 
@@ -259,7 +259,24 @@ mod tests {
     use crate::core::agents::AgentRegistry;
     use crate::core::ocla::capsule::global_capsule_store;
     use crate::core::ocla::traits::AgentGateway;
-    use crate::core::ocla::types::{AgentEnvelope, OclaRequestContext};
+    use crate::core::ocla::types::{AgentEnvelope, AgentMessageRequest, OclaRequestContext};
+
+    fn message_request(
+        to_agent_id: Option<&str>,
+        category: &str,
+        message: &str,
+    ) -> AgentMessageRequest {
+        AgentMessageRequest {
+            project_root: "/project".to_string(),
+            from_agent_id: "agent-a".to_string(),
+            to_agent_id: to_agent_id.map(str::to_string),
+            category: category.to_string(),
+            message: message.to_string(),
+            privacy: PrivacyLevel::Private,
+            priority: MessagePriority::High,
+            ttl_hours: Some(2),
+        }
+    }
 
     fn envelope(budget: u64) -> AgentEnvelope {
         AgentEnvelope {
@@ -392,18 +409,13 @@ mod tests {
         let mut registry = AgentRegistry::new();
         let message_id = gateway.route_message_in_registry(
             &mut registry,
-            "agent-a",
-            Some("agent-b"),
-            "request",
-            "Please review",
-            PrivacyLevel::Private,
-            MessagePriority::High,
-            Some(2),
+            &message_request(Some("agent-b"), "request", "Please review"),
         );
 
-        let messages = registry.read_unread("agent-b");
+        let messages = registry.read_unread_scoped("agent-b", "/project");
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, message_id);
+        assert_eq!(messages[0].project_root.as_deref(), Some("/project"));
         assert_eq!(messages[0].message, "Please review");
         assert_eq!(messages[0].privacy, PrivacyLevel::Private);
         assert_eq!(messages[0].priority, MessagePriority::High);
@@ -413,18 +425,25 @@ mod tests {
     fn route_message_supports_broadcast() {
         let gateway = BuiltinAgentGateway::new();
         let mut registry = AgentRegistry::new();
-        gateway.route_message_in_registry(
-            &mut registry,
-            "agent-a",
-            None,
-            "status",
-            "Ready",
-            PrivacyLevel::Team,
-            MessagePriority::Normal,
-            None,
-        );
+        let mut request = message_request(None, "status", "Ready");
+        request.privacy = PrivacyLevel::Team;
+        request.priority = MessagePriority::Normal;
+        request.ttl_hours = None;
+        gateway.route_message_in_registry(&mut registry, &request);
 
         assert_eq!(registry.read_unread("agent-b").len(), 1);
+    }
+
+    #[test]
+    fn route_message_rejects_unscoped_or_private_broadcasts() {
+        let gateway = BuiltinAgentGateway::new();
+
+        let mut unscoped = message_request(Some("agent-b"), "request", "Review this");
+        unscoped.project_root.clear();
+        assert!(gateway.route_message(&unscoped).is_err());
+
+        let private_broadcast = message_request(None, "request", "Review this");
+        assert!(gateway.route_message(&private_broadcast).is_err());
     }
 
     #[test]
@@ -433,15 +452,11 @@ mod tests {
         let registry = crate::core::ocla::registry::OclaRegistry::with_builtins();
         let message_id = registry
             .agent_gateway
-            .route_message(
-                "agent-a",
+            .route_message(&message_request(
                 Some("agent-b"),
                 "request",
                 "Please review",
-                PrivacyLevel::Private,
-                MessagePriority::High,
-                Some(2),
-            )
+            ))
             .unwrap();
 
         assert!(!message_id.is_empty());

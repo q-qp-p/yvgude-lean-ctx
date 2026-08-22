@@ -1,14 +1,12 @@
-use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 use lean_ctx_protocol::CapabilityManifestV1;
 
 use super::types::{
-    AgentEnvelope, CompressionRequest, CompressionResult, ConfigProposal, ConfigTuningRequest,
-    ConnectorJob, DeliveryEntry, DeliveryRecord, DeliveryRecordResult, DeliveryStats,
-    EfficiencyAnalysis,
-    EfficiencySample, ExperimentRequest, ExperimentResult, IntentDecision, IntentRequest,
-    MetricPoint, ModelRouteRequest, Observation, OclaCapability, OclaResult, Outcome,
-    ResponseOptimizationRequest, ResponseOptimizationResult, RoutingDecision, SavingsEvidence,
-    ScheduledJob, UsageRecord,
+    AgentEnvelope, AgentMessageRequest, CompressionRequest, CompressionResult, ConfigProposal,
+    ConfigTuningRequest, ConnectorJob, DeliveryEntry, DeliveryRecord, DeliveryRecordResult,
+    DeliveryStats, EfficiencyAnalysis, EfficiencySample, ExperimentRequest, ExperimentResult,
+    IntentDecision, IntentRequest, MetricPoint, ModelRouteRequest, Observation, OclaCapability,
+    OclaResult, Outcome, ResponseOptimizationRequest, ResponseOptimizationResult, RoutingDecision,
+    SavingsEvidence, ScheduledJob, UsageRecord,
 };
 
 /// Common, versioned discovery surface for every OCLA capability.
@@ -108,16 +106,7 @@ pub trait ConnectorScheduler: OclaService {
 
 pub trait AgentGateway: OclaService {
     fn relay_agent(&self, envelope: AgentEnvelope) -> OclaResult<AgentEnvelope>;
-    fn route_message(
-        &self,
-        from: &str,
-        to: Option<&str>,
-        category: &str,
-        message: &str,
-        privacy: PrivacyLevel,
-        priority: MessagePriority,
-        ttl_hours: Option<u64>,
-    ) -> OclaResult<String>;
+    fn route_message(&self, request: &AgentMessageRequest) -> OclaResult<String>;
 }
 
 pub trait DeliveryRegistry: OclaService {

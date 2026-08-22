@@ -13,25 +13,36 @@ pub(super) fn mutate_persistent<T>(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let _lock = FileLock::acquire(&dir.join("registry.lock"))?;
     let path = dir.join("registry.json");
-    let mut registry = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default();
+    let mut registry = load_registry_file(&path)?.unwrap_or_default();
     let result = mutate(&mut registry);
-    let json = serde_json::to_string_pretty(&registry).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    save_registry_file(&path, &registry)?;
     Ok(result)
 }
 
-pub(super) fn generate_short_id() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::SystemTime;
+/// A missing registry is the normal first-run case. A malformed registry is a
+/// data-integrity failure, not an empty bus: callers that mutate must fail
+/// closed instead of overwriting messages and presence with a blank snapshot.
+pub(super) fn load_registry_file(path: &std::path::Path) -> Result<Option<AgentRegistry>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => serde_json::from_str(&content)
+            .map(Some)
+            .map_err(|error| format!("agent registry is corrupt at {}: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read agent registry {}: {error}", path.display())),
+    }
+}
 
-    let mut hasher = DefaultHasher::new();
-    SystemTime::now().hash(&mut hasher);
-    std::process::id().hash(&mut hasher);
-    format!("{:08x}", hasher.finish() as u32)
+pub(super) fn save_registry_file(
+    path: &std::path::Path,
+    registry: &AgentRegistry,
+) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(registry).map_err(|error| error.to_string())?;
+    crate::config_io::write_atomic(path, &json)
+        .map_err(|error| format!("persist agent registry {}: {error}", path.display()))
+}
+
+pub(super) fn generate_short_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// #576 already fixed this exact hardcoded-`true` anti-pattern for
@@ -46,37 +57,47 @@ pub(crate) fn is_process_alive(pid: u32) -> bool {
 }
 
 pub(crate) struct FileLock {
-    path: PathBuf,
+    file: std::fs::File,
 }
 
 impl FileLock {
     pub(crate) fn acquire(path: &std::path::Path) -> Result<Self, String> {
-        for _ in 0..50 {
-            if std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-                .is_ok()
-            {
-                return Ok(Self {
-                    path: path.to_path_buf(),
-                });
+        use fs2::FileExt;
+
+        const TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
+        const RETRY: std::time::Duration = std::time::Duration::from_millis(25);
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| format!("agent registry lock {}: {error}", path.display()))?;
+        let deadline = std::time::Instant::now() + TIMEOUT;
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { file }),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(RETRY);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    return Err(format!(
+                        "agent registry lock timed out after {}ms",
+                        TIMEOUT.as_millis()
+                    ));
+                }
+                Err(error) => return Err(format!("agent registry lock: {error}")),
             }
-            if let Ok(metadata) = std::fs::metadata(path)
-                && let Ok(modified) = metadata.modified()
-                && modified.elapsed().unwrap_or_default().as_secs() > 5
-            {
-                let _ = std::fs::remove_file(path);
-                continue;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        Err("Could not acquire lock after 5 seconds".to_string())
     }
 }
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _ = self.file.unlock();
     }
 }

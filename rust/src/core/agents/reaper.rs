@@ -2,7 +2,7 @@
 //! scratchpad entries, and stale logical sessions.
 //!
 //! Spawned once by the daemon; runs until the process exits.
-//! Reaper TTLs are configured through `[agents]`; interval wiring remains pending.
+//! Reaper TTLs and interval are configured through `[agents]`.
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,10 +10,15 @@ use std::time::Duration;
 
 static RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 
-/// Default reaper interval (10 minutes).
-const DEFAULT_INTERVAL: Duration = Duration::from_mins(10);
 fn load_config() -> crate::core::config::AgentsConfig {
     crate::core::config::Config::load().agents
+}
+
+fn interval_from_minutes(minutes: u64) -> Option<Duration> {
+    minutes
+        .checked_mul(60)
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
 }
 
 /// Spawn the background reaper thread. Safe to call multiple times -- only the
@@ -26,14 +31,26 @@ pub(crate) fn spawn_reaper() {
     if cfg!(test) {
         return;
     }
+    let Some(interval) = interval_from_minutes(load_config().gc_interval_minutes) else {
+        tracing::debug!("agent reaper disabled by agents.gc_interval_minutes=0");
+        return;
+    };
     let flag = RUNNING.get_or_init(|| AtomicBool::new(false));
     if flag.swap(true, Ordering::SeqCst) {
         return;
     }
-    std::thread::Builder::new()
+    if let Err(error) = reap_cycle() {
+        tracing::warn!("agent reaper initial cycle failed: {error}");
+    }
+    if let Err(error) = std::thread::Builder::new()
         .name("agent-reaper".to_string())
-        .spawn(move || reaper_loop(DEFAULT_INTERVAL))
-        .ok();
+        .spawn(move || reaper_loop(interval))
+    {
+        // Keep retry semantics honest: a failed OS thread creation must not
+        // permanently mark the reaper as running.
+        flag.store(false, Ordering::SeqCst);
+        tracing::warn!("agent reaper thread did not start: {error}");
+    }
 }
 
 fn reaper_loop(interval: Duration) {
@@ -52,7 +69,7 @@ pub(crate) fn reap_cycle() -> Result<ReapStats, String> {
 
     // Presence registry: cleanup_stale marks dead PIDs as Finished and removes
     // old Finished entries.
-    if let Ok((_registry, ())) = super::AgentRegistry::mutate_locked(|registry| {
+    super::AgentRegistry::mutate_locked(|registry| {
         let agents_before = registry.agents.len();
         let scratchpad_before = registry.scratchpad.len();
 
@@ -67,7 +84,7 @@ pub(crate) fn reap_cycle() -> Result<ReapStats, String> {
         let sessions_before = registry.logical_sessions.len();
         registry.cleanup_stale_logical_sessions(cfg.logical_session_ttl_seconds);
         stats.sessions_expired = sessions_before.saturating_sub(registry.logical_sessions.len());
-    }) {}
+    })?;
 
     tracing::debug!(
         "reaper: presence={} scratchpad={} sessions={}",
@@ -88,6 +105,7 @@ pub(crate) struct ReapStats {
 }
 
 impl ReapStats {
+    #[cfg(test)]
     pub(crate) fn total(&self) -> usize {
         self.presence_removed + self.scratchpad_expired + self.sessions_expired
     }
@@ -95,7 +113,16 @@ impl ReapStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{reap_cycle, spawn_reaper};
+    use super::{interval_from_minutes, reap_cycle, spawn_reaper};
+
+    #[test]
+    fn reaper_interval_respects_disabled_and_configured_values() {
+        assert_eq!(interval_from_minutes(0), None);
+        assert_eq!(
+            interval_from_minutes(1),
+            Some(std::time::Duration::from_mins(1))
+        );
+    }
 
     #[test]
     fn spawn_reaper_is_idempotent() {

@@ -818,6 +818,23 @@ pub struct AgentEnvelope {
     pub budget_tokens: u64,
 }
 
+/// One scoped local agent-bus message request.
+///
+/// This remains an internal capability contract: `project_root` is mandatory
+/// so a local bus can never route an unscoped message across workspaces.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentMessageRequest {
+    pub project_root: String,
+    pub from_agent_id: String,
+    pub to_agent_id: Option<String>,
+    pub category: String,
+    pub message: String,
+    pub privacy: PrivacyLevel,
+    pub priority: MessagePriority,
+    pub ttl_hours: Option<u64>,
+}
+
 impl AgentEnvelope {
     /// Assigns the deterministic identity after all relay fields are set.
     pub fn assign_relay_id(&mut self) -> OclaResult<()> {

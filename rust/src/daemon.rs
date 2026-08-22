@@ -282,6 +282,10 @@ fn write_pid_file(pid: u32) -> Result<()> {
 pub fn init_foreground_daemon() -> Result<()> {
     mark_foreground_daemon();
     crate::core::layout_pin::heal();
+    // The daemon is the single long-lived owner for local agent-presence
+    // maintenance. Starting this in every short-lived MCP process creates a
+    // reaper swarm precisely when many coding agents connect at once.
+    crate::core::agents::reaper::spawn_reaper();
     let pid = std::process::id();
     write_pid_file(pid)?;
     Ok(())

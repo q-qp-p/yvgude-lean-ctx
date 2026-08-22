@@ -80,6 +80,24 @@ impl LeanCtxServer {
         )
     }
 
+    /// Ensures this MCP connection owns a durable local bus presence before
+    /// executing a tool. Construction registers eagerly; this is the
+    /// fail-closed retry for a transient startup lock or registry failure.
+    pub(crate) async fn ensure_session_presence(&self) -> Result<(), String> {
+        if self.presence_agent_id.read().await.is_some() {
+            return Ok(());
+        }
+
+        let project_root = self
+            .startup_project_root
+            .as_deref()
+            .or(self.startup_shell_cwd.as_deref())
+            .unwrap_or(".");
+        let agent_id = crate::core::agents::AgentRegistry::register_mcp_process(project_root)?;
+        *self.presence_agent_id.write().await = Some(agent_id);
+        Ok(())
+    }
+
     pub(crate) fn new_with_startup(
         project_root: Option<&str>,
         startup_cwd: Option<&Path>,
@@ -381,5 +399,47 @@ impl LeanCtxServer {
             }
         }
         crate::core::memory_guard::force_purge();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LeanCtxServer;
+
+    #[tokio::test]
+    async fn missing_presence_is_registered_before_first_tool() {
+        let _isolated_data_dir = crate::core::data_dir::isolated_data_dir();
+        let server = LeanCtxServer::new_shared_with_context("/workspace/lean-ctx", "ws", "ch");
+        *server.presence_agent_id.write().await = None;
+
+        server
+            .ensure_session_presence()
+            .await
+            .expect("registration retry succeeds");
+        let agent_id = server
+            .presence_agent_id
+            .read()
+            .await
+            .clone()
+            .expect("presence id is retained");
+        let registry = crate::core::agents::AgentRegistry::load().expect("registry persisted");
+        assert!(
+            registry
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id == agent_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn session_presence_failure_is_observable_to_tool_gate() {
+        let _isolated_data_dir = crate::core::data_dir::isolated_data_dir();
+        let data_dir = crate::core::data_dir::lean_ctx_data_dir().expect("data dir");
+        std::fs::create_dir_all(&data_dir).expect("data dir exists");
+        std::fs::write(data_dir.join("agents"), "not a directory").expect("poison agents path");
+
+        let server = LeanCtxServer::new_shared_with_context("/workspace/lean-ctx", "ws", "ch");
+        assert!(server.presence_agent_id.read().await.is_none());
+        assert!(server.ensure_session_presence().await.is_err());
     }
 }

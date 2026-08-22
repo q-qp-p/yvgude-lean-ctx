@@ -38,8 +38,7 @@ fn packaged_kits_match_the_canonical_contracts() {
         assert_eq!(
             fs::read_to_string(&packaged).expect("packaged kit is present"),
             fs::read_to_string(&canonical).expect("canonical kit is present"),
-            "{} diverged from its canonical source",
-            kit
+            "{kit} diverged from its canonical source"
         );
     }
 }
