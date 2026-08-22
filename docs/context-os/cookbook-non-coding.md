@@ -1,10 +1,14 @@
-# Non-Coding Cookbook
+# Historical Non-Coding Cookbook
 
-Concrete recipes for building **non-coding** agents on lean-ctx. Each uses real,
-shipped features — personas, extractors, SDKs, and adapters — no mocks.
+> **Status: historical research — not a supported SDK guide.** The recipes below
+> predate the current SDK boundary and may reference archived SDKs, adapters, or
+> product surfaces. They must not be used as installation instructions or proof
+> of availability. Current scope is governed by
+> [`docs/internal/README.md`](../internal/README.md): Python SDK v1 is Preview
+> with a narrow declared reference-wrapper scope; non-coding personas, TypeScript
+> parity, and generic adapter claims are not current public commitments.
 
-Prerequisites: a running server (`lean-ctx serve` or the HTTP server) and one
-SDK installed. Examples use the Python SDK; the TypeScript SDK is equivalent.
+These historical recipes explored building non-coding agents on lean-ctx.
 
 ```python
 from leanctx import LeanCtxClient
@@ -40,14 +44,10 @@ client = LeanCtxClient("http://127.0.0.1:8080")
        "content": "ACME: 200 employees, Series B, CTO is the buyer."})
    ```
 
-4. **Wire into your harness.** Expose lean-ctx tools to your LLM loop:
-
-   ```python
-   from leanctx.adapters import to_openai_tools, run_openai_tool_call
-   tools = to_openai_tools(client)        # pass to your OpenAI call
-   # when the model returns a tool_call:
-   result_text = run_openai_tool_call(client, tool_call)
-   ```
+4. **Historical adapter experiment.** The generic `leanctx.adapters` helper
+   formerly shown here is not part of the canonical Python SDK v1 and is not a
+   supported integration path. Use only the declared Preview reference-wrapper
+   contract in `packages/python-lean-ctx/README.md`.
 
 Why it works: the `prose` compressor strips scraped-page boilerplate; the
 `confidential` floor keeps lead data from leaking into shareable artifacts.

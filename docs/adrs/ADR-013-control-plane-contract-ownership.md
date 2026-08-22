@@ -1,6 +1,7 @@
 # ADR-013: Control-Plane Contract Ownership
 
-**Status:** Accepted
+**Status:** Accepted for contract-ownership hierarchy; superseded for the
+historical multi-SDK support inventory below.
 **Date:** 2026-08-09
 **Authors:** Architecture Team
 
@@ -14,9 +15,9 @@ Rust structures and validation live in paths such as
 `docs/contracts/ocla-wire-v1.schema.json` and
 `docs/contracts/ocla-agent-envelope-v1.schema.json`. The binary transport
 projection is `contracts/ocla/v1/ocla.proto`, compiled by
-`packages/ocla-grpc/build.rs`. Rust, Python, TypeScript, and Go clients carry
-corresponding projections in `clients/rust/lean-ctx-client/`,
-`clients/python/leanctx/`, `python-sdk/`, `ts-sdk/`, and `go-sdk/`.
+`packages/ocla-grpc/build.rs`. The current SDK projections are the Rust client
+and Python SDK v1 in `packages/python-lean-ctx/`; earlier Python, TypeScript,
+and Go prototypes are archived migration material, not supported surfaces.
 
 Without an ownership hierarchy, a hand-edited schema, generated Protobuf
 field, or SDK type can become an accidental second source of truth. That makes
@@ -141,33 +142,31 @@ The release pipeline follows this order:
 3. Regenerate or update the Protobuf projection in
    `contracts/ocla/v1/ocla.proto` and build bindings through
    `packages/ocla-grpc/build.rs`.
-4. Generate Rust, Python, TypeScript, and Go client models from the schema
-   projection, preserving unknown-field storage and wire names.
+4. Generate or update only the currently supported Rust and Python projections
+   from the schema, preserving unknown-field storage and wire names. A new
+   language binding requires an explicit product-scope and evidence decision.
 5. Regenerate canonical fixtures and the content digests in the contract pack.
 6. Run the schema, SDK, and verifier conformance checks before publishing any
    version.
 
-The supported projection locations are:
+The current projection locations are:
 
 - Rust protocol and client: `rust/crates/lean-ctx-protocol/` and
   `clients/rust/lean-ctx-client/`;
-- Python: `python-sdk/lean_ctx/` and `clients/python/leanctx/`;
-- TypeScript: `ts-sdk/src/`;
-- Go: `go-sdk/`;
+- Python SDK v1: `packages/python-lean-ctx/`;
+- Historical Python, TypeScript, and Go prototypes: `_archive/`;
 - gRPC bindings: `packages/ocla-grpc/`.
 
-`scripts/validate-sdk-types.sh`, `scripts/check-sdk-versions.py`, and
-`scripts/verify-ocla-contract-suite.py` are required CI gates. Until every
-projection is generated automatically, the existing hand-maintained SDK
-files remain checked outputs: they may be edited only as the result of the
-same schema update, and the conformance fixtures must prove byte and semantic
-agreement. The hand-maintained status of a current SDK does not make that SDK
-an authority.
+`scripts/check-sdk-versions.py` verifies canonical Python SDK metadata; protocol
+and verifier checks remain required where their contracts change. A future
+binding must be introduced with its own generated projection and conformance
+evidence. The hand-maintained status of a current SDK never makes that SDK an
+authority.
 
-Each SDK release records the schema and contract-pack version it supports.
-The Rust client tests, Python/TypeScript/Go wire tests, and the OCLA verifier
-must run against the same fixture set. A language-specific test that passes
-while the shared fixtures fail is not a valid contract result.
+Each supported SDK release records the schema and contract-pack version it
+supports. The Rust client, Python SDK, and OCLA verifier must run against the
+applicable shared fixture set. A language-specific test that passes while the
+shared fixtures fail is not a valid contract result.
 
 ### Version policy and migration gates
 

@@ -1,6 +1,16 @@
-# The Context OS Guide
+# Historical Context OS Guide
 
-lean-ctx began as a context layer for coding agents. It is now a **Context OS**:
+> **Status: historical architecture research — not current product
+> documentation.** This guide describes a broader Context OS direction, including
+> multi-language SDKs, plugins, hosted operation, and extension contracts that
+> are not current LeanCTX availability claims. Current scope and status are
+> governed by [`docs/internal/README.md`](../internal/README.md): local Runtime
+> is available; Python SDK v1/reference-wrapper work is Preview; Cloud,
+> marketplace, broad extension, and autonomous-tuning surfaces are Research or
+> deferred. Do not use recipes in this document as installation instructions.
+
+lean-ctx began as a context layer for coding agents. This historical document
+describes a proposed **Context OS**:
 a local-first runtime that any developer can build their own tools and agents on
 — coding *or not* — through stable contracts, an extension surface, SDKs in
 three languages, and persona-driven verticalization.

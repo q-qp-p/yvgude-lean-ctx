@@ -1,4 +1,9 @@
-# Phase Evidence Index
+# Historical Phase Evidence Index
+
+> **Status: historical evidence ledger.** This v3.9.14-era index predates WS-1
+> consolidation and does not describe current SDK support or release evidence.
+> Current scope and execution status are governed by `docs/internal/README.md`
+> and `docs/internal/execution/MASTER-EXECUTION-PLAN.md`.
 
 For each completed phase (E2–E18 + R16), links to the commits, tests,
 and documentation that prove the work was done.
@@ -35,5 +40,5 @@ the Cargo commands) to re-verify the current checkout.
 | E15 | Policy PDP/PEP | v3.9.x | `policy_*` | docs/contracts/context-policy-packs-v1.md |
 | E16 | A2A Remote + Agent Fabric | v3.9.x | `agent_fabric_*` | docs/contracts/a2a-contract-v1.md |
 | R16 | Parallel Agent Round | v3.9.14 | various | (16 features, inline docs) |
-| E17 | SDK Ecosystem | v3.9.14 | SDK tests | ts-sdk/, python-sdk/, go-sdk/ |
+| E17 | SDK Ecosystem | v3.9.14 | Historical SDK tests | Archived TypeScript, Python, and Go prototypes |
 | E18 | Certification & Conformance | v3.9.14 | `conformance_*` | docs/contracts/certification-levels-v1.md |

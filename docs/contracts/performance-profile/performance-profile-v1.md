@@ -2,6 +2,11 @@
 
 Contract version: **v1**
 
+> **Status: Research contract.** This schema is target architecture, not an
+> available profile-distribution, team deployment, Calibrator, or Enterprise
+> product. Local runtime profiles may exist, but promotion and publication stay
+> subject to the evidence and scope gates in `docs/internal/README.md`.
+
 Performance Profiles are portable, versioned configurations for how an agent
 reads, searches, compresses, routes, and recovers context. They make a tested
 set of choices shareable and reproducible across a local machine, a team, and a

@@ -1,4 +1,4 @@
-# lean-ctx-python
+# lean-ctx-python — Preview
 
 Python SDK for [lean-ctx](https://github.com/yvgude/lean-ctx) — context compression and execution evidence for AI agents.
 
@@ -7,6 +7,12 @@ Python SDK for [lean-ctx](https://github.com/yvgude/lean-ctx) — context compre
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Requires Python 3.9+. Zero runtime dependencies.
+
+**Product status: Preview.** This is LeanCTX's declared Python SDK v1 and
+reference-wrapper scope, not a general multi-framework performance guarantee.
+Receipt fields reflect only Runtime-observed evidence; unavailable sealing or
+transport observation is recorded as an incomplete/degraded result, never
+invented as verified savings.
 
 ## Quick Start
 
@@ -23,7 +29,10 @@ print(run.receipt.verify())
 print(run.receipt.savings.saved_tokens)
 ```
 
-Each `run()` returns the agent's original output plus a sealed `ExecutionReceipt` with token and cost evidence from the Runtime.
+Each `run()` returns the agent's original output plus an `ExecutionReceipt`.
+It is sealed and independently verifiable only when the Runtime supplies the
+required evidence; otherwise the receipt remains explicitly incomplete or
+degraded.
 
 ## Installation
 

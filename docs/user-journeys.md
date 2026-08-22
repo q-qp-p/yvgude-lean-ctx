@@ -1,9 +1,16 @@
-# lean-ctx User Journeys — The Governed, Scalable Context OS
+# Historical User Journeys — Context OS research
 
-> **Audience:** website / product narrative. Each journey is a persona-driven
-> story: *who* hits a wall, *what* they do with lean-ctx, *what runs under the
-> hood*, and the *payoff*. Every command and config key below is real and shipped
-> — copy-paste them.
+> **Status: historical product research — not current website or installation
+> copy.** This document includes proposed Context OS, plugin, multi-SDK, Cloud,
+> and commercial-plane journeys that are not active LeanCTX commitments. Current
+> truth is [`docs/internal/README.md`](internal/README.md): LeanCTX is a Context
+> Performance SDK for existing agents; the local Runtime is available and Python
+> SDK v1/reference-wrapper work is Preview. Do not treat commands or claims below
+> as shipped without current reference documentation and release evidence.
+
+> **Original audience:** website / product narrative. Each journey is a
+> persona-driven historical story: *who* hits a wall, *what* they do with
+> lean-ctx, *what runs under the hood*, and the proposed payoff.
 
 lean-ctx started as a way to **compress what your agent reads**. It has grown into
 a **Context OS**: a local-first, governed context runtime that *any* developer can
@@ -276,40 +283,36 @@ lean-ctx serve                      # → http://127.0.0.1:8080  (prints a loopb
 curl -s --oauth2-bearer "$TOKEN" http://127.0.0.1:8080/v1/capabilities
 ```
 
-3. He installs an SDK — same wire contract in every language — and calls tools:
+3. Current scope offers the Python SDK v1 Preview reference-wrapper, not the
+   historical same-wire-contract SDK set:
 
 ```python
-# pip install lean-ctx-client
-from leanctx import LeanCtxClient
-client = LeanCtxClient("http://127.0.0.1:8080", bearer_token=TOKEN)
+# pip install lean-ctx-python
+from lean_ctx import LeanCTX
 
-caps = client.capabilities()                       # branch on real features
-text = client.call_tool_text("ctx_read", {"path": "notes/acme.md"})
+ctx = LeanCTX()
+run = ctx.wrap(my_agent).run("Review the notes")
 ```
 
-4. He wires lean-ctx tools straight into his existing LLM loop via a **framework
-   adapter** — no glue code:
-
-```python
-from leanctx.adapters import to_openai_tools, run_openai_tool_call
-tools = to_openai_tools(client)                    # pass to your OpenAI call
-result = run_openai_tool_call(client, tool_call)   # when the model picks one
-```
+4. Generic tool adapters are not a supported current Python SDK v1 surface.
+   The declared reference-wrapper and its evidence/degradation limits are in
+   `packages/python-lean-ctx/README.md`.
 
 **Under the hood:**
 - **Stable `/v1` contract** (`rust/src/http_server/`): `GET /v1/capabilities`
   ([`capabilities-contract-v1`](contracts/capabilities-contract-v1.md)) and
   `GET /v1/openapi.json` are the SSOT, generated from code and drift-tested —
   generate a typed client in any language.
-- **Three first-party SDKs**, all thin wire clients (no engine linking): Python
-  [`clients/python`](../clients/python), TypeScript [`lean-ctx-client`](../cookbook/sdk),
-  Rust [`clients/rust/lean-ctx-client`](../clients/rust/lean-ctx-client).
-- **Adapters** for OpenAI, LangChain, LlamaIndex and CrewAI — present when the
-  framework is installed, with a helpful `ImportError` when it isn't.
+- **Canonical current SDK:** Python v1 Preview in
+  [`packages/python-lean-ctx`](../packages/python-lean-ctx). TypeScript and Go
+  prototypes are archived; the Rust client remains technical substrate.
+- **Declared adapter scope:** the Python reference-wrapper is explicit about
+  supported agent versions, observability, degradations, and evidence; it is not
+  a generic framework-adapter promise.
 
-**Payoff:** lean-ctx becomes a **service any developer embeds**, in any language,
-behind a versioned contract — verified by a shared conformance kit
-(`run_conformance`) before you ship.
+**Current boundary:** LeanCTX is a Context Performance SDK for existing agents.
+The Python v1 Preview reference-wrapper is the only current programmatic proof
+path; broad language parity and a shared conformance family are Research.
 
 ---
 

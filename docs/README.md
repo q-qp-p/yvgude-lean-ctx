@@ -20,15 +20,18 @@ End-user documentation lives at **https://leanctx.com/docs/getting-started**.
 
 ## Contracts & SDKs
 
+Current product status is governed by [`docs/internal/README.md`](internal/README.md).
+LeanCTX is a Context Performance SDK for existing agents: the local Runtime is
+available; Python SDK v1 and its declared reference-wrapper scope are **Preview**.
+Research and historical documents are not installation or availability claims.
+
 - OCLA Wire Contract: [`docs/contracts/ocla-wire-v1.schema.json`](contracts/ocla-wire-v1.schema.json)
 - Contract Pack (80+ documents): [`docs/contracts/`](contracts/)
 - Contract Portal: [`docs/contracts/README.md`](contracts/README.md)
 - Certification Levels: [`docs/contracts/certification-levels-v1.md`](contracts/certification-levels-v1.md)
-- SDK Conformance Matrix: [`docs/reference/sdk-conformance-matrix.md`](reference/sdk-conformance-matrix.md)
-- TypeScript SDK: [`ts-sdk/`](../ts-sdk/)
-- Python SDK: [`python-sdk/`](../python-sdk/)
-- Go SDK: [`go-sdk/`](../go-sdk/)
-- Rust Client (standalone): [`clients/rust/lean-ctx-client/`](../clients/rust/lean-ctx-client/)
+- SDK status: [`docs/reference/sdk-conformance-matrix.md`](reference/sdk-conformance-matrix.md)
+- Python SDK v1 (Preview): [`packages/python-lean-ctx/`](../packages/python-lean-ctx/)
+- Rust client substrate: [`clients/rust/lean-ctx-client/`](../clients/rust/lean-ctx-client/)
 
 ## Reference & journeys
 

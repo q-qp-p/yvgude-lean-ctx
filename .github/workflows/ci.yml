@@ -351,7 +351,7 @@ jobs:
         run: cargo doc -p lean-ctx-sdk --no-deps
 
   python-sdk:
-    name: Python SDK (leanctx)
+    name: Python SDK v1 (Preview)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4 # v4
@@ -382,10 +382,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install test deps
-        # Runtime dep (leanctx SDK) is wired onto sys.path by the plugin
-        # conftest from clients/python — no install needed. tiktoken makes the
-        # token count match the host model exactly; without it the plugin uses
-        # its char-based fallback (also tested).
+        # The plugin owns a historical compatibility shim; it is not a current
+        # Python SDK integration. tiktoken makes the token count match the host
+        # model exactly; without it the plugin uses its char-based fallback.
         run: pip install pytest tiktoken
       - name: Run plugin tests
         working-directory: integrations/hermes-lean-ctx
@@ -397,13 +396,9 @@ jobs:
         run: python benchmarks/run.py --turns 40 --needles 6 --context-length 2000 --base-url http://127.0.0.1:9 --no-write
 
   sdk-conformance:
-    # TODO: re-enable after migrating conformance tests from clients/python
-    # to packages/python-lean-ctx and fixing Go SDK setup (see #1497)
-    if: false
-    # GL #395: every first-party SDK must prove the full /v1 contract against
-    # a real engine build. Red when an SDK misses a route, mistypes a shape,
-    # or the engine drifts from the frozen surface.
-    name: SDK Conformance Matrix
+    # Canonical Python SDK v1 is the sole current SDK release surface. Archived
+    # TypeScript/Go/Python prototypes are deliberately outside this gate.
+    name: Python SDK v1
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -416,12 +411,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             rust -> target
-            clients/rust/lean-ctx-client -> target
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: cookbook/package-lock.json
       - uses: actions/setup-python@v5 # v5
         with:
           python-version: "3.11"
@@ -431,15 +420,8 @@ jobs:
         # LlamaIndex/CrewAI skip cleanly (heavy dep trees, covered by the
         # framework-agnostic OpenAI adapter path).
         run: pip install -e ".[test]" langchain-core
-      - name: Run conformance kit (3 SDKs vs real server)
+      - name: Verify canonical Python SDK v1
         run: ./scripts/sdk-conformance.sh
-      - name: Upload conformance matrix
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sdk-conformance-matrix
-          path: docs/reference/sdk-conformance-matrix.md
-          if-no-files-found: ignore
 
   coverage:
     name: Coverage
@@ -688,7 +670,7 @@ jobs:
       - embed-sdk
       - python-sdk
       - hermes-plugin
-      # - sdk-conformance  # TODO: re-enable after test migration (#1497)
+      - sdk-conformance
       - coverage
       - deny
       - adversarial
@@ -716,5 +698,3 @@ jobs:
           PY
 
   # Security audit runs in security-check.yml workflow
-
-

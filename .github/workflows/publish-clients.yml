@@ -1,11 +1,9 @@
-name: Publish /v1 clients
+name: Historical /v1 client publishing
 
-# Publishes the thin /v1 contract clients under one consistent name `lean-ctx-client`:
-#   - npm    -> cookbook/sdk         (TypeScript)
-#   - PyPI   -> clients/python       (Python; import module stays `leanctx`)
-#   - crates -> clients/rust/...     (Rust)
-# Versioned independently of the engine, so NOT part of release.yml. Trigger manually
-# or push a `client-v*` tag. Every step is idempotent: an already-published version is a no-op.
+# This workflow preserves publication mechanics for archived thin-client
+# prototypes. It is not the current SDK release path: canonical Python SDK v1
+# is packages/python-lean-ctx (lean-ctx-python, Preview), and TypeScript/Go are
+# not current supported product surfaces.
 
 on:
   workflow_dispatch:
@@ -24,8 +22,8 @@ permissions:
 
 jobs:
   publish-npm:
-    name: Publish lean-ctx-client to npm
-    if: ${{ github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'npm' }}
+    name: Historical TypeScript client (disabled)
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4 # v4
@@ -52,9 +50,10 @@ jobs:
           npm publish --workspace lean-ctx-client --access public
 
   publish-pypi:
-    name: Publish lean-ctx-client to PyPI
-    # Disabled: clients/python archived, new SDK in packages/python-lean-ctx (#1497)
-    if: false # ${{ github.event_name == 'push' || inputs.targets == 'all' || inputs.targets == 'pypi' }}
+    name: Historical Python client (disabled)
+    # clients/python is archived; canonical lean-ctx-python publication is
+    # intentionally not delegated to this legacy thin-client workflow.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4 # v4

@@ -11,24 +11,23 @@
 
 ### **Control what your AI can see.**
 
-**LeanCTX — AI Value Gate for AI Coding Agents**
+**LeanCTX — Context Performance SDK for AI Agents**
 
-LeanCTX — short for **Lean Context** — is an AI Value Gate and context
-engineering layer for AI coding agents. It runs locally alongside your coding
-agent, helping it read repositories, run development commands, and send focused
-context to the model: it **understands** the task, **routes** the right context,
-**compresses** what it sends, and **tracks** the cost and outcome of that work.
-The result: 50–80% fewer tokens where compression applies.
-Zero config required.
+LeanCTX is a local context-performance layer for existing agents. It selects,
+shapes, reuses, recovers, and measures context before inference without
+replacing the agent, its model choice, or its task logic. Eligible local reads
+and shell output can be reduced; measured savings vary by workload and are not
+an outcome or cost guarantee.
+Supported setup paths: Codex, Claude Code, and Cursor.
 Local-first.
 
 | Problem | With LeanCTX |
 |---------|-------------|
 | Repeated file reads: ~2000 tokens each | Cached re-reads: **~13 tokens** |
 | Raw `git status`: ~800 tokens | Compressed: **~120 tokens** |
-| Every turn re-sends the whole history | Proxy compresses each request, **prompt-cache-safe** |
-| Context resets every chat | Session memory persists across chats |
-| No visibility into context usage | Real-time dashboard + budget control |
+| Repeated context | Local reuse and recovery primitives |
+| Need evidence | Local Receipt and offline-verification primitives |
+| Need a performance claim | Compare baseline/treatment with a declared quality threshold |
 
 ---
 
@@ -54,11 +53,11 @@ Local-first.
 
 ---
 
-> **Control what your AI can see — and what it costs.** LeanCTX is an **AI Value
-> Gate** for coding agents: it understands tasks, routes and compresses context,
-> remembers what it learns, and measures cost against accepted outcomes.
+> **Performance starts before inference.** LeanCTX is a Context Performance SDK
+> for existing agents: integrate, optimize, and verify with explicit evidence.
 
-> Token savings are the receipt. Intelligence is the product. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 30+ other agents — no config needed.
+> Current supported setup paths are **Codex, Claude Code, and Cursor**. Other
+> integrations must expose an explicit capability or degradation status.
 
 <p align="center"><strong>See it in action:</strong></p>
 
@@ -93,10 +92,11 @@ Local-first.
 ## Why developers use LeanCTX
 
 - **Longer useful coding sessions** — less context waste = more room for actual code reasoning
-- **Lower API costs** — 50–80% fewer tokens on reads and shell output, cached re-reads cost ~13 tokens
+- **Less avoidable context overhead** — eligible local reads and shell output can
+  be reduced; measure every workload before making a savings claim
 - **No more "I already showed you this file"** — session memory persists across chats
 - **Works with your existing setup** — one `lean-ctx setup` command, no config changes needed
-- **Full visibility** — see exactly where your context window budget goes
+- **Inspectable evidence** — local Receipts and offline-verification primitives
 - **Model-agnostic & yours** — swap OpenAI/Anthropic/Gemini freely; your context and memory stay local and portable, never locked in a vendor's black box
 
 ---
@@ -124,7 +124,8 @@ One binary covers the capabilities that decide how well an AI agent performs:
 
 Your AI agent reads files and runs commands. LeanCTX compresses both automatically.
 
-- **50–80% token reduction** on eligible context while preserving recovery paths
+- **Context reduction where applicable** while preserving recovery paths; results
+  vary by workload and require measurement
 
 - **File reads**: 10 read modes (`full`, `map`, `signatures`, `diff`, `lines:N-M`, `density:X`, …) — cached re-reads cost ~13 tokens
 - **Target density** (`density:0.4`): SDE-style budget compression — keeps the highest-entropy lines until ~40% of the original tokens remain, deterministic
@@ -152,47 +153,28 @@ a larger prompt.
 - **Property Graph**: multi-edge code graph (imports, calls, exports, type_ref) powers impact analysis and search ranking
 - **Yours, not the vendor's**: memory stays local and portable — export it as a `.ctxpkg` package and move it across machines or models, instead of locking it in a vendor's black box
 
-### 4. AI Value Gate — cost and outcome tracking
+### 4. Evidence primitives
 
-Performance is the cost of a useful result, not just speed. LeanCTX records
-costs and outcomes locally; **CPAO (Cost per Accepted Outcome)** is the north-star
-metric for comparing useful AI work.
+LeanCTX provides local Receipt and offline-verification primitives. A savings or
+performance claim is valid only for a comparable baseline/treatment workload,
+declared quality threshold, and reproducible evidence.
 
-- **Context Manager**: browser dashboard with real-time token tracking, compression stats, utilization gauge
-- **Budgets & SLOs**: profiles, roles, per-agent budgets, and throttling policies
-- **Context Proof** (`ctx_proof`, `ctx_verify`): 4-layer verification engine with CI drift gates
+### 5. Benchmark and calibration
 
-### 5. Shadow Recommendations — savings proof
-
-Shadow Mode compares LeanCTX treatment with a configured baseline without
-changing the active workflow. Its reports show cost, tokens, CPAO, and whether
-quality held, then recommend savings only when the comparison supports them.
+Benchmark comparison, recommendation, and calibration remain Research until the
+quality-evaluated Receipt path is completed. No public benchmark claim is made.
 
 ## Cost Intelligence
 
-LeanCTX automatically tracks local cost and outcome signals; it does not add
-those reports to agent context. CPAO — cost per accepted outcome — is the
-north-star metric, while Shadow Mode provides a baseline comparison for savings.
-
-```bash
-lean-ctx savings --period week                 # costs, token savings, and CPAO
-lean-ctx value-report --format markdown --last 20  # recent outcome quality
-lean-ctx shadow --latest                       # latest baseline comparison
-```
-
-### Quick start: value tracking
-
-```bash
-# Enable shadow mode for savings comparison
-echo '[shadow]\nenabled = true' >> ~/.config/lean-ctx/config.toml
-
-# After using LeanCTX for a while:
-lean-ctx savings
-lean-ctx shadow --latest
-```
+LeanCTX records local observability signals but does not infer accepted outcomes
+or business savings. Treat token reduction as a diagnostic, not the headline
+result, until a comparable quality-gated Receipt exists.
 
 <details>
-<summary><strong>Full feature list (83 MCP tools)</strong></summary>
+<summary><strong>Local Runtime feature inventory</strong></summary>
+
+Some implementation entries below are Preview or Research; an implementation
+directory or command name is not an availability or performance claim.
 
 - **Web & Research** (`ctx_url_read`): pull a public web page, PDF, or YouTube transcript into context as compressed, citation-backed text — `facts`/`quotes` return claims with a confidence score + source URL, relevance-ranked research-compression distils to a token budget, SSRF-guarded (http/https only)
 - **Graph-Powered Intelligence**: hybrid search (BM25 + embeddings + graph proximity via RRF), incremental git-diff updates
@@ -208,7 +190,11 @@ lean-ctx shadow --latest
 
 </details>
 
-## Addons — run the ecosystem through one gateway
+## Addons — Research / historical integration notes
+
+> Addon discovery, registry, fleet policy, and marketplace-like operation are
+> not current supported product surfaces. This section is retained as technical
+> research and must not be used as an installation or support commitment.
 
 You don't have to choose between LeanCTX and the other context tools you already
 like. An **addon** wraps any MCP server in a tiny `lean-ctx-addon.toml` manifest;
@@ -230,19 +216,12 @@ The registry spans compression (Headroom, Sophon), code intelligence (Repomix,
 Serena), memory (Mem0, Cognee, Letta) and reasoning (Sequential Thinking). See the
 **[addon guide](docs/guides/addons.md)** or [browse them all](https://leanctx.com/addons/).
 
-## Where it's going
+## Research directions
 
-LeanCTX is growing from a single context *layer* into a full **cognitive context
-layer** for whole teams: version-controlled context strategy, one unified graph, and a
-governance layer across many agents.
-
-- **Context Time Machine → hosted history** — the snapshot engine, dashboard replay, restore, and signed file-based share/import have shipped (see above); next is a `ctxpkg.com` registry for hosted, versioned context history and a side-by-side model-view ｜ git-diff replay. The temporal axis through everything LeanCTX does — it *decides, remembers, guards, proves, and replays*. ([concept →](docs/concepts/context-time-machine.md))
-- **Context as Code** — declarative pipelines, profiles, and policies in TOML, versioned like infrastructure
-- **Unified Context Graph** — code, tests, commits, CI runs, and knowledge entries in a single semantic graph
-- **Agent Harness** — roles, budgets, and tool permissions for multi-agent governance
-- **Context Observability** — SLOs on context consumption, anomaly detection, OpenTelemetry / Prometheus export
-
-The full roadmap lives in **[VISION.md](VISION.md)**.
+Profiles, Kits, benchmarks, calibration, capabilities, and organization-scale
+operation remain Research or deferred until the local quality-evaluated Receipt
+loop is proven. They are not prerequisites for the local Runtime or Python SDK
+v1 Preview.
 
 ## How it works (30 seconds)
 
@@ -250,15 +229,18 @@ LeanCTX works on **two planes** — what your agents *read* and what they *send 
 
 ```
 read path:   AI tool  →  (MCP tools + shell)  →  lean-ctx  →  your repo + CLI
-wire path:   AI tool  →  lean-ctx proxy        →  model provider   (every request, compressed)
+wire path:   AI tool  →  lean-ctx proxy        →  model provider   (when configured)
 ```
 
 - **MCP server** *(read path)*: exposes `ctx_*` tools (read modes, caching, deltas, search, memory, multi-agent)
 - **Shell hook** *(read path)*: transparently compresses common commands so the LLM sees less noise
-- **Request proxy** *(wire path, opt-in)*: `lean-ctx proxy enable` puts a local proxy between your agent and the model that compresses **every request** — system prompt, full history and tool results — prompt-cache-safe, with measured USD spend. It can also pin **one reasoning-effort level across OpenAI, Anthropic & Gemini** (`proxy.effort`) without breaking that cache, cut **output** tokens with a cache-safe verbosity steer plus a measured holdout, and **relocate volatile fields** (dates, UUIDs, commit SHAs) out of the cacheable prefix so a stable system prompt finally caches. Every rewrite is reversible (content-addressed recovery) and byte-stable by contract. Same layer as a standalone request-compression proxy (e.g. Headroom) — you don't need one on top.
+- **Request proxy** *(wire path, opt-in)*: a local proxy can observe and transform
+  declared traffic. Its coverage and evidence are integration-specific; do not
+  infer provider savings or accepted outcomes without a quality-gated Receipt.
 - **Property Graph**: multi-edge code graph powers impact analysis, related file discovery, and search ranking
 - **Session memory**: persists state with structured recovery so long-running work never "cold starts"
-- **Context Manager**: browser dashboard for real-time visibility into what's in your context window
+- **Local evidence**: receipts and observability signals remain local and expose
+  only the facts an integration can observe
 
 ## Get started (30 seconds)
 
@@ -270,9 +252,9 @@ npm install -g lean-ctx-bin                          # Node.js
 cargo install lean-ctx                               # Rust
 
 # 2) One-command setup for your agent
-lean-ctx wrap cursor      # or: wrap claude / wrap codex / wrap vscode
+lean-ctx wrap cursor      # or: wrap claude / wrap codex
 
-# Done. Savings appear after your AI's first lean-ctx call.
+# Inspect local runtime signals after your first LeanCTX call.
 lean-ctx gain
 ```
 
@@ -303,35 +285,29 @@ lean-ctx setup            # interactive wizard with every option
 
 </details>
 
-## Use it from your own code (SDKs)
+## Use it from your own code (SDK)
 
-Beyond the CLI, lean-ctx ships published libraries so you can call it directly from your app.
-
-**Drop-in prompt compression — [`lean-ctx-sdk`](https://pypi.org/project/lean-ctx-sdk/) ([npm](https://www.npmjs.com/package/lean-ctx-sdk)).** Compress a chat-style `messages` array before it reaches any model — deterministic and prompt-cache friendly; images, tool-calls and ids pass through untouched.
-
-```python
-# pip install lean-ctx-sdk
-from lean_ctx import compress
-messages = compress(messages, model="claude-sonnet-4")
-```
-
-```ts
-// npm install lean-ctx-sdk
-import { compress } from "lean-ctx-sdk";
-messages = await compress(messages, { model: "gpt-4o" });
-```
-
-Framework adapters included (LiteLLM, LangChain, Vercel AI SDK). → **[compress() cookbook](docs/guides/compress-sdk.md)**
-
-**Thin `/v1` contract clients — [`lean-ctx-client`](https://pypi.org/project/lean-ctx-client/) ([npm](https://www.npmjs.com/package/lean-ctx-client) · [crates.io](https://crates.io/crates/lean-ctx-client)).** Wrap the full `/v1` tool, event and session API over the process boundary — never links the engine, so it stays stable as lean-ctx evolves.
+The current programmatic surface is **Python SDK v1 (Preview)**. It integrates a
+declared agent lifecycle with the local Runtime; it does not replace the agent,
+choose its model, or claim verified savings without matching evidence.
 
 ```bash
-pip install lean-ctx-client     # Python (imports as `leanctx`)
-npm install lean-ctx-client     # TypeScript / Node
-cargo add lean-ctx-client       # Rust
+pip install lean-ctx-python
 ```
 
-Start the server with `lean-ctx serve`, then point a client at it. → **[API reference](https://leanctx.com/docs/api-reference/)**
+```python
+from lean_ctx import LeanCTX
+
+ctx = LeanCTX()
+run = ctx.wrap(my_agent).run("Review the payments module")
+print(run.output)
+print(run.receipt.verify())  # True only when Runtime evidence is sealed
+```
+
+The current reference-wrapper scope, optional integrations, degradation rules,
+and evidence boundaries are documented in
+[`packages/python-lean-ctx/README.md`](packages/python-lean-ctx/README.md).
+TypeScript and Go SDK prototypes are not current supported product surfaces.
 
 ## Real-world scenarios
 
@@ -646,10 +622,10 @@ committed recorded subset that blocks CI on any regression.
 - **3,000+ GitHub stars** — and counting
 - **280+ forks** — active community contributions
 - **200+ releases** — shipped near-daily since launch
-- **30+ supported AI coding agents** — broadest MCP compatibility
+- **Supported setup paths:** Codex, Claude Code, and Cursor
 - **83 MCP tools** — from simple file reads to multi-agent orchestration
-- Used in production by teams running Claude Code, Cursor, and Codex daily
-- **Live adoption metrics**: [leanctx.com/metrics](https://leanctx.com/metrics/) — installs, stars and savings, updated continuously
+- Local Runtime, Receipt, and offline-verification primitives for the supported
+  setup paths
 
 ## Docs
 
@@ -660,7 +636,6 @@ committed recorded subset that blocks CI on any regression.
 - CLI reference: https://leanctx.com/docs/cli-reference/
 - What is LeanCTX: https://leanctx.com/what-is-leanctx/
 - Comparison (vs RTK, Context+, MemGPT): https://leanctx.com/compare/
-- Pricing & Cloud (local use is free forever): https://leanctx.com/pricing/
 - FAQ: [discord-faq.md](discord-faq.md)
 - Feature catalog (SSOT snapshot): [LEANCTX_FEATURE_CATALOG.md](LEANCTX_FEATURE_CATALOG.md)
 - Monorepo guide: [docs/guides/monorepo.md](docs/guides/monorepo.md)
@@ -723,5 +698,3 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md). Easy first PR: propose a new CLI 
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
-
-
