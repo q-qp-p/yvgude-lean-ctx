@@ -2,6 +2,9 @@
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use ed25519_dalek::SigningKey;
+use serde::Deserialize;
+use serde_json::Value;
 use std::{
     fs::{self, File},
     io::Read,
@@ -35,6 +38,8 @@ enum EvidenceSubcommand {
     Realworld(EvidenceRealworldCommand),
     /// Render a customer-readable HTML report from real-world evidence JSON.
     Report(EvidenceReportCommand),
+    /// Assemble a canonical V2 customer-proof candidate from explicit local artifacts.
+    V2(EvidenceV2Command),
     Inspect(EvidenceInspectCommand),
 }
 
@@ -109,6 +114,61 @@ struct EvidenceReportCommand {
     #[arg(long, value_name = "HTML", value_hint = clap::ValueHint::FilePath)]
     output: PathBuf,
 }
+
+#[derive(Debug, Args)]
+struct EvidenceV2Command {
+    #[command(subcommand)]
+    command: EvidenceV2Subcommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceV2Subcommand {
+    /// Assemble a V2 document and its bounded local artifact directory.
+    Assemble(EvidenceV2AssembleCommand),
+}
+
+#[derive(Debug, Args)]
+struct EvidenceV2AssembleCommand {
+    /// Strict JSON body and artifact-source declaration; it cannot supply inventory or signing fields.
+    #[arg(long, value_name = "JSON", value_hint = clap::ValueHint::FilePath)]
+    input: PathBuf,
+
+    /// New output directory for customer-proof.json and signed sidecar artifacts.
+    #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    output: PathBuf,
+
+    /// Explicit 32-byte Ed25519 seed in lowercase hexadecimal. The verifier must receive its public key separately through a trust store.
+    #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    signing_key: PathBuf,
+
+    /// External trust relationship for the signing key.
+    #[arg(long, value_parser = ["customer_configured", "out_of_band"])]
+    trust_basis: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceV2Input {
+    created_at: String,
+    status: String,
+    subject: Value,
+    matched_arms: Value,
+    quality: Value,
+    replay: Value,
+    limitations: Value,
+    redaction: Value,
+    claims: Value,
+    artifacts: Vec<EvidenceV2ArtifactInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceV2ArtifactInput {
+    kind: String,
+    path: String,
+    source: PathBuf,
+    redaction_class: String,
+}
 #[derive(Debug, Args)]
 struct EvidenceInspectCommand {
     /// Path to the evidence-bundle ZIP archive.
@@ -164,6 +224,15 @@ pub(crate) fn run(args: &[String]) -> i32 {
                 }
             }
         }
+        EvidenceSubcommand::V2(cmd) => match cmd.command {
+            EvidenceV2Subcommand::Assemble(cmd) => match execute_v2_assemble(&cmd) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("evidence v2 assemble: {error:#}");
+                    1
+                }
+            },
+        },
         EvidenceSubcommand::Inspect(command) => match inspect(&command.bundle_path) {
             Ok(()) => 0,
             Err(error) => {
@@ -172,6 +241,131 @@ pub(crate) fn run(args: &[String]) -> i32 {
             }
         },
     }
+}
+
+fn execute_v2_assemble(cmd: &EvidenceV2AssembleCommand) -> Result<()> {
+    let input: EvidenceV2Input = serde_json::from_slice(
+        &fs::read(&cmd.input).with_context(|| format!("read V2 input {}", cmd.input.display()))?,
+    )
+    .context("parse strict V2 assembly input")?;
+    let artifacts = input
+        .artifacts
+        .iter()
+        .map(parse_v2_artifact)
+        .collect::<Result<Vec<_>>>()?;
+    let signing_key = read_v2_signing_key(&cmd.signing_key)?;
+    let trust_basis = match cmd.trust_basis.as_str() {
+        "customer_configured" => {
+            crate::core::customer_proof_v2::CustomerProofTrustBasis::CustomerConfigured
+        }
+        "out_of_band" => crate::core::customer_proof_v2::CustomerProofTrustBasis::OutOfBand,
+        _ => anyhow::bail!("unsupported V2 trust basis"),
+    };
+    let draft = crate::core::customer_proof_v2::CustomerProofDraftV2 {
+        created_at: input.created_at,
+        status: input.status,
+        subject: input.subject,
+        matched_arms: input.matched_arms,
+        quality: input.quality,
+        replay: input.replay,
+        limitations: input.limitations,
+        redaction: input.redaction,
+        claims: input.claims,
+    };
+    let assembled = crate::core::customer_proof_v2::assemble_customer_proof_v2(
+        &draft,
+        artifacts,
+        crate::core::customer_proof_v2::CustomerProofSigner {
+            signing_key: &signing_key,
+            trust_basis,
+        },
+    )
+    .map_err(anyhow::Error::msg)?;
+    assembled
+        .write_to(&cmd.output)
+        .map_err(anyhow::Error::msg)?;
+    println!(
+        "V2 customer-proof candidate written to {}",
+        cmd.output.display()
+    );
+    println!("bundle: {}", assembled.bundle_id);
+    println!("digest: {}", assembled.bundle_digest);
+    println!(
+        "not yet a proof claim: verify independently with leanctx-verify v2 --trust-store <customer-trust.json> --artifact-root {}",
+        cmd.output.display()
+    );
+    Ok(())
+}
+
+fn parse_v2_artifact(
+    input: &EvidenceV2ArtifactInput,
+) -> Result<crate::core::customer_proof_v2::CustomerProofArtifact> {
+    use crate::core::customer_proof_v2::{
+        CustomerProofArtifactKind as Kind, CustomerProofRedactionClass as Redaction,
+    };
+
+    let kind = match input.kind.as_str() {
+        "arm_receipt" => Kind::ArmReceipt,
+        "quality_measurement" => Kind::QualityMeasurement,
+        "replay_input" => Kind::ReplayInput,
+        "replay_result" => Kind::ReplayResult,
+        "run_metadata" => Kind::RunMetadata,
+        "claim_basis" => Kind::ClaimBasis,
+        "frozen_audit_bundle_v1" => Kind::FrozenAuditBundleV1,
+        _ => anyhow::bail!("unsupported V2 artifact kind '{}'", input.kind),
+    };
+    let redaction_class = match input.redaction_class.as_str() {
+        "none" => Redaction::None,
+        "pseudonymized" => Redaction::Pseudonymized,
+        "metadata_only" => Redaction::MetadataOnly,
+        "content_removed" => Redaction::ContentRemoved,
+        "secret_removed" => Redaction::SecretRemoved,
+        "aggregated" => Redaction::Aggregated,
+        _ => anyhow::bail!(
+            "unsupported V2 artifact redaction class '{}'",
+            input.redaction_class
+        ),
+    };
+    let metadata = fs::metadata(&input.source)
+        .with_context(|| format!("inspect V2 artifact source {}", input.source.display()))?;
+    if !metadata.is_file() {
+        anyhow::bail!(
+            "V2 artifact source {} is not a regular file",
+            input.source.display()
+        );
+    }
+    if metadata.len() > 8 * 1024 * 1024 {
+        anyhow::bail!(
+            "V2 artifact source {} exceeds 8 MiB",
+            input.source.display()
+        );
+    }
+    Ok(crate::core::customer_proof_v2::CustomerProofArtifact {
+        kind,
+        path: input.path.clone(),
+        redaction_class,
+        bytes: fs::read(&input.source)
+            .with_context(|| format!("read V2 artifact source {}", input.source.display()))?,
+    })
+}
+
+fn read_v2_signing_key(path: &Path) -> Result<SigningKey> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("read V2 signing key {}", path.display()))?;
+    let value = text.trim();
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!("V2 signing key must be exactly 32 bytes of lowercase hexadecimal");
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, output) in bytes.iter_mut().enumerate() {
+        *output = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .context("decode V2 signing key hexadecimal")?;
+    }
+    Ok(SigningKey::from_bytes(&bytes))
 }
 
 fn execute_realworld(cmd: &EvidenceRealworldCommand) -> Result<i32> {

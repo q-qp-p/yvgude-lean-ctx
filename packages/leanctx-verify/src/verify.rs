@@ -334,13 +334,13 @@ pub(crate) fn verify_bundle_with_test_limits(
     )
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
 
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
+pub(super) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

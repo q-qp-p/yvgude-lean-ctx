@@ -1,7 +1,7 @@
 # Customer-Proof Evidence Bundle v2
 
-Status: additive contract foundation. This document defines a customer-proof
-record; it does not add a producer, verifier, registry, or claim implementation.
+Status: additive customer-proof contract. The producer and independent verifier
+are defined by the companion verification contract; no registry is introduced.
 
 The canonical wire identifier is
 leanctx.customer-proof-evidence-bundle/v2. The JSON Schema is
@@ -149,4 +149,11 @@ currency micros, quality/replay/limitation semantics, redaction, bounded
 inventory, claims, and a trusted signer reference. Invalid fixtures are also
 canonical JSON and exercise strict unknown-field and non-integer-currency
 rejection. The contract test validates the schema, canonical byte form, and
-both valid/invalid fixture outcomes. It does not modify or invoke a producer.
+both valid/invalid fixture outcomes. It is a structural fixture, not a
+trust-rooted proof-valid vector.
+
+## Verification companion
+
+The separate producer/verification boundary, canonical unsigned bytes, external
+trust-store format, artifact-root checks, and proof-eligibility semantics are
+normative in [evidence-bundle-v2-verification-v1.md](evidence-bundle-v2-verification-v1.md).

@@ -134,6 +134,7 @@ pub(crate) mod context_snapshot;
 pub mod cross_customer_learning;
 pub mod cross_source_edges;
 pub mod cross_source_hints;
+pub(crate) mod customer_proof_v2;
 
 // ---------------------------------------------------------------------------
 // Domain: Knowledge
