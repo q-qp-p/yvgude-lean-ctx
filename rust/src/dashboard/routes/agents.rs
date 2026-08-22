@@ -63,9 +63,11 @@ fn build_agents_json() -> String {
     let transports: Vec<serde_json::Value> = registry
         .agents
         .iter()
-        .filter(|a| {
-            a.status != crate::core::agents::AgentStatus::Finished
-                && crate::core::agents::is_process_alive(a.pid)
+        .filter(|agent| {
+            agent.status != crate::core::agents::AgentStatus::Finished
+                && agent.process_identity.as_ref().is_some_and(|identity| {
+                    crate::ipc::process::matches_identity(agent.pid, identity)
+                })
         })
         .map(|a| {
             let age_min = (chrono::Utc::now() - a.last_active).num_minutes().max(0);

@@ -225,7 +225,7 @@ impl ServerHandler for LeanCtxServer {
                     registry.cleanup_stale(24);
                     registry.register("mcp", Some(effective_role), &agent_root)
                 })
-                .map(|(_, id)| id)
+                .and_then(|(_, id)| id)
                 .ok();
                 if let (Some(id), Ok(mut guard)) = (id, agent_id_handle.try_write()) {
                     *guard = Some(id);

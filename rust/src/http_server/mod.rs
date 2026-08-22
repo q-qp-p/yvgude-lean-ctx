@@ -1371,6 +1371,9 @@ mod tests {
 
     #[tokio::test]
     async fn audit_events_endpoint_returns_json() {
+        // The endpoint reads process-global audit paths. Isolate and serialize
+        // the environment so concurrent tests cannot replace its data directory.
+        let _isolated_data_dir = crate::core::data_dir::isolated_data_dir();
         let dir = tempfile::tempdir().expect("tempdir");
         let root_str = dir.path().to_string_lossy().to_string();
 

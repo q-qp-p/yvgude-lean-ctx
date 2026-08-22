@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
+use crate::ipc::process::ProcessIdentity;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AgentRegistry {
@@ -33,6 +34,11 @@ pub(crate) struct AgentEntry {
     pub started_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
     pub pid: u32,
+    /// PID alone is not an identity: operating systems reuse it. The immutable
+    /// process start marker prevents a retired MCP record from becoming "live"
+    /// again when an unrelated process receives the same PID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_identity: Option<ProcessIdentity>,
     pub status: AgentStatus,
     pub status_message: Option<String>,
 }

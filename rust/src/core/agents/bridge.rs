@@ -52,6 +52,7 @@ pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
     }
 
     if let Some(registry) = super::AgentRegistry::load() {
+        let compatibility_identities = super::ProcessIdentityIndex::load();
         for agent in &registry.agents {
             if seen_ids.contains(&agent.agent_id) {
                 if let Some(existing) = result
@@ -60,12 +61,22 @@ pub(crate) fn list_unified() -> Vec<UnifiedAgent> {
                 {
                     existing.source = AgentSource::Both;
                     existing.pid = Some(agent.pid);
-                    existing.alive = crate::ipc::process::is_alive(agent.pid);
+                    existing.alive = agent
+                        .process_identity
+                        .as_ref()
+                        .or_else(|| compatibility_identities.get(&agent.agent_id))
+                        .is_some_and(|identity| {
+                            crate::ipc::process::matches_identity(agent.pid, identity)
+                        });
                 }
                 continue;
             }
 
-            let alive = crate::ipc::process::is_alive(agent.pid);
+            let alive = agent
+                .process_identity
+                .as_ref()
+                .or_else(|| compatibility_identities.get(&agent.agent_id))
+                .is_some_and(|identity| crate::ipc::process::matches_identity(agent.pid, identity));
             result.push(UnifiedAgent {
                 agent_id: agent.agent_id.clone(),
                 source: AgentSource::Presence,

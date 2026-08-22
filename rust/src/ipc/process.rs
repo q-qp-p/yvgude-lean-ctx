@@ -1,4 +1,14 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+/// Immutable OS-level process identity used to defend durable PID references
+/// against PID reuse. A PID may be recycled for an unrelated process after its
+/// original owner exits; the start marker makes that transition observable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProcessIdentity {
+    pub start_marker: u64,
+    pub executable: String,
+}
 
 /// Run a command with a hard timeout, capturing its output.
 ///
@@ -119,6 +129,183 @@ pub fn is_alive(pid: u32) -> bool {
             exit_code == STILL_ACTIVE as u32
         }
     }
+}
+
+/// Returns a PID-reuse-safe identity when the operating system exposes one.
+///
+/// Callers must treat `None` as "not proven alive" for security-sensitive
+/// ownership checks. The supported desktop targets use an immutable process
+/// creation marker plus executable path; unsupported targets deliberately
+/// fail closed rather than trusting a bare PID.
+pub fn identity(pid: u32) -> Option<ProcessIdentity> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_process_identity(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_process_identity(pid)
+    }
+    #[cfg(windows)]
+    {
+        windows_process_identity(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// True only when the live process still has the identity captured at
+/// registration. This is intentionally stricter than `is_alive(pid)`.
+pub fn matches_identity(pid: u32, expected: &ProcessIdentity) -> bool {
+    identity(pid).as_ref() == Some(expected)
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct ProcBsdInfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_gid: u32,
+    pbi_ruid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    rfu_1: u32,
+    pbi_comm: [std::ffi::c_char; 16],
+    pbi_name: [std::ffi::c_char; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+#[cfg(target_os = "macos")]
+const PROC_PIDTBSDINFO: std::ffi::c_int = 3;
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pidinfo(
+        pid: std::ffi::c_int,
+        flavor: std::ffi::c_int,
+        arg: u64,
+        buffer: *mut std::ffi::c_void,
+        buffersize: std::ffi::c_int,
+    ) -> std::ffi::c_int;
+    fn proc_pidpath(
+        pid: std::ffi::c_int,
+        buffer: *mut std::ffi::c_void,
+        buffersize: u32,
+    ) -> std::ffi::c_int;
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_identity(pid: u32) -> Option<ProcessIdentity> {
+    let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
+    let size = i32::try_from(std::mem::size_of::<ProcBsdInfo>()).ok()?;
+    // SAFETY: `info` points to a suitably sized writable C-compatible buffer.
+    let read = unsafe {
+        proc_pidinfo(
+            i32::try_from(pid).ok()?,
+            PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    // SAFETY: `proc_pidinfo` returned the full structure size above.
+    let info = unsafe { info.assume_init() };
+    let mut path = [0_u8; libc::PATH_MAX as usize];
+    // SAFETY: `path` is a writable byte buffer of the length supplied.
+    let path_len = unsafe {
+        proc_pidpath(
+            i32::try_from(pid).ok()?,
+            path.as_mut_ptr().cast(),
+            u32::try_from(path.len()).ok()?,
+        )
+    };
+    if path_len <= 0 {
+        return None;
+    }
+    let path_len = usize::try_from(path_len).ok()?;
+    let executable = String::from_utf8_lossy(path.get(..path_len)?).into_owned();
+    let start_marker = info
+        .pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(info.pbi_start_tvusec)?;
+    Some(ProcessIdentity {
+        start_marker,
+        executable,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(pid: u32) -> Option<ProcessIdentity> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, fields) = stat.rsplit_once(')')?;
+    let start_marker = fields.split_whitespace().nth(19)?.parse().ok()?;
+    let executable = std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()?
+        .to_string_lossy()
+        .into_owned();
+    Some(ProcessIdentity {
+        start_marker,
+        executable,
+    })
+}
+
+#[cfg(windows)]
+fn windows_process_identity(pid: u32) -> Option<ProcessIdentity> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+
+    // SAFETY: the returned handle is checked and closed on every path below.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all output pointers refer to initialized local storage.
+    let times_ok =
+        unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } != 0;
+    let mut path = vec![0_u16; 32_768];
+    let mut path_len = u32::try_from(path.len()).ok()?;
+    // SAFETY: `path` is a writable UTF-16 buffer and `path_len` describes it.
+    let path_ok =
+        unsafe { QueryFullProcessImageNameW(handle, 0, path.as_mut_ptr(), &mut path_len) != 0 };
+    // SAFETY: `handle` was returned by OpenProcess and has not been closed yet.
+    unsafe { CloseHandle(handle) };
+    if !times_ok || !path_ok {
+        return None;
+    }
+    let executable = std::ffi::OsString::from_wide(path.get(..usize::try_from(path_len).ok()?)?)
+        .to_string_lossy()
+        .into_owned();
+    let start_marker = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+    Some(ProcessIdentity {
+        start_marker,
+        executable,
+    })
 }
 
 /// Ask a process to terminate gracefully (SIGTERM on Unix, nothing on Windows
@@ -506,6 +693,14 @@ mod tests {
     #[test]
     fn current_process_is_alive() {
         assert!(is_alive(std::process::id()));
+    }
+
+    #[test]
+    fn current_process_identity_is_stable_and_matches() {
+        let pid = std::process::id();
+        let identity = identity(pid).expect("supported platform exposes process identity");
+        assert!(!identity.executable.is_empty());
+        assert!(matches_identity(pid, &identity));
     }
 
     #[test]

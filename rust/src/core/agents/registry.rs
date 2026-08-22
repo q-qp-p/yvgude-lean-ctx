@@ -1,10 +1,11 @@
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 #[cfg(test)]
 use super::diary::{AgentDiary, DiaryEntryType, truncate};
 use super::persistence::{
-    FileLock, agents_dir, generate_short_id, is_process_alive, load_registry_file,
+    FileLock, ProcessIdentityIndex, agents_dir, generate_short_id, load_registry_file,
     mutate_persistent, save_registry_file,
 };
 use super::{AgentEntry, AgentRegistry, AgentStatus, LogicalSessionPresence, ScratchpadEntry};
@@ -13,6 +14,8 @@ use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 const LOGICAL_SESSION_SOURCE_MAX_BYTES: usize = 64;
 const LOGICAL_SESSION_WORKSPACE_MAX_BYTES: usize = 4096;
 const LOGICAL_SESSION_ID_MAX_BYTES: usize = 256;
+const HARD_MAX_CONCURRENT_WORKERS: usize = 15;
+const MAX_RETAINED_FINISHED_AGENTS: usize = 32;
 
 fn presence_ttl() -> u64 {
     crate::core::config::Config::load()
@@ -24,6 +27,71 @@ fn max_scratchpad() -> usize {
     crate::core::config::Config::load()
         .agents
         .max_scratchpad_entries
+}
+
+fn max_concurrent_workers() -> usize {
+    crate::core::config::Config::load()
+        .agents
+        .max_concurrent_workers
+        .clamp(1, HARD_MAX_CONCURRENT_WORKERS)
+}
+
+pub(crate) fn process_identity_matches(
+    agent: &AgentEntry,
+    compatibility_identities: &ProcessIdentityIndex,
+) -> bool {
+    agent
+        .process_identity
+        .as_ref()
+        .or_else(|| compatibility_identities.get(&agent.agent_id))
+        .is_some_and(|identity| crate::ipc::process::matches_identity(agent.pid, identity))
+}
+
+fn safe_legacy_identity(agent: &AgentEntry) -> Option<crate::ipc::process::ProcessIdentity> {
+    if agent.process_identity.is_some() {
+        return None;
+    }
+    let identity = crate::ipc::process::identity(agent.pid)?;
+    legacy_identity_matches_registration(agent, &identity).then_some(identity)
+}
+
+fn legacy_identity_matches_registration(
+    agent: &AgentEntry,
+    identity: &crate::ipc::process::ProcessIdentity,
+) -> bool {
+    if Path::new(&identity.executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("lean-ctx")
+    {
+        return false;
+    }
+    let started_at = agent.started_at.timestamp_micros();
+    let Ok(process_started_at) = i64::try_from(identity.start_marker) else {
+        return false;
+    };
+    const REGISTRATION_GRACE_MICROS: i64 = 5 * 60 * 1_000_000;
+    process_started_at <= started_at
+        && started_at.saturating_sub(process_started_at) <= REGISTRATION_GRACE_MICROS
+}
+
+fn is_recoverable_legacy_finished(agent: &AgentEntry) -> bool {
+    agent.process_identity.is_none()
+        && agent.status == AgentStatus::Finished
+        && agent.status_message.as_deref() == Some("process identity no longer matches")
+}
+
+fn ensure_worker_capacity(
+    active_for_project: usize,
+    limit: usize,
+    project_root: &str,
+) -> Result<(), String> {
+    if active_for_project < limit {
+        return Ok(());
+    }
+    Err(format!(
+        "agent capacity reached for {project_root}: {active_for_project}/{limit} live workers; finish a session before starting another"
+    ))
 }
 
 impl AgentRegistry {
@@ -42,7 +110,7 @@ impl AgentRegistry {
         agent_type: &str,
         role: Option<&str>,
         project_root: &str,
-    ) -> String {
+    ) -> Result<String, String> {
         self.register_process(agent_type, role, project_root, std::process::id())
     }
 
@@ -52,10 +120,16 @@ impl AgentRegistry {
         role: Option<&str>,
         project_root: &str,
         pid: u32,
-    ) -> String {
+    ) -> Result<String, String> {
+        let identity = crate::ipc::process::identity(pid)
+            .ok_or_else(|| format!("cannot establish immutable process identity for PID {pid}"))?;
         let agent_id = format!("{}-{}-{}", agent_type, pid, generate_short_id());
 
-        if let Some(existing) = self.agents.iter_mut().find(|a| a.pid == pid) {
+        if let Some(existing) = self.agents.iter_mut().find(|a| {
+            a.pid == pid
+                && a.status != AgentStatus::Finished
+                && a.process_identity.as_ref() == Some(&identity)
+        }) {
             existing.last_active = Utc::now();
             existing.status = AgentStatus::Active;
             existing.agent_type = agent_type.to_string();
@@ -63,8 +137,34 @@ impl AgentRegistry {
             if let Some(r) = role {
                 existing.role = Some(r.to_string());
             }
-            return existing.agent_id.clone();
+            return Ok(existing.agent_id.clone());
         }
+
+        // A legacy record or a PID-reused record can share this numeric PID.
+        // Retire it before admitting the new owner; a bare PID is never enough
+        // to keep a presence alive.
+        for existing in self
+            .agents
+            .iter_mut()
+            .filter(|agent| agent.pid == pid && agent.status != AgentStatus::Finished)
+        {
+            existing.status = AgentStatus::Finished;
+            existing.status_message =
+                Some("superseded by a different process identity".to_string());
+        }
+
+        let compatibility_identities = ProcessIdentityIndex::load();
+        let active_for_project = self
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.project_root == project_root
+                    && agent.status != AgentStatus::Finished
+                    && process_identity_matches(agent, &compatibility_identities)
+            })
+            .count();
+        let limit = max_concurrent_workers();
+        ensure_worker_capacity(active_for_project, limit, project_root)?;
 
         self.agents.push(AgentEntry {
             agent_id: agent_id.clone(),
@@ -74,13 +174,14 @@ impl AgentRegistry {
             started_at: Utc::now(),
             last_active: Utc::now(),
             pid,
+            process_identity: Some(identity),
             status: AgentStatus::Active,
             status_message: None,
         });
 
         self.updated_at = Utc::now();
         crate::core::events::emit_agent_action(&agent_id, "register", None);
-        agent_id
+        Ok(agent_id)
     }
 
     /// Atomically registers this MCP process in the shared on-disk registry.
@@ -89,6 +190,7 @@ impl AgentRegistry {
             registry.cleanup_stale(presence_ttl());
             registry.register("mcp", Some("context-engine"), project_root)
         })
+        .and_then(|result| result)
     }
 
     /// Atomically refreshes a registered MCP process heartbeat.
@@ -109,6 +211,31 @@ impl AgentRegistry {
             .iter_mut()
             .find(|agent| agent.agent_id == agent_id)
             .ok_or_else(|| format!("agent presence '{agent_id}' was not found"))?;
+        if agent.status == AgentStatus::Finished {
+            return Err(format!(
+                "agent presence '{agent_id}' is finished; register a new process presence"
+            ));
+        }
+        let pid = std::process::id();
+        if agent.pid != pid {
+            return Err(format!(
+                "agent presence '{agent_id}' belongs to PID {}; heartbeat came from PID {pid}",
+                agent.pid
+            ));
+        }
+        let identity = crate::ipc::process::identity(pid)
+            .ok_or_else(|| format!("cannot establish immutable process identity for PID {pid}"))?;
+        if let Some(expected) = &agent.process_identity
+            && expected != &identity
+        {
+            return Err(format!(
+                "agent presence '{agent_id}' process identity no longer matches"
+            ));
+        }
+        // Upgrade legacy records only from their owning process. This avoids a
+        // migration gap while still rejecting a PID reused by unrelated work.
+        agent.process_identity = Some(identity);
+        agent.status = AgentStatus::Active;
         agent.last_active = Utc::now();
         Ok(())
     }
@@ -223,13 +350,17 @@ impl AgentRegistry {
     }
 
     pub(crate) fn list_active(&self, project_root: Option<&str>) -> Vec<&AgentEntry> {
+        let compatibility_identities = ProcessIdentityIndex::load();
         self.agents
             .iter()
             .filter(|a| {
                 if let Some(root) = project_root {
-                    a.project_root == root && a.status != AgentStatus::Finished
+                    a.project_root == root
+                        && a.status != AgentStatus::Finished
+                        && process_identity_matches(a, &compatibility_identities)
                 } else {
                     a.status != AgentStatus::Finished
+                        && process_identity_matches(a, &compatibility_identities)
                 }
             })
             .collect()
@@ -399,26 +530,81 @@ impl AgentRegistry {
 
     pub(crate) fn cleanup_stale(&mut self, max_age_hours: u64) {
         let cutoff = Utc::now() - chrono::Duration::hours(max_age_hours as i64);
+        let mut compatibility_identities = ProcessIdentityIndex::load();
+        let mut identities_changed = false;
+        let mut newly_certified = Vec::new();
 
         for agent in &mut self.agents {
             if agent.status == AgentStatus::Finished {
+                if is_recoverable_legacy_finished(agent) {
+                    if let Some(identity) = safe_legacy_identity(agent) {
+                        identities_changed |=
+                            compatibility_identities.insert(&agent.agent_id, &identity);
+                        newly_certified.push(agent.agent_id.clone());
+                        agent.status = AgentStatus::Active;
+                        agent.status_message =
+                            Some("legacy process identity recovered".to_string());
+                    }
+                }
                 continue;
             }
-            if !is_process_alive(agent.pid) {
+            if let Some(identity) = &agent.process_identity {
+                identities_changed |= compatibility_identities.insert(&agent.agent_id, identity);
+            }
+            if process_identity_matches(agent, &compatibility_identities) {
+                continue;
+            }
+            if let Some(identity) = safe_legacy_identity(agent) {
+                identities_changed |= compatibility_identities.insert(&agent.agent_id, &identity);
+                newly_certified.push(agent.agent_id.clone());
+                continue;
+            }
+            {
                 agent.status = AgentStatus::Finished;
+                agent.status_message = Some("process identity no longer matches".to_string());
             }
         }
 
-        // Remove finished agents older than the cutoff to keep recent history visible.
+        // Presence is operational state, not an audit log. Keep the newest
+        // completed sessions for diagnostics but bound their in-memory/on-disk
+        // history so a burst of short-lived agents cannot slow later checks.
+        let mut finished_by_recency: Vec<_> = self
+            .agents
+            .iter()
+            .filter(|agent| agent.status == AgentStatus::Finished && agent.last_active >= cutoff)
+            .collect();
+        finished_by_recency.sort_unstable_by(|left, right| {
+            right
+                .last_active
+                .cmp(&left.last_active)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+        });
+        let retained_finished_ids: HashSet<String> = finished_by_recency
+            .into_iter()
+            .take(MAX_RETAINED_FINISHED_AGENTS)
+            .map(|agent| agent.agent_id.clone())
+            .collect();
+
         // Drop each retired agent's budget entry too — a finished/dead agent can't read
         // again, so removing its budget loses no live enforcement and bounds BUDGETS.
         self.agents.retain(|a| {
-            let retire = a.status == AgentStatus::Finished && a.last_active < cutoff;
+            let retire = a.status == AgentStatus::Finished
+                && (a.last_active < cutoff || !retained_finished_ids.contains(&a.agent_id));
             if retire {
                 crate::core::agent_budget::remove(&a.agent_id);
             }
             !retire
         });
+        identities_changed |= compatibility_identities.retain_agents(self);
+        if identities_changed && compatibility_identities.save().is_err() {
+            for agent in &mut self.agents {
+                if newly_certified.contains(&agent.agent_id) {
+                    agent.status = AgentStatus::Finished;
+                    agent.status_message =
+                        Some("legacy process identity could not be persisted".to_string());
+                }
+            }
+        }
 
         // Remove expired scratchpad entries.
         let now = Utc::now();
@@ -498,7 +684,9 @@ mod tests {
     #[test]
     fn register_and_list() {
         let mut reg = AgentRegistry::new();
-        let id = reg.register("cursor", Some("dev"), "/tmp/project");
+        let id = reg
+            .register("cursor", Some("dev"), "/tmp/project")
+            .expect("current process can be registered");
         assert!(!id.is_empty());
         assert_eq!(reg.list_active(None).len(), 1);
         assert_eq!(reg.list_active(None)[0].agent_type, "cursor");
@@ -507,8 +695,12 @@ mod tests {
     #[test]
     fn reregister_same_pid() {
         let mut reg = AgentRegistry::new();
-        let id1 = reg.register("cursor", Some("dev"), "/tmp/project");
-        let id2 = reg.register("cursor", Some("review"), "/tmp/project");
+        let id1 = reg
+            .register("cursor", Some("dev"), "/tmp/project")
+            .expect("current process can be registered");
+        let id2 = reg
+            .register("cursor", Some("review"), "/tmp/project")
+            .expect("same process can be re-registered");
         assert_eq!(id1, id2);
         assert_eq!(reg.agents.len(), 1);
         assert_eq!(reg.agents[0].role, Some("review".to_string()));
@@ -611,7 +803,9 @@ mod tests {
     #[test]
     fn set_status() {
         let mut reg = AgentRegistry::new();
-        let id = reg.register("claude", None, "/tmp/project");
+        let id = reg
+            .register("claude", None, "/tmp/project")
+            .expect("current process can be registered");
         reg.set_status(&id, AgentStatus::Idle, Some("waiting for review"))
             .expect("registered agent exists");
         assert_eq!(reg.agents[0].status, AgentStatus::Idle);
@@ -738,9 +932,40 @@ mod tests {
             started_at: now,
             last_active: now,
             pid,
+            process_identity: crate::ipc::process::identity(pid),
             status: AgentStatus::Active,
             status_message: None,
         }
+    }
+
+    #[test]
+    fn cleanup_stale_caps_recent_finished_history() {
+        let mut reg = AgentRegistry::new();
+        let now = Utc::now();
+        reg.agents = (0..(super::MAX_RETAINED_FINISHED_AGENTS + 2))
+            .map(|offset| {
+                let mut agent = test_entry(
+                    &format!("finished-{offset}"),
+                    "/project",
+                    std::process::id(),
+                );
+                agent.status = AgentStatus::Finished;
+                agent.last_active = now - chrono::Duration::seconds(offset as i64);
+                agent
+            })
+            .collect();
+
+        reg.cleanup_stale(1);
+
+        assert_eq!(reg.agents.len(), super::MAX_RETAINED_FINISHED_AGENTS);
+        assert!(
+            reg.agents
+                .iter()
+                .any(|agent| agent.agent_id == "finished-0")
+        );
+        assert!(!reg.agents.iter().any(|agent| {
+            agent.agent_id == format!("finished-{}", super::MAX_RETAINED_FINISHED_AGENTS + 1)
+        }));
     }
 
     /// #419: the wake-up briefing scopes agents to the current project via
@@ -804,6 +1029,102 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cleanup_stale_rejects_a_reused_pid_with_the_wrong_identity() {
+        let pid = std::process::id();
+        let mut stale = test_entry("reused-pid", "/proj/a", pid);
+        let identity = stale
+            .process_identity
+            .as_mut()
+            .expect("current process identity");
+        identity.start_marker = identity.start_marker.saturating_add(1);
+        let mut registry = AgentRegistry::new();
+        registry.agents.push(stale);
+
+        registry.cleanup_stale(super::presence_ttl());
+
+        assert_eq!(registry.agents[0].status, AgentStatus::Finished);
+        assert_eq!(
+            registry.agents[0].status_message.as_deref(),
+            Some("process identity no longer matches")
+        );
+    }
+
+    #[test]
+    fn legacy_identity_recovery_requires_the_original_lean_ctx_process() {
+        let started_at = Utc::now();
+        let agent = AgentEntry {
+            agent_id: "legacy".to_string(),
+            agent_type: "mcp".to_string(),
+            role: None,
+            project_root: "/project".to_string(),
+            started_at,
+            last_active: started_at,
+            pid: 1,
+            process_identity: None,
+            status: AgentStatus::Active,
+            status_message: None,
+        };
+        let registered_after_boot = crate::ipc::process::ProcessIdentity {
+            start_marker: u64::try_from(started_at.timestamp_micros() - 1_000_000)
+                .expect("current timestamps fit u64"),
+            executable: "/Users/test/.local/bin/lean-ctx".to_string(),
+        };
+        assert!(super::legacy_identity_matches_registration(
+            &agent,
+            &registered_after_boot
+        ));
+
+        let reused_pid = crate::ipc::process::ProcessIdentity {
+            start_marker: u64::try_from(started_at.timestamp_micros() + 1).expect("fits u64"),
+            executable: "/Users/test/.local/bin/lean-ctx".to_string(),
+        };
+        assert!(!super::legacy_identity_matches_registration(
+            &agent,
+            &reused_pid
+        ));
+
+        let unrelated_process = crate::ipc::process::ProcessIdentity {
+            start_marker: registered_after_boot.start_marker,
+            executable: "/Applications/Firefox.app/Contents/MacOS/firefox".to_string(),
+        };
+        assert!(!super::legacy_identity_matches_registration(
+            &agent,
+            &unrelated_process
+        ));
+    }
+
+    #[test]
+    fn only_the_known_legacy_false_positive_is_recoverable() {
+        let now = Utc::now();
+        let mut agent = AgentEntry {
+            agent_id: "legacy".to_string(),
+            agent_type: "mcp".to_string(),
+            role: None,
+            project_root: "/project".to_string(),
+            started_at: now,
+            last_active: now,
+            pid: 1,
+            process_identity: None,
+            status: AgentStatus::Finished,
+            status_message: Some("process identity no longer matches".to_string()),
+        };
+        assert!(super::is_recoverable_legacy_finished(&agent));
+
+        agent.status_message = Some("connection closed".to_string());
+        assert!(!super::is_recoverable_legacy_finished(&agent));
+        agent.status = AgentStatus::Active;
+        assert!(!super::is_recoverable_legacy_finished(&agent));
+    }
+
+    #[test]
+    fn worker_capacity_fails_closed_at_the_hard_limit() {
+        assert!(super::ensure_worker_capacity(14, 15, "/project").is_ok());
+        let error = super::ensure_worker_capacity(15, 15, "/project")
+            .expect_err("a sixteenth worker must be rejected");
+        assert!(error.contains("15/15"));
+    }
+
     /// Regression: concurrent load-mutate-save cycles must not silently drop
     /// each other's changes. Before `mutate_locked`, `save()` only locked the
     /// final write — the preceding `load()` was unlocked, so a second writer
@@ -826,6 +1147,7 @@ mod tests {
                             started_at: Utc::now(),
                             last_active: Utc::now(),
                             pid: 10_000 + i,
+                            process_identity: None,
                             status: AgentStatus::Active,
                             status_message: None,
                         });
@@ -857,29 +1179,55 @@ mod presence_tests {
     use super::{AgentRegistry, AgentStatus};
 
     #[test]
-    fn persistent_presence_preserves_multiple_processes_and_lifecycle() {
+    fn persistent_presence_roundtrips_lifecycle_for_owning_process() {
         let isolated = crate::core::data_dir::isolated_data_dir();
         let mut registry = AgentRegistry::new();
-        let first = registry.register_process("mcp", Some("context-engine"), "/project", 101);
-        let second = registry.register_process("mcp", Some("context-engine"), "/project", 202);
+        let first = registry
+            .register_process(
+                "mcp",
+                Some("context-engine"),
+                "/project",
+                std::process::id(),
+            )
+            .expect("current process has an identity");
         registry.save().expect("save registry");
 
-        assert_ne!(first, second);
-        assert_eq!(AgentRegistry::load().expect("registry").agents.len(), 2);
+        assert_eq!(AgentRegistry::load().expect("registry").agents.len(), 1);
 
         AgentRegistry::heartbeat_persistent(&first).expect("heartbeat");
-        AgentRegistry::finish_persistent(&second).expect("finish");
+        AgentRegistry::finish_persistent(&first).expect("finish");
         let loaded = AgentRegistry::load().expect("registry");
         assert_eq!(
             loaded
                 .agents
                 .iter()
-                .find(|agent| agent.agent_id == second)
-                .expect("second agent")
+                .find(|agent| agent.agent_id == first)
+                .expect("registered agent")
                 .status,
             AgentStatus::Finished
         );
         assert!(isolated.path().join("agents/registry.json").exists());
+    }
+
+    #[test]
+    fn compatibility_index_survives_an_old_registry_writer() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+        let mut registry = AgentRegistry::new();
+        registry
+            .register_process(
+                "mcp",
+                Some("context-engine"),
+                "/project",
+                std::process::id(),
+            )
+            .expect("current process has an identity");
+        registry.cleanup_stale(super::presence_ttl());
+
+        // An MCP process from the prior release serializes the old schema and
+        // therefore drops this new registry field. The sidecar retains the
+        // binding, so current readers still recognize the process as live.
+        registry.agents[0].process_identity = None;
+        assert_eq!(registry.list_active(Some("/project")).len(), 1);
     }
 
     #[test]
@@ -902,7 +1250,7 @@ mod presence_tests {
         std::fs::write(&registry_path, corrupt).expect("corrupt fixture");
 
         let error = AgentRegistry::mutate_locked(|registry| {
-            registry.register_process("mcp", Some("context-engine"), "/project", 101);
+            let _ = registry.register_process("mcp", Some("context-engine"), "/project", 101);
         })
         .expect_err("corrupt registry must reject mutation");
 
@@ -913,8 +1261,13 @@ mod presence_tests {
     #[test]
     fn reregistering_process_refreshes_metadata_without_duplication() {
         let mut registry = AgentRegistry::new();
-        let first = registry.register_process("unknown", None, "/old", 303);
-        let second = registry.register_process("mcp", Some("context-engine"), "/new", 303);
+        let pid = std::process::id();
+        let first = registry
+            .register_process("unknown", None, "/old", pid)
+            .expect("current process has an identity");
+        let second = registry
+            .register_process("mcp", Some("context-engine"), "/new", pid)
+            .expect("same process can re-register");
 
         assert_eq!(first, second);
         assert_eq!(registry.agents.len(), 1);
@@ -926,7 +1279,14 @@ mod presence_tests {
     #[test]
     fn logical_sessions_are_keyed_independently_of_transport_processes() {
         let mut registry = AgentRegistry::new();
-        registry.register_process("mcp", Some("context-engine"), "/project", 303);
+        registry
+            .register_process(
+                "mcp",
+                Some("context-engine"),
+                "/project",
+                std::process::id(),
+            )
+            .expect("current process has an identity");
         registry.open_or_heartbeat_logical_session("vscode", "/project", "chat-a");
         registry.open_or_heartbeat_logical_session("vscode", "/project", "chat-b");
         let opened_at = registry.logical_sessions[0].opened_at;

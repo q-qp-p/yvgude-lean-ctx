@@ -1,9 +1,69 @@
 use super::AgentRegistry;
+use crate::ipc::process::ProcessIdentity;
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Compatibility store for process identities.
+///
+/// Older MCP processes deserialize and re-serialize `registry.json` with an
+/// older `AgentEntry` schema. Serde then drops fields they do not know about.
+/// Keeping the PID-reuse proof in its own file makes a rolling upgrade safe:
+/// an old process can still update its legacy registry record without erasing
+/// the immutable identity captured by a new binary.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProcessIdentityIndex {
+    #[serde(default)]
+    identities: HashMap<String, ProcessIdentity>,
+}
+
+impl ProcessIdentityIndex {
+    pub(crate) fn load() -> Self {
+        let Ok(path) = identity_index_path() else {
+            return Self::default();
+        };
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn get(&self, agent_id: &str) -> Option<&ProcessIdentity> {
+        self.identities.get(agent_id)
+    }
+
+    pub(crate) fn insert(&mut self, agent_id: &str, identity: &ProcessIdentity) -> bool {
+        self.identities
+            .insert(agent_id.to_string(), identity.clone())
+            .as_ref()
+            != Some(identity)
+    }
+
+    pub(crate) fn retain_agents(&mut self, agents: &AgentRegistry) -> bool {
+        let before = self.identities.len();
+        self.identities.retain(|agent_id, _| {
+            agents
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id == *agent_id)
+        });
+        self.identities.len() != before
+    }
+
+    pub(crate) fn save(&self) -> Result<(), String> {
+        let path = identity_index_path()?;
+        let json = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
+        crate::config_io::write_atomic(&path, &json)
+            .map_err(|error| format!("persist process identity index {}: {error}", path.display()))
+    }
+}
 
 pub(super) fn agents_dir() -> Result<PathBuf, String> {
     let dir = crate::core::data_dir::lean_ctx_data_dir()?;
     Ok(dir.join("agents"))
+}
+
+fn identity_index_path() -> Result<PathBuf, String> {
+    Ok(agents_dir()?.join("process-identities.json"))
 }
 
 pub(super) fn mutate_persistent<T>(
@@ -43,17 +103,6 @@ pub(super) fn save_registry_file(
 
 pub(super) fn generate_short_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
-}
-
-/// #576 already fixed this exact hardcoded-`true` anti-pattern for
-/// `daemon::is_daemon_running` by delegating to `ipc::process::is_alive`
-/// (which has a real Windows `OpenProcess` check); this duplicate copy was
-/// missed, so on non-unix targets `cleanup_stale` could never flip a dead
-/// MCP session's entry to `Finished`, leaving `registry.json` accumulating
-/// stale `Active` entries forever — the root cause of the "N active agents"
-/// dashboard bug on Windows.
-pub(crate) fn is_process_alive(pid: u32) -> bool {
-    crate::ipc::process::is_alive(pid)
 }
 
 pub(crate) struct FileLock {

@@ -159,6 +159,9 @@ pub struct AgentsConfig {
     pub scratchpad_default_ttl_hours: u64,
     /// Logical session timeout (seconds).
     pub logical_session_ttl_seconds: u64,
+    /// Hard per-project cap for simultaneously admitted MCP workers (1–15).
+    /// This is admission control, not a queue or scheduler.
+    pub max_concurrent_workers: usize,
     /// Max scratchpad entries before oldest are evicted.
     pub max_scratchpad_entries: usize,
 }
@@ -171,6 +174,7 @@ impl Default for AgentsConfig {
             presence_ttl_hours: 24,
             scratchpad_default_ttl_hours: 12,
             logical_session_ttl_seconds: 180,
+            max_concurrent_workers: 15,
             max_scratchpad_entries: 200,
         }
     }
@@ -188,6 +192,7 @@ mod agents_config_tests {
         assert_eq!(cfg.presence_ttl_hours, 24);
         assert_eq!(cfg.scratchpad_default_ttl_hours, 12);
         assert_eq!(cfg.logical_session_ttl_seconds, 180);
+        assert_eq!(cfg.max_concurrent_workers, 15);
         assert_eq!(cfg.max_scratchpad_entries, 200);
     }
 

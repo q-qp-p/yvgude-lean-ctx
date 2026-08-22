@@ -221,6 +221,7 @@ fn local_presence_snapshot(
     registry: &crate::core::agents::AgentRegistry,
     now: chrono::DateTime<chrono::Utc>,
     include_finished: bool,
+    compatibility_identities: &crate::core::agents::ProcessIdentityIndex,
 ) -> Vec<LocalPresenceRow> {
     const ACTIVE_WINDOW_SECONDS: i64 = 60;
 
@@ -228,7 +229,11 @@ fn local_presence_snapshot(
         .agents
         .iter()
         .filter_map(|agent| {
-            let alive = crate::core::agents::is_process_alive(agent.pid);
+            let alive = agent
+                .process_identity
+                .as_ref()
+                .or_else(|| compatibility_identities.get(&agent.agent_id))
+                .is_some_and(|identity| crate::ipc::process::matches_identity(agent.pid, identity));
             let age_seconds = (now - agent.last_active).num_seconds().max(0);
             let state = if !alive || agent.status == crate::core::agents::AgentStatus::Finished {
                 "finished"
@@ -262,8 +267,22 @@ fn local_presence_snapshot(
 fn print_local_presence(as_json: bool, include_finished: bool) {
     const ACTIVE_WINDOW_SECONDS: i64 = 60;
 
-    let registry = crate::core::agents::AgentRegistry::load_or_create();
-    let rows = local_presence_snapshot(&registry, chrono::Utc::now(), include_finished);
+    let registry = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
+        registry.cleanup_stale(
+            crate::core::config::Config::load()
+                .agents
+                .presence_ttl_hours,
+        );
+    })
+    .map(|(registry, ())| registry)
+    .unwrap_or_else(|_| crate::core::agents::AgentRegistry::load_or_create());
+    let compatibility_identities = crate::core::agents::ProcessIdentityIndex::load();
+    let rows = local_presence_snapshot(
+        &registry,
+        chrono::Utc::now(),
+        include_finished,
+        &compatibility_identities,
+    );
 
     if as_json {
         print_json_or_exit(&serde_json::json!({
@@ -323,6 +342,8 @@ mod tests {
     fn presence_snapshot_classifies_and_hides_finished_agents() {
         let now = Utc::now();
         let pid = std::process::id();
+        let process_identity = crate::ipc::process::identity(pid)
+            .expect("current process must have immutable identity");
         let registry = AgentRegistry {
             agents: vec![
                 AgentEntry {
@@ -333,6 +354,7 @@ mod tests {
                     started_at: now,
                     last_active: now,
                     pid,
+                    process_identity: Some(process_identity.clone()),
                     status: AgentStatus::Active,
                     status_message: None,
                 },
@@ -344,6 +366,7 @@ mod tests {
                     started_at: now,
                     last_active: now - Duration::seconds(61),
                     pid,
+                    process_identity: Some(process_identity.clone()),
                     status: AgentStatus::Active,
                     status_message: None,
                 },
@@ -355,6 +378,7 @@ mod tests {
                     started_at: now,
                     last_active: now,
                     pid,
+                    process_identity: Some(process_identity),
                     status: AgentStatus::Finished,
                     status_message: None,
                 },
@@ -365,14 +389,24 @@ mod tests {
             updated_at: now,
         };
 
-        let visible = local_presence_snapshot(&registry, now, false);
+        let visible = local_presence_snapshot(
+            &registry,
+            now,
+            false,
+            &crate::core::agents::ProcessIdentityIndex::default(),
+        );
         assert_eq!(visible.len(), 2);
         assert_eq!(visible[0].id, "active");
         assert_eq!(visible[0].state, "active");
         assert_eq!(visible[1].id, "idle");
         assert_eq!(visible[1].state, "idle");
 
-        let all = local_presence_snapshot(&registry, now, true);
+        let all = local_presence_snapshot(
+            &registry,
+            now,
+            true,
+            &crate::core::agents::ProcessIdentityIndex::default(),
+        );
         assert_eq!(all.len(), 3);
         assert!(all.iter().any(|row| row.state == "finished"));
     }

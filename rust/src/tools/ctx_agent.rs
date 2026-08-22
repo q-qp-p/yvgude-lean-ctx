@@ -44,8 +44,10 @@ pub fn handle(
             match AgentRegistry::mutate_locked(|registry| {
                 registry.cleanup_stale(presence_ttl_hours());
                 registry.register(atype, role, project_root)
-            }) {
-                Ok((_, agent_id)) => format!(
+            })
+            .and_then(|(_, agent_id)| agent_id)
+            {
+                Ok(agent_id) => format!(
                     "Agent registered: {agent_id} (type: {atype}, role: {})",
                     role.unwrap_or("none")
                 ),
@@ -183,13 +185,13 @@ pub fn handle(
         }
 
         "info" => {
-            let registry = AgentRegistry::load_or_create();
+            let registry = AgentRegistry::mutate_locked(|registry| {
+                registry.cleanup_stale(presence_ttl_hours());
+            })
+            .map(|(registry, ())| registry)
+            .unwrap_or_else(|_| AgentRegistry::load_or_create());
             let total = registry.agents.len();
-            let active = registry
-                .agents
-                .iter()
-                .filter(|a| a.status == AgentStatus::Active)
-                .count();
+            let active = registry.list_active(None).len();
             let messages = registry.scratchpad.len();
             format!(
                 "Agent Registry: {total} total, {active} active, {messages} scratchpad entries\nLast updated: {}",
@@ -376,7 +378,11 @@ pub fn handle(
         }
 
         "sync" => {
-            let registry = AgentRegistry::load_or_create();
+            let registry = AgentRegistry::mutate_locked(|registry| {
+                registry.cleanup_stale(presence_ttl_hours());
+            })
+            .map(|(registry, ())| registry)
+            .unwrap_or_else(|_| AgentRegistry::load_or_create());
             let pending_count = current_agent_id.map_or(0, |id| {
                 registry
                     .scratchpad
@@ -389,11 +395,7 @@ pub fn handle(
                     })
                     .count()
             });
-            let agents: Vec<&crate::core::agents::AgentEntry> = registry
-                .agents
-                .iter()
-                .filter(|a| a.status != AgentStatus::Finished && a.project_root == project_root)
-                .collect();
+            let agents = registry.list_active(Some(project_root));
 
             if agents.is_empty() {
                 return "No active agents to sync with.".to_string();
