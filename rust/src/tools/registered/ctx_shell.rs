@@ -11,6 +11,11 @@ use crate::tool_defs::tool_def;
 
 pub struct CtxShellTool;
 
+/// Shell execution must never wait through the general-purpose session-lock
+/// recovery window. The command can run without bookkeeping; cwd validation
+/// cannot, so it fails promptly and lets the client retry.
+const SESSION_LOCK_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
 impl McpTool for CtxShellTool {
     fn name(&self) -> &'static str {
         "ctx_shell"
@@ -161,7 +166,11 @@ impl McpTool for CtxShellTool {
 
             let explicit_cwd = get_str(args, "cwd");
             let had_explicit_cwd = explicit_cwd.is_some();
-            let guard = crate::server::bounded_lock::read(session_lock, "ctx_shell_cwd");
+            let guard = crate::server::bounded_lock::read_for(
+                session_lock,
+                "ctx_shell_cwd",
+                SESSION_LOCK_BUDGET,
+            );
             let (effective_cwd, cwd_jail_reason) =
                 resolve_effective_cwd(guard, explicit_cwd.as_deref())?;
             // A `cwd` rejected by the project-root jail is silently replaced with
@@ -176,9 +185,11 @@ impl McpTool for CtxShellTool {
             });
 
             {
-                let Some(mut session) =
-                    crate::server::bounded_lock::write(session_lock, "ctx_shell_write")
-                else {
+                let Some(mut session) = crate::server::bounded_lock::write_for(
+                    session_lock,
+                    "ctx_shell_write",
+                    SESSION_LOCK_BUDGET,
+                ) else {
                     tracing::debug!("[ctx_shell: session lock timeout, proceeding without update]");
                     let cmd_clone = command.clone();
                     let cwd_clone = effective_cwd.clone();
@@ -1109,7 +1120,8 @@ fn handle_interpreter_heredoc_reroute(
         .as_ref()
         .ok_or_else(|| ErrorData::internal_error("session not available", None))?;
     let explicit_cwd = get_str(args, "cwd");
-    let guard = crate::server::bounded_lock::read(session_lock, "ctx_shell_cwd");
+    let guard =
+        crate::server::bounded_lock::read_for(session_lock, "ctx_shell_cwd", SESSION_LOCK_BUDGET);
     let (effective_cwd, _) = resolve_effective_cwd(guard, explicit_cwd.as_deref())?;
 
     let extra_env: std::collections::HashMap<String, String> = args

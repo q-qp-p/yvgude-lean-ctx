@@ -19,13 +19,8 @@ fn collect_warming_history(
         return Vec::new();
     };
 
-    let sessions = SessionState::list_sessions()
-        .into_iter()
-        .filter(|summary| summary.project_root.as_deref() == Some(project_root))
-        .take(MAX_WARM_SESSIONS)
-        .filter_map(|summary| SessionState::load_by_id(&summary.id))
-        .collect::<Vec<_>>();
-    crate::core::cache::warming::collect_recent_files(&sessions)
+    let sessions = SessionState::load_recent_for_project_root(project_root, MAX_WARM_SESSIONS);
+    crate::core::cache::warming::collect_recent_files_in_project(&sessions, project_root)
 }
 
 fn warm_cache_in_background(
@@ -103,7 +98,16 @@ impl LeanCtxServer {
         // Purge stale graph indices on startup to prevent serving outdated data
         crate::core::graph_index::ProjectIndex::purge_stale_indices();
 
-        let startup = detect_startup_context(project_root, startup_cwd);
+        let mut startup = detect_startup_context(project_root, startup_cwd);
+        // Launchd daemons commonly start in `/`. A broad root must never become
+        // session state: it creates a cross-project mega-session and, before
+        // the bounded project index, also made every later MCP launch scan it.
+        if startup.project_root.as_deref().is_some_and(|root| {
+            crate::core::pathutil::is_broad_or_unsafe_root(std::path::Path::new(root))
+        }) {
+            tracing::debug!("lean-ctx: ignoring broad startup project root");
+            startup.project_root = None;
+        }
         let (session, context_os) = match session_mode {
             SessionMode::Personal => {
                 // A personal MCP server owns one fresh, PID-qualified session.
@@ -262,9 +266,14 @@ impl LeanCtxServer {
         }
         let last = *self.last_call.read().await;
         if last.elapsed().as_secs() >= self.cache_ttl_secs {
-            {
+            let pending_save = {
                 let mut session = self.session.write().await;
-                let _ = session.save();
+                session.prepare_save().ok()
+            };
+            if let Some(prepared) = pending_save {
+                drop(tokio::task::spawn_blocking(move || {
+                    let _ = prepared.write_to_disk();
+                }));
             }
             let mut cache = self.cache.write().await;
             let redelivered = cache.count_full_delivered();
@@ -347,9 +356,12 @@ impl LeanCtxServer {
                 crate::tools::startup::auto_consolidate_knowledge(root);
             }
         }
-        {
+        let pending_save = {
             let mut session = self.session.write().await;
-            let _ = session.save();
+            session.prepare_save().ok()
+        };
+        if let Some(prepared) = pending_save {
+            let _ = tokio::task::spawn_blocking(move || prepared.write_to_disk()).await;
         }
         // Persist buffered stats (incl. CEP cache-hit/session counters) before
         // the process exits. Short bridge sessions — e.g. a phase-isolated

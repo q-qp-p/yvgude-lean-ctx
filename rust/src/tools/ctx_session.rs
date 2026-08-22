@@ -52,7 +52,66 @@ pub fn handle(
     }
 }
 
-fn handle_status(session: &mut SessionState) -> String {
+/// Handle actions that do not access live-session state. Keeping them outside
+/// the live session lock prevents an explicit `list`/`cleanup` request from
+/// stalling unrelated reads and shells behind an O(session-store) operation.
+/// Some actions intentionally update independent process-global configuration.
+pub fn handle_without_session(
+    action: &str,
+    value: Option<&str>,
+    session_id: Option<&str>,
+) -> Option<String> {
+    match action {
+        "list" => Some(handle_list()),
+        "cleanup" => Some(handle_cleanup()),
+        "restore" => Some(handle_restore(session_id)),
+        "profile" => Some(handle_profile(value)),
+        "budget" => Some(handle_budget()),
+        "role" => Some(handle_role(value)),
+        "diff" => Some(handle_diff(value)),
+        "slo" => Some(handle_slo(value)),
+        "output_stats" => Some(handle_output_stats()),
+        "verify" => Some(handle_verify()),
+        _ => None,
+    }
+}
+
+/// Handle session reads under a shared lock. These actions never mutate the
+/// session and therefore must not queue behind a pending writer.
+pub fn handle_read_only(session: &SessionState, action: &str) -> Option<String> {
+    match action {
+        "status" | "show" => Some(handle_status(session)),
+        "handoff" => Some(handle_handoff(session)),
+        _ => None,
+    }
+}
+
+/// Run a read-only action after the caller has cloned the live session and
+/// released its lock. These actions can touch disk (archive lookup/export), so
+/// retaining a read guard would otherwise block every pending session writer.
+pub fn handle_snapshot_read_action(
+    session: &SessionState,
+    action: &str,
+    value: Option<&str>,
+    opts: SessionToolOptions<'_>,
+) -> Option<String> {
+    match action {
+        "export" => Some(handle_export(session, value, opts)),
+        "resume" => Some(session.build_resume_block()),
+        "snapshot" => Some(session.save_compaction_snapshot().map_or_else(
+            |error| format!("Snapshot failed: {error}"),
+            |snapshot| {
+                format!(
+                    "Compaction snapshot saved ({} bytes).\n{snapshot}",
+                    snapshot.len()
+                )
+            },
+        )),
+        _ => None,
+    }
+}
+
+fn handle_status(session: &SessionState) -> String {
     session.format_compact()
 }
 
@@ -122,7 +181,7 @@ fn conversion_messages_for_session(
 }
 
 fn handle_export(
-    session: &mut SessionState,
+    session: &SessionState,
     value: Option<&str>,
     opts: SessionToolOptions<'_>,
 ) -> String {

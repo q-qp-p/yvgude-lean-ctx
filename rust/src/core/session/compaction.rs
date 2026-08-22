@@ -435,7 +435,12 @@ impl SessionState {
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         }
         let path = dir.join(format!("{}_snapshot.txt", self.id));
-        std::fs::write(&path, &snapshot).map_err(|e| e.to_string())?;
+        crate::core::atomic_fs::write_bytes_with_fallback(&path, snapshot.as_bytes(), None)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(snapshot)
     }
 

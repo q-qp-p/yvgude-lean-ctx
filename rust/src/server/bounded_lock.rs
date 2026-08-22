@@ -64,6 +64,27 @@ pub fn read<T: Send + Sync + 'static>(
         .flatten()
 }
 
+/// Acquire a read lock within an explicit hard budget.
+///
+/// Use this on latency-critical request paths where adaptive I/O recovery must
+/// not turn a best-effort session update into a multi-second user-visible wait.
+pub fn read_for<T: Send + Sync + 'static>(
+    lock: &Arc<RwLock<T>>,
+    context: &str,
+    timeout: Duration,
+) -> Option<OwnedRwLockReadGuard<T>> {
+    acquire_with_behavior(
+        lock,
+        context,
+        "read",
+        timeout,
+        LockFailBehavior::ReturnDefault,
+        |lock| lock.clone().try_read_owned().ok(),
+    )
+    .ok()
+    .flatten()
+}
+
 /// Acquire a read lock with explicit timeout behavior for this operation.
 pub fn read_with_behavior<T: Send + Sync + 'static>(
     lock: &Arc<RwLock<T>>,
@@ -112,8 +133,9 @@ where
             if let Some(guard) = acquire(lock) {
                 return Ok(Some(guard));
             }
-            if std::time::Instant::now() < deadline {
-                std::thread::sleep(SPIN_INTERVAL);
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if !remaining.is_zero() {
+                std::thread::sleep(remaining.min(SPIN_INTERVAL));
                 continue;
             }
 
@@ -155,6 +177,27 @@ pub fn write<T: Send + Sync + 'static>(
         .flatten()
 }
 
+/// Acquire a write lock within an explicit hard budget.
+///
+/// This is the write counterpart to [`read_for`]. A timeout must degrade the
+/// optional bookkeeping, never keep an interactive tool request queued.
+pub fn write_for<T: Send + Sync + 'static>(
+    lock: &Arc<RwLock<T>>,
+    context: &str,
+    timeout: Duration,
+) -> Option<OwnedRwLockWriteGuard<T>> {
+    acquire_with_behavior(
+        lock,
+        context,
+        "write",
+        timeout,
+        LockFailBehavior::ReturnDefault,
+        |lock| lock.clone().try_write_owned().ok(),
+    )
+    .ok()
+    .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +232,14 @@ mod tests {
         let lock = Arc::new(RwLock::new(0u32));
         let _hold = lock.clone().try_write_owned().unwrap();
         assert!(lock.clone().try_read_owned().is_err());
+    }
+
+    #[test]
+    fn explicit_budget_never_waits_for_adaptive_default() {
+        let lock = Arc::new(RwLock::new(()));
+        let _hold = lock.clone().try_write_owned().expect("hold write lock");
+        assert!(read_for(&lock, "interactive read", Duration::ZERO).is_none());
+        assert!(write_for(&lock, "interactive write", Duration::ZERO).is_none());
     }
 
     #[test]

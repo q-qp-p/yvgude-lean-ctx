@@ -431,10 +431,24 @@ fn target_dir_from_metadata(metadata_json: &str) -> Option<std::path::PathBuf> {
 }
 
 pub(super) fn find_cargo_project_root() -> Option<std::path::PathBuf> {
-    let mut dir = std::env::current_dir().ok()?;
+    let current_dir = std::env::current_dir().ok()?;
+    find_cargo_project_root_from(&current_dir)
+}
+
+/// Locate the Rust crate from either its own directory or the repository root.
+///
+/// The lean-ctx repository keeps its Rust crate in `rust/`; accepting that
+/// layout makes `lean-ctx dev-install` work from the documented repository root
+/// as well as from `rust/` and any nested project directory.
+fn find_cargo_project_root_from(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut dir = start.to_path_buf();
     loop {
-        if dir.join("Cargo.toml").exists() {
+        if dir.join("Cargo.toml").is_file() {
             return Some(dir);
+        }
+        let nested_crate = dir.join("rust");
+        if nested_crate.join("Cargo.toml").is_file() {
+            return Some(nested_crate);
         }
         if !dir.pop() {
             return None;
@@ -726,7 +740,7 @@ mod windows_swap_tests {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::is_homebrew_cellar_link;
+    use super::{find_cargo_project_root_from, is_homebrew_cellar_link};
     use std::path::Path;
 
     #[test]
@@ -751,5 +765,23 @@ mod tests {
         )));
         assert!(!is_homebrew_cellar_link(Path::new("/usr/local/bin/other")));
         assert!(!is_homebrew_cellar_link(Path::new("lean-ctx")));
+    }
+
+    #[test]
+    fn dev_install_finds_nested_rust_crate_from_repository_root() {
+        let repo = tempfile::tempdir().unwrap();
+        let crate_root = repo.path().join("rust");
+        std::fs::create_dir(&crate_root).unwrap();
+        std::fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname = \"lean-ctx\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(find_cargo_project_root_from(repo.path()), Some(crate_root));
+        assert_eq!(
+            find_cargo_project_root_from(&repo.path().join("docs").join("internal")),
+            Some(repo.path().join("rust"))
+        );
     }
 }

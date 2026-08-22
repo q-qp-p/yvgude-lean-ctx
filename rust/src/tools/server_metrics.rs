@@ -260,9 +260,9 @@ impl LeanCtxServer {
         }
 
         if let Some(prepared) = pending_save {
-            tokio::task::spawn_blocking(move || {
+            drop(tokio::task::spawn_blocking(move || {
                 let _ = prepared.write_to_disk();
-            });
+            }));
         }
 
         self.write_mcp_live_stats().await;
@@ -287,13 +287,19 @@ impl LeanCtxServer {
         drop(cache);
 
         let mut session = self.session.write().await;
-        let _ = session.save();
+        let pending_save = session.prepare_save().ok();
         let session_summary = session.format_compact();
         let has_insights = !session.findings.is_empty() || !session.decisions.is_empty();
         let project_root = session.project_root.clone();
         // Snapshot the session under the lock; persist the summary off the hot path.
         let summary_candidate = crate::core::session_summary::build_candidate(&session);
         drop(session);
+
+        if let Some(prepared) = pending_save {
+            tokio::task::spawn_blocking(move || {
+                let _ = prepared.write_to_disk();
+            });
+        }
 
         if has_insights && let Some(ref root) = project_root {
             let root = root.clone();

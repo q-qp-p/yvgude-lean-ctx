@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::core::session::SessionState;
@@ -89,15 +90,58 @@ where
 /// estimates the avoided read cost. A session's update time is used as the
 /// recency of its file accesses because `FileTouched` has no own timestamp.
 pub fn collect_recent_files(sessions: &[SessionState]) -> Vec<RecentFile> {
+    collect_recent_files_with(sessions, |_, file| Some(file.path.clone()))
+}
+
+/// Collect warm candidates only from the requested project and pass every
+/// persisted path through PathJail again before it can reach disk I/O.
+pub fn collect_recent_files_in_project(
+    sessions: &[SessionState],
+    project_root: &str,
+) -> Vec<RecentFile> {
+    let Some(root) = normalized_safe_root(project_root) else {
+        return Vec::new();
+    };
+    collect_recent_files_with(sessions, |session, file| {
+        if file.stale
+            || session
+                .project_root
+                .as_deref()
+                .and_then(normalized_safe_root)
+                != Some(root.clone())
+        {
+            return None;
+        }
+        crate::core::pathjail::jail_path(Path::new(&file.path), &root)
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+}
+
+fn normalized_safe_root(project_root: &str) -> Option<PathBuf> {
+    let path = Path::new(project_root);
+    if project_root.trim().is_empty() || crate::core::pathutil::is_broad_or_unsafe_root(path) {
+        return None;
+    }
+    Some(crate::core::pathutil::safe_canonicalize_or_self(path))
+}
+
+fn collect_recent_files_with<F>(sessions: &[SessionState], resolve_path: F) -> Vec<RecentFile>
+where
+    F: Fn(&SessionState, &crate::core::session::FileTouched) -> Option<String>,
+{
     let mut recent_by_path: HashMap<String, RecentFile> = HashMap::new();
 
     for session in sessions {
         let last_access = SystemTime::from(session.updated_at);
         for file in &session.files_touched {
+            let Some(path) = resolve_path(session, file) else {
+                continue;
+            };
             let recent = recent_by_path
-                .entry(file.path.clone())
+                .entry(path.clone())
                 .or_insert_with(|| RecentFile {
-                    path: file.path.clone(),
+                    path,
                     last_access,
                     read_count: 0,
                     tokens: file.tokens,
@@ -306,5 +350,40 @@ mod tests {
         let result = collect_recent_files(&[session]);
 
         assert_eq!(result.len(), MAX_RECENT_FILES);
+    }
+
+    #[test]
+    fn project_warming_rejails_paths_and_skips_stale_records() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let good = root.path().join("good.rs");
+        let stale = root.path().join("stale.rs");
+        let secret = outside.path().join("secret.rs");
+        for path in [&good, &stale, &secret] {
+            std::fs::write(path, "fixture").unwrap();
+        }
+        let mut session = session_at(10);
+        session.project_root = Some(root.path().to_string_lossy().into_owned());
+        for path in [&good, &stale, &secret] {
+            session.touch_file(&path.to_string_lossy(), None, "full", 1);
+        }
+        session
+            .files_touched
+            .iter_mut()
+            .find(|file| file.path == stale.to_string_lossy().as_ref())
+            .expect("stale fixture")
+            .stale = true;
+
+        let warmed = collect_recent_files_in_project(
+            &[session],
+            root.path().to_str().expect("UTF-8 temporary root"),
+        );
+
+        assert_eq!(warmed.len(), 1);
+        assert_eq!(
+            warmed[0].path,
+            good.canonicalize().unwrap().to_string_lossy().into_owned()
+        );
     }
 }

@@ -207,9 +207,15 @@ pub(crate) struct LatestPointer {
 pub struct PreparedSave {
     pub(crate) dir: PathBuf,
     pub(crate) id: String,
+    /// Monotonic in-memory version captured with the serialized payload. It
+    /// prevents a slower background writer from replacing a newer snapshot.
+    pub(crate) version: u32,
     pub(crate) json: String,
     pub(crate) pointer_json: String,
     pub(crate) compaction_snapshot: Option<String>,
+    /// Canonical, safe project root used to update the bounded warm-history
+    /// index after the primary session file has been committed.
+    pub(crate) project_index_root: Option<String>,
 }
 
 /// Lightweight summary of a session for listing purposes.

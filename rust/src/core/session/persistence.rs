@@ -1,10 +1,108 @@
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 
 use super::heuristics::{normalize_loaded_session, session_matches_project_root};
 use super::paths::sessions_dir;
 use super::state::{BATCH_SAVE_INTERVAL, extract_session_facts};
 #[allow(clippy::wildcard_imports)]
 use super::types::*;
+
+/// Keep the startup warm set deliberately small: cache warming is an optional
+/// optimisation and must never turn process startup into a session-store scan.
+const PROJECT_HISTORY_LIMIT: usize = 8;
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct ProjectSessionIndex {
+    version: u8,
+    project_root: String,
+    /// Oldest to newest; duplicates are removed before appending on every save.
+    session_ids: Vec<String>,
+}
+
+fn normalized_safe_project_root(project_root: &str) -> Option<String> {
+    let path = std::path::Path::new(project_root);
+    if project_root.trim().is_empty() || crate::core::pathutil::is_broad_or_unsafe_root(path) {
+        return None;
+    }
+    Some(
+        crate::core::pathutil::safe_canonicalize_or_self(path)
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn project_index_path(dir: &std::path::Path, project_root: &str) -> std::path::PathBuf {
+    let key = blake3::hash(project_root.as_bytes()).to_hex();
+    dir.join("project-index").join(format!("{key}.json"))
+}
+
+/// Update one project's bounded warm-history index under a short, local lock.
+/// The index is strictly an acceleration structure: a failure never invalidates
+/// the already-committed session save.
+fn update_project_index(dir: &std::path::Path, project_root: &str, id: &str) -> Result<(), String> {
+    use fs2::FileExt;
+    use std::io::ErrorKind;
+    use std::time::{Duration, Instant};
+
+    const LOCK_TIMEOUT: Duration = Duration::from_millis(200);
+    const RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
+    let index_path = project_index_path(dir, project_root);
+    let index_dir = index_path.parent().ok_or("project index has no parent")?;
+    std::fs::create_dir_all(index_dir).map_err(|e| format!("create project index: {e}"))?;
+
+    let lock_path = index_path.with_extension("lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)
+        .map_err(|e| format!("project index lock: {e}"))?;
+    let deadline = Instant::now() + LOCK_TIMEOUT;
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(RETRY_INTERVAL);
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                return Err("project index lock timed out".to_string());
+            }
+            Err(error) => return Err(format!("project index lock: {error}")),
+        }
+    }
+
+    let result = (|| {
+        let mut index = std::fs::read_to_string(&index_path)
+            .ok()
+            .and_then(|json| serde_json::from_str::<ProjectSessionIndex>(&json).ok())
+            .filter(|index| index.version == 1 && index.project_root == project_root)
+            .unwrap_or_else(|| ProjectSessionIndex {
+                version: 1,
+                project_root: project_root.to_string(),
+                session_ids: Vec::new(),
+            });
+
+        index.session_ids.retain(|existing| existing != id);
+        index.session_ids.push(id.to_string());
+        let excess = index
+            .session_ids
+            .len()
+            .saturating_sub(PROJECT_HISTORY_LIMIT);
+        if excess > 0 {
+            index.session_ids.drain(..excess);
+        }
+
+        let json =
+            serde_json::to_string(&index).map_err(|e| format!("serialize project index: {e}"))?;
+        let tmp = index_path.with_extension(format!("{}.tmp", std::process::id()));
+        std::fs::write(&tmp, json).map_err(|e| format!("write project index: {e}"))?;
+        restrict_file_permissions(&tmp);
+        std::fs::rename(tmp, index_path).map_err(|e| format!("commit project index: {e}"))
+    })();
+    let _ = FileExt::unlock(&lock);
+    result
+}
 
 #[cfg(unix)]
 fn restrict_file_permissions(path: &std::path::Path) {
@@ -52,30 +150,68 @@ fn persist_session_facts(session: &SessionState) -> Result<(), String> {
 
 impl PreparedSave {
     /// Writes the pre-serialized session data, latest pointer, and compaction
-    /// snapshot to disk atomically.
+    /// snapshot to disk atomically. A per-session file lock and version check
+    /// make deferred saves monotonic even when background tasks finish out of
+    /// order.
     pub fn write_to_disk(self) -> Result<(), String> {
+        use fs2::FileExt;
+
         if !self.dir.exists() {
             std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         }
-        let path = self.dir.join(format!("{}.json", self.id));
-        let tmp = self.dir.join(format!(".{}.json.tmp", self.id));
-        std::fs::write(&tmp, &self.json).map_err(|e| e.to_string())?;
-        restrict_file_permissions(&tmp);
-        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        let lock_path = self.dir.join(format!(".{}.save.lock", self.id));
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(lock_path)
+            .map_err(|e| format!("open session save lock: {e}"))?;
+        lock.lock_exclusive()
+            .map_err(|e| format!("lock session save: {e}"))?;
 
-        let latest_path = self.dir.join("latest.json");
-        let latest_tmp = self.dir.join(".latest.json.tmp");
-        std::fs::write(&latest_tmp, &self.pointer_json).map_err(|e| e.to_string())?;
-        restrict_file_permissions(&latest_tmp);
-        std::fs::rename(&latest_tmp, &latest_path).map_err(|e| e.to_string())?;
+        let result = (|| {
+            let path = self.dir.join(format!("{}.json", self.id));
+            if persisted_session_version(&path).is_some_and(|version| version > self.version) {
+                return Ok(());
+            }
+            let tmp = self.dir.join(format!(".{}.json.tmp", self.id));
+            std::fs::write(&tmp, &self.json).map_err(|e| e.to_string())?;
+            restrict_file_permissions(&tmp);
+            std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
 
-        if let Some(snapshot) = self.compaction_snapshot {
-            let snap_path = self.dir.join(format!("{}_snapshot.txt", self.id));
-            let _ = std::fs::write(&snap_path, &snapshot);
-            restrict_file_permissions(&snap_path);
-        }
-        Ok(())
+            let latest_path = self.dir.join("latest.json");
+            let latest_tmp = self.dir.join(".latest.json.tmp");
+            std::fs::write(&latest_tmp, &self.pointer_json).map_err(|e| e.to_string())?;
+            restrict_file_permissions(&latest_tmp);
+            std::fs::rename(&latest_tmp, &latest_path).map_err(|e| e.to_string())?;
+
+            if let Some(snapshot) = self.compaction_snapshot {
+                let snap_path = self.dir.join(format!("{}_snapshot.txt", self.id));
+                if let Err(error) = crate::core::atomic_fs::write_bytes_with_fallback(
+                    &snap_path,
+                    snapshot.as_bytes(),
+                    None,
+                ) {
+                    tracing::debug!("lean-ctx: compaction snapshot update skipped: {error}");
+                } else {
+                    restrict_file_permissions(&snap_path);
+                }
+            }
+            if let Some(project_root) = self.project_index_root.as_deref()
+                && let Err(error) = update_project_index(&self.dir, project_root, &self.id)
+            {
+                tracing::debug!("lean-ctx: session warm-history index update skipped: {error}");
+            }
+            Ok(())
+        })();
+        let _ = FileExt::unlock(&lock);
+        result
     }
+}
+
+fn persisted_session_version(path: &std::path::Path) -> Option<u32> {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    value["version"].as_u64()?.try_into().ok()
 }
 
 impl SessionState {
@@ -109,6 +245,15 @@ impl SessionState {
     /// unsaved counter, and return a `PreparedSave` whose I/O can be deferred
     /// to a background thread via `write_to_disk()`.
     pub fn prepare_save(&mut self) -> Result<PreparedSave, String> {
+        if self
+            .project_root
+            .as_deref()
+            .is_some_and(|root| normalized_safe_project_root(root).is_none())
+        {
+            return Err(
+                "refusing to persist a session for a broad or unsafe project root".to_string(),
+            );
+        }
         let dir = sessions_dir().ok_or("cannot determine home directory")?;
         let compaction_snapshot = if self.stats.total_tool_calls > 0 {
             Some(self.build_compaction_snapshot())
@@ -126,10 +271,45 @@ impl SessionState {
         Ok(PreparedSave {
             dir,
             id: self.id.clone(),
+            version: self.version,
             json,
             pointer_json,
             compaction_snapshot,
+            project_index_root: self
+                .project_root
+                .as_deref()
+                .and_then(normalized_safe_project_root),
         })
+    }
+
+    /// Load the bounded warm-history set for one safe project root.
+    ///
+    /// There is intentionally no legacy full-store fallback: cache warming is
+    /// optional, while scanning every persisted session on each MCP launch is
+    /// not acceptable under concurrent agent load. New saves populate the
+    /// index; legacy sessions remain available through explicit session tools.
+    pub(crate) fn load_recent_for_project_root(project_root: &str, limit: usize) -> Vec<Self> {
+        let Some(project_root) = normalized_safe_project_root(project_root) else {
+            return Vec::new();
+        };
+        let Some(dir) = sessions_dir() else {
+            return Vec::new();
+        };
+        let Some(index) = std::fs::read_to_string(project_index_path(&dir, &project_root))
+            .ok()
+            .and_then(|json| serde_json::from_str::<ProjectSessionIndex>(&json).ok())
+            .filter(|index| index.version == 1 && index.project_root == project_root)
+        else {
+            return Vec::new();
+        };
+
+        index
+            .session_ids
+            .iter()
+            .rev()
+            .take(limit.min(PROJECT_HISTORY_LIMIT))
+            .filter_map(|id| Self::load_by_id(id))
+            .collect()
     }
 
     /// Loads the most recent session matching the current working directory's
@@ -396,5 +576,82 @@ impl SessionState {
         }
 
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionState;
+
+    #[test]
+    fn recent_project_sessions_use_bounded_index_without_scanning_legacy_store() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let project = tempfile::tempdir().expect("project tempdir");
+        let root = project.path().to_string_lossy().to_string();
+
+        for id in ["first", "second", "third"] {
+            let mut session = SessionState::new();
+            session.id = id.to_string();
+            session.project_root = Some(root.clone());
+            session.save().expect("save indexed session");
+        }
+
+        // A malformed legacy artifact proves the hot path consults only the
+        // per-project index, never `list_sessions()` as a hidden fallback.
+        let sessions = crate::core::session::paths::sessions_dir().expect("sessions dir");
+        std::fs::write(sessions.join("legacy-unreadable.json"), "not json")
+            .expect("write legacy artifact");
+
+        let ids: Vec<_> = SessionState::load_recent_for_project_root(&root, 8)
+            .into_iter()
+            .map(|session| session.id)
+            .collect();
+        assert_eq!(ids, ["third", "second", "first"]);
+    }
+
+    #[test]
+    fn recent_project_sessions_refuse_broad_roots() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        assert!(SessionState::load_recent_for_project_root("/", 8).is_empty());
+    }
+
+    #[test]
+    fn broad_root_sessions_are_never_persisted() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let mut session = SessionState::new();
+        session.project_root = Some("/".to_string());
+
+        let error = session
+            .save()
+            .expect_err("broad root save must be rejected");
+
+        assert!(error.contains("broad or unsafe"));
+        assert!(
+            crate::core::session::paths::sessions_dir()
+                .expect("sessions dir")
+                .read_dir()
+                .map_or(true, |mut entries| entries.next().is_none())
+        );
+    }
+
+    #[test]
+    fn deferred_save_cannot_replace_a_newer_session_version() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let mut session = SessionState::new();
+        let id = session.id.clone();
+        let older = session.prepare_save().expect("prepare older save");
+        session.increment();
+        let expected_version = session.version;
+        let newer = session.prepare_save().expect("prepare newer save");
+
+        newer.write_to_disk().expect("write newer save");
+        older.write_to_disk().expect("skip older save");
+
+        assert_eq!(
+            SessionState::load_by_id(&id)
+                .expect("load persisted session")
+                .version,
+            expected_version
+        );
     }
 }

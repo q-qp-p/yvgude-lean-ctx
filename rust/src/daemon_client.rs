@@ -9,6 +9,11 @@ use crate::ipc;
 
 static DELIVERY_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
+/// Cross-agent delivery lookups are an optional cache tier. They must never
+/// inherit the daemon client's normal control-plane timeout on an interactive
+/// read or shell path.
+const BEST_EFFORT_DELIVERY_IPC_TIMEOUT: Duration = Duration::from_millis(250);
+
 fn delivery_runtime() -> Result<&'static Runtime> {
     match DELIVERY_RUNTIME.get_or_init(|| Runtime::new().map_err(|error| error.to_string())) {
         Ok(runtime) => Ok(runtime),
@@ -359,7 +364,13 @@ pub fn try_delivery_check_blocking(
     });
     let body_str = body.to_string();
     let resp = delivery_block_on(async move {
-        try_daemon_request("POST", "/ocla/v1/delivery/check", &body_str).await
+        tokio::time::timeout(
+            BEST_EFFORT_DELIVERY_IPC_TIMEOUT,
+            try_daemon_request("POST", "/ocla/v1/delivery/check", &body_str),
+        )
+        .await
+        .ok()
+        .flatten()
     })??;
     let v: serde_json::Value = serde_json::from_str(&resp).ok()?;
     if !v.get("hit")?.as_bool()? {
@@ -441,7 +452,13 @@ pub fn try_cache_check_blocking(
     });
     let body_str = body.to_string();
     let resp = delivery_block_on(async move {
-        try_daemon_request("POST", "/ocla/v1/cache/check", &body_str).await
+        tokio::time::timeout(
+            BEST_EFFORT_DELIVERY_IPC_TIMEOUT,
+            try_daemon_request("POST", "/ocla/v1/cache/check", &body_str),
+        )
+        .await
+        .ok()
+        .flatten()
     })??;
     let v: serde_json::Value = serde_json::from_str(&resp).ok()?;
     if !v.get("hit")?.as_bool()? {

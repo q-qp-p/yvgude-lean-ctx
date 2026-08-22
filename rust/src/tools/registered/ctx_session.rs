@@ -1,11 +1,16 @@
 use rmcp::ErrorData;
 use rmcp::model::Tool;
 use serde_json::{Map, Value, json};
+use std::time::Duration;
 
 use crate::server::tool_trait::{McpTool, ToolContext, ToolOutput, get_bool, get_str};
 use crate::tool_defs::tool_def;
 
 pub struct CtxSessionTool;
+
+/// Session management is useful, but it must never make the entire MCP server
+/// wait behind a long-lived writer. Explicitly retryable operations fail fast.
+const SESSION_LOCK_BUDGET: Duration = Duration::from_millis(250);
 
 impl McpTool for CtxSessionTool {
     fn name(&self) -> &'static str {
@@ -52,35 +57,98 @@ impl McpTool for CtxSessionTool {
             .tool_calls
             .as_ref()
             .ok_or_else(|| ErrorData::internal_error("tool_calls not available", None))?;
-        let call_durations: Vec<(String, u64)> = {
-            let tc = tool_calls_handle.blocking_read();
+        let call_durations: Vec<(String, u64)> = crate::server::bounded_lock::read_for(
+            tool_calls_handle,
+            "ctx_session tool-call snapshot",
+            SESSION_LOCK_BUDGET,
+        )
+        .map_or_else(Vec::new, |tc| {
             tc.iter().map(|c| (c.tool.clone(), c.duration_ms)).collect()
-        };
+        });
         let agent_id = ctx
             .agent_id
             .as_ref()
-            .and_then(|agent_id| agent_id.blocking_read().clone());
+            .and_then(|agent_id| agent_id.try_read().ok().and_then(|id| id.clone()));
 
-        let session_handle = ctx
-            .session
-            .as_ref()
-            .ok_or_else(|| ErrorData::internal_error("session not available", None))?;
-        let mut session = session_handle.blocking_write();
-        let result = crate::tools::ctx_session::handle(
-            &mut session,
-            &call_durations,
+        let result = if let Some(result) = crate::tools::ctx_session::handle_without_session(
             &action,
             value.as_deref(),
             sid.as_deref(),
-            crate::tools::ctx_session::SessionToolOptions {
-                format: format.as_deref(),
-                path: path.as_deref(),
-                write,
-                privacy: privacy.as_deref(),
-                terse,
-                agent_id: agent_id.as_deref(),
-            },
-        );
+        ) {
+            result
+        } else {
+            let session_handle = ctx
+                .session
+                .as_ref()
+                .ok_or_else(|| ErrorData::internal_error("session not available", None))?;
+
+            if matches!(action.as_str(), "export" | "resume" | "snapshot") {
+                let Some(snapshot) = crate::server::bounded_lock::read_for(
+                    session_handle,
+                    "ctx_session snapshot",
+                    SESSION_LOCK_BUDGET,
+                )
+                .map(|session| session.clone()) else {
+                    return Err(ErrorData::internal_error(
+                        "session is busy; retry the operation",
+                        None,
+                    ));
+                };
+                crate::tools::ctx_session::handle_snapshot_read_action(
+                    &snapshot,
+                    &action,
+                    value.as_deref(),
+                    crate::tools::ctx_session::SessionToolOptions {
+                        format: format.as_deref(),
+                        path: path.as_deref(),
+                        write,
+                        privacy: privacy.as_deref(),
+                        terse,
+                        agent_id: agent_id.as_deref(),
+                    },
+                )
+                .expect("snapshot action is explicitly handled")
+            } else if matches!(action.as_str(), "status" | "show" | "handoff") {
+                let Some(session) = crate::server::bounded_lock::read_for(
+                    session_handle,
+                    "ctx_session read",
+                    SESSION_LOCK_BUDGET,
+                ) else {
+                    return Err(ErrorData::internal_error(
+                        "session is busy; retry the operation",
+                        None,
+                    ));
+                };
+                crate::tools::ctx_session::handle_read_only(&session, &action)
+                    .expect("read-only action is explicitly handled")
+            } else {
+                let Some(mut session) = crate::server::bounded_lock::write_for(
+                    session_handle,
+                    "ctx_session write",
+                    SESSION_LOCK_BUDGET,
+                ) else {
+                    return Err(ErrorData::internal_error(
+                        "session is busy; retry the operation",
+                        None,
+                    ));
+                };
+                crate::tools::ctx_session::handle(
+                    &mut session,
+                    &call_durations,
+                    &action,
+                    value.as_deref(),
+                    sid.as_deref(),
+                    crate::tools::ctx_session::SessionToolOptions {
+                        format: format.as_deref(),
+                        path: path.as_deref(),
+                        write,
+                        privacy: privacy.as_deref(),
+                        terse,
+                        agent_id: agent_id.as_deref(),
+                    },
+                )
+            }
+        };
 
         Ok(ToolOutput {
             text: result,
