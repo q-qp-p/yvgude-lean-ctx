@@ -28,9 +28,17 @@
   "conformance_version": 1,
   "execution": "local_process",
   "entrypoint": "word-count-optimizer",
+  "network_access": "none",
+  "input_transport": "stdin_utf8",
+  "output_transport": "stdout_json",
+  "max_input_bytes": 65536,
+  "max_output_bytes": 128,
+  "failure_behavior": "reject",
   "schemas": {
     "schema://example/word-count-optimizer/input/v1": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
     },
     "schema://example/word-count-optimizer/output/v1": {
       "type": "object",

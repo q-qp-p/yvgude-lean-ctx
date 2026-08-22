@@ -1,6 +1,8 @@
 # External OCLA capability example
 
-This self-contained Rust program demonstrates a third-party, deterministic OCLA capability executed as a local process. It accepts UTF-8 text on standard input and writes one JSON result to standard output. `manifest.json` advertises its CLI surface, local-only data movement, and input/output schemas.
+This self-contained Rust program is a reference-only, deterministic OCLA capability executed as a local process. It accepts at most 65,536 bytes of UTF-8 on standard input and writes one bounded JSON result to standard output. `manifest.json` declares its CLI surface, local-only data movement, no-network boundary, limits, and input/output schemas.
+
+It makes no registration, marketplace, or public-product claim. Hosts must opt in with a fixed executable and manifest; LeanCTX's `ExternalProcessAdapter` validates the manifest, clears the process environment, sends only bounded stdin, caps stdout, and enforces a timeout. Oversized or invalid UTF-8 input is rejected without output.
 
 ## Run
 
