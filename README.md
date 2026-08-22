@@ -36,15 +36,15 @@ Local agent-presence, handoff, and related coordination substrate are also
 **Research**; LeanCTX does not currently provide a public multi-agent
 orchestration contract.
 
-## The loop
+## The context lifecycle
 
 ```text
-Connect → Measure → Tune → Prove → Deploy → Repeat
+Select → Shape → Reuse → Recover
 ```
 
-A gain is valid only when a comparable baseline and treatment, a declared
-quality threshold, and visible methodology are present. A lower token count or
-calculated cost is not a successful outcome on its own.
+Evidence is a separate proof discipline: a gain is valid only with a comparable
+baseline and treatment, a declared quality threshold, and visible methodology.
+A lower token count or calculated cost is not a successful outcome on its own.
 
 ## Install
 

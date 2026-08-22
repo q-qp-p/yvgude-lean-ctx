@@ -90,18 +90,17 @@ fn unified_tool_defs_raw() -> Vec<Tool> {
 analyze (entropy), cache (status|clear|invalidate), discover (missed patterns), smart_read (auto-mode), \
 delta (incremental diff), dedup (cross-file), fill (budget-aware batch read), intent (auto-read by task), \
 response (compress LLM text), context (session state), graph (build|related|symbol|impact|status), \
-session (load|save|task|finding|decision|status|reset|list|cleanup), \
+session (load|save|finding|decision|status|reset|list|cleanup), \
 knowledge (remember|recall|pattern|consolidate|timeline|rooms|search|wakeup|status|remove|export|embeddings_status|embeddings_reset|embeddings_reindex), \
-agent (register|post|read|status|list|info|diary|recall_diary|diaries), overview (project map), \
 wrapped (savings report), benchmark (file|project), multi_read (batch), semantic_search (BM25), \
 cost (attribution), heatmap (file access), impact (graph impact), architecture (graph structure), \
-task (A2A tasks), workflow (state machine), expand (retrieve archived output).",
+expand (retrieve archived output).",
             json!({
                 "type": "object",
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "compress|metrics|analyze|cache|discover|smart_read|delta|dedup|fill|intent|response|context|graph|session|knowledge|agent|overview|wrapped|benchmark|multi_read|semantic_search|cost|heatmap|impact|architecture|task|workflow|expand"
+                        "description": "compress|metrics|analyze|cache|discover|smart_read|delta|dedup|fill|intent|response|context|graph|session|knowledge|overview|wrapped|benchmark|multi_read|semantic_search|cost|heatmap|impact|architecture|expand"
                     },
                     "action": { "type": "string" },
                     "path": { "type": "string" },
@@ -200,6 +199,33 @@ mod tests {
             assert!(
                 name == "ctx" || registry.contains(name),
                 "unified tool '{name}' is neither the ctx meta-tool nor a registry tool"
+            );
+        }
+    }
+
+    #[test]
+    fn unified_meta_does_not_advertise_local_collaboration_substrate() {
+        let meta = unified_tool_defs()
+            .into_iter()
+            .find(|tool| tool.name.as_ref() == "ctx")
+            .expect("unified surface includes the ctx meta-tool");
+        let description = meta.description.as_deref().unwrap_or_default();
+        let action_description = meta
+            .input_schema
+            .get("properties")
+            .and_then(|properties| properties.get("tool"))
+            .and_then(|tool| tool.get("description"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+
+        for hidden in ["agent", "task", "workflow"] {
+            assert!(
+                !description.contains(&format!("{hidden} (")),
+                "unified meta-tool must not advertise local {hidden} substrate"
+            );
+            assert!(
+                !action_description.split('|').any(|name| name == hidden),
+                "unified meta-tool action schema must not advertise local {hidden} substrate"
             );
         }
     }

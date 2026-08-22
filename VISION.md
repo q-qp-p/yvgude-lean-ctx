@@ -15,15 +15,15 @@ LeanCTX does not replace the customer's agent, task logic, model choice,
 tools, or retry policy. Thinkery is the company and commercial operator; it is
 not a competing developer product.
 
-The operating loop is:
+The context lifecycle is:
 
 ```text
-Connect → Measure → Tune → Prove → Deploy → Repeat
+Select → Shape → Reuse → Recover
 ```
 
-Context shapes performance. A valid gain compares the same workload against a
-known baseline and treatment, with a declared quality threshold and visible
-methodology. A cheaper failed task is not a win.
+Context shapes performance. Evidence is separate: a valid gain compares the
+same workload against a known baseline and treatment, with a declared quality
+threshold and visible methodology. A cheaper failed task is not a win.
 
 ## Integration
 

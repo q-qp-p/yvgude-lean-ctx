@@ -4,20 +4,7 @@
 
 Source of truth: `rust/src/server/registry.rs` and the tool definitions it registers.
 
-lean-ctx registers **83 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
-
-## `ctx_agent`
-
-Research-only local collaboration helper. It is not part of the default LeanCTX Runtime surface or a public agent-orchestration product.
-Enable the session category explicitly before evaluating it.
-Actions: register (agent_type+role), post (message+category), read (poll),
-status (active|idle|finished), handoff (task+summary), sync (agents+messages+scent),
-claim/release (file/task), brief (sub-agent briefing),
-return (distill→knowledge), diary|recall_diary|diaries (agent journal),
-share_knowledge|receive_knowledge (cross-agent), list, info.
-ANTIPATTERN: Do not treat this local helper as a durable workflow or a hosted coordination service.
-
-Parameters: `action`*, `agent_type`, `category`, `message`, `role`, `status`, `to_agent`
+lean-ctx registers **78 MCP tools** (granular profile). Each entry below lists the tool name, what it does, and its parameters (`*` marks required).
 
 ## `ctx_analyze`
 
@@ -295,14 +282,6 @@ action=symbol path="file.rs::fnName" returns the DEFINITION (not usages — use 
 For understanding code use ctx_compose FIRST.
 
 Parameters: `action`*, `depth`, `format`, `kind`, `path`, `project_root`, `since`, `to`
-
-## `ctx_handoff`
-
-Context handoff protocol (hashed, deterministic, local-first).
-Actions: create|show|list|pull|clear|export|import. Stores curated file refs with hashes.
-Before ending a session or handing off to another agent.
-
-Parameters: `action`, `apply_knowledge`, `apply_session`, `apply_workflow`, `filename`, `format`, `path`, `paths`, `privacy`, `write`
 
 ## `ctx_heatmap`
 
@@ -628,14 +607,6 @@ ANTIPATTERN: permanent project knowledge → ctx_knowledge.
 
 Parameters: `action`*, `session_id`, `value`
 
-## `ctx_share`
-
-WORKFLOW: push from agent A → pull from agent B shares cached file contexts.
-Actions: push|pull|list|clear. Omit to_agent for broadcast.
-ANTIPATTERN: NOT file transfer — shares lean-ctx cache entries only.
-
-Parameters: `action`*, `message`, `paths`, `to_agent`
-
 ## `ctx_shell`
 
 WORKFLOW: preferred — auto-compresses output (build/test/log).
@@ -673,16 +644,6 @@ Actions: recall|record|list. Auto-captured on checkpoints.
 ANTIPATTERN: structured facts → ctx_knowledge.
 
 Parameters: `action`, `query`, `top_k`
-
-## `ctx_task`
-
-Research-only local task record for collaboration experiments. It is not a public agent-orchestration contract.
-Enable the session category explicitly before evaluating it.
-Actions: create|update|list|get|cancel|message|info.
-States: working|input-required|completed|failed|canceled.
-ANTIPATTERN: not for code execution or production workflow orchestration — use ctx_shell or ctx_execute.
-
-Parameters: `action`*, `description`, `message`, `state`, `task_id`, `to_agent`
 
 ## `ctx_tools`
 
@@ -729,17 +690,6 @@ Actions: stats|proof|v2 (format=summary|json|both, default summary).
 ANTIPATTERN: not for runtime verification during active development — use for periodic audit.
 
 Parameters: `action`, `format`
-
-## `ctx_workflow`
-
-Research-only local state tracker with evidence notes. It is not a public workflow-orchestration product.
-Enable the session category explicitly before evaluating it.
-transition to attach proof. Built-in plan_code_test when spec omitted.
-Actions: start|status|transition|complete|evidence_add|evidence_list|stop.
-spec=WorkflowSpec JSON for custom states/transitions.
-ANTIPATTERN: NOT for production orchestration or one-shot tasks — use direct tool calls instead.
-
-Parameters: `action`, `key`, `name`, `spec`, `to`, `value`
 
 ## `shell`
 
