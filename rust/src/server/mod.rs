@@ -279,7 +279,7 @@ mod tests {
     fn test_registry_tool_count_ssot() {
         assert_eq!(
             crate::server::registry::tool_count(),
-            83,
+            78,
             "Official MCP tool count drift! Update this test AND all docs when adding/removing tools."
         );
     }
@@ -302,12 +302,16 @@ mod tests {
     fn disabled_tools_filters_list() {
         let all = crate::tool_defs::granular_tool_defs();
         let total = all.len();
-        let disabled = ["ctx_graph".to_string(), "ctx_agent".to_string()];
+        // `ctx_agent` is retained as a direct compatibility path but is no
+        // longer part of the advertised granular surface. Exercise filtering
+        // with one actual public tool instead of treating a hidden alias as
+        // visible inventory.
+        let disabled = ["ctx_graph".to_string()];
         let filtered: Vec<_> = all
             .into_iter()
             .filter(|t| !disabled.iter().any(|d| t.name.as_ref() == d.as_str()))
             .collect();
-        assert_eq!(filtered.len(), total - 2);
+        assert_eq!(filtered.len(), total - 1);
         assert!(!filtered.iter().any(|t| t.name.as_ref() == "ctx_graph"));
         assert!(!filtered.iter().any(|t| t.name.as_ref() == "ctx_agent"));
     }

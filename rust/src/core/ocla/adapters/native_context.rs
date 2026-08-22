@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use lean_ctx_protocol::CapabilityManifestV1;
+use sha2::{Digest, Sha256};
 
 use super::read_context_paths;
 use crate::core::compressor;
@@ -38,6 +39,48 @@ fn manifest() -> &'static CapabilityManifestV1 {
 /// Local adapter that combines existing file reads and compression primitives.
 pub struct NativeContextAdapter {
     root: PathBuf,
+}
+
+/// Payload-free result used by the internal Engine proof path.
+///
+/// Native OCLA consumers keep receiving [`CapabilityResult`]. The Engine needs
+/// a SHA-256 identity for the exact derived output, but must not retain or
+/// expose that output in a receipt.
+#[allow(dead_code)]
+pub(crate) struct NativeContextInvocationResult {
+    pub result: CapabilityResult,
+    pub input_digest: String,
+    pub output_digest: String,
+    /// Exact derived bytes are kept inside the Engine boundary solely to
+    /// persist a local, integrity-addressed output artifact. They are never
+    /// serialized, logged, or returned from the OCLA adapter contract.
+    pub(crate) output: Vec<u8>,
+}
+
+/// Typed internal failure boundary for the native Engine proof path.
+///
+/// The public OCLA adapter trait continues to expose `OclaError`; the Engine
+/// must not infer its stable failure taxonomy by parsing those error strings.
+#[derive(Debug)]
+pub(crate) enum NativeContextInvocationFailure {
+    SourceUnavailable(String),
+    ResourceLimit(String),
+    UnsupportedInput,
+    InvalidRequest(String),
+}
+
+impl NativeContextInvocationFailure {
+    fn into_ocla_error(self) -> OclaError {
+        let message = match self {
+            Self::SourceUnavailable(message)
+            | Self::ResourceLimit(message)
+            | Self::InvalidRequest(message) => message,
+            Self::UnsupportedInput => {
+                "native context optimization accepts ContextRequest only".to_owned()
+            }
+        };
+        OclaError::InvalidRequest(message)
+    }
 }
 
 impl NativeContextAdapter {
@@ -79,13 +122,15 @@ impl NativeContextAdapter {
         mode: &str,
         budget_tokens: Option<u64>,
         start: Instant,
-    ) -> OclaResult<CapabilityResult> {
-        let input = read_context_paths(&self.root, paths)?;
+    ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
+        let input = read_context_paths(&self.root, paths).map_err(|error| {
+            NativeContextInvocationFailure::SourceUnavailable(error.to_string())
+        })?;
         let input_tokens = tokens::count_tokens(&input) as u64;
         if let Some(max) = invocation.policy_constraints.max_input_tokens
             && input_tokens > max
         {
-            return Err(OclaError::InvalidRequest(format!(
+            return Err(NativeContextInvocationFailure::ResourceLimit(format!(
                 "input exceeds policy token limit ({input_tokens} > {max})"
             )));
         }
@@ -99,16 +144,17 @@ impl NativeContextAdapter {
         if let Some(max) = invocation.policy_constraints.max_output_tokens
             && output_tokens > max
         {
-            return Err(OclaError::InvalidRequest(format!(
+            return Err(NativeContextInvocationFailure::ResourceLimit(format!(
                 "output exceeds policy token limit ({output_tokens} > {max})"
             )));
         }
 
-        let latency_ms = super::super::invocation::check_timeout(start, invocation.timeout_ms)?;
+        let latency_ms = super::super::invocation::check_timeout(start, invocation.timeout_ms)
+            .map_err(|error| NativeContextInvocationFailure::ResourceLimit(error.to_string()))?;
         if let Some(max) = invocation.policy_constraints.max_latency_ms
             && latency_ms > max
         {
-            return Err(OclaError::InvalidRequest(format!(
+            return Err(NativeContextInvocationFailure::ResourceLimit(format!(
                 "capability latency exceeds policy limit ({latency_ms} > {max})"
             )));
         }
@@ -128,13 +174,53 @@ impl NativeContextAdapter {
             "compression_rate_milli".into(),
             compression_rate_milli(input_tokens, output_tokens),
         );
-        Ok(CapabilityResult {
-            success: true,
-            output_tokens,
-            latency_ms,
-            observation,
-            evidence_ref: Some(output_ref),
+        Ok(NativeContextInvocationResult {
+            result: CapabilityResult {
+                success: true,
+                output_tokens,
+                latency_ms,
+                observation,
+                evidence_ref: Some(output_ref),
+            },
+            input_digest: format!(
+                "sha256:{}",
+                crate::core::agent_identity::hex_encode(&Sha256::digest(input.as_bytes()))
+            ),
+            output_digest: format!(
+                "sha256:{}",
+                crate::core::agent_identity::hex_encode(&Sha256::digest(output.as_bytes()))
+            ),
+            output: output.into_bytes(),
         })
+    }
+
+    /// Execute the native context capability and return its payload-free
+    /// SHA-256 output identity for the internal Engine bridge.
+    pub(crate) fn invoke_with_output_identity(
+        &self,
+        invocation: &CapabilityInvocation,
+    ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
+        invocation
+            .validate()
+            .map_err(|error| NativeContextInvocationFailure::InvalidRequest(error.to_string()))?;
+        if invocation.capability_id != self.manifest().capability_id.as_str()
+            || invocation.capability_version != self.manifest().version
+        {
+            return Err(NativeContextInvocationFailure::InvalidRequest(
+                "invocation capability identity does not match adapter manifest".into(),
+            ));
+        }
+        let start = Instant::now();
+        match &invocation.input {
+            CapabilityInput::ContextRequest {
+                paths,
+                mode,
+                budget_tokens,
+            } => self.invoke_context(invocation, paths, mode, *budget_tokens, start),
+            CapabilityInput::ShellCommand { .. } | CapabilityInput::ModelRequest { .. } => {
+                Err(NativeContextInvocationFailure::UnsupportedInput)
+            }
+        }
     }
 }
 
@@ -150,27 +236,9 @@ impl CapabilityAdapter for NativeContextAdapter {
     }
 
     fn invoke(&self, invocation: CapabilityInvocation) -> OclaResult<CapabilityResult> {
-        invocation.validate()?;
-        if invocation.capability_id != self.manifest().capability_id.as_str()
-            || invocation.capability_version != self.manifest().version
-        {
-            return Err(OclaError::InvalidRequest(
-                "invocation capability identity does not match adapter manifest".into(),
-            ));
-        }
-        let start = Instant::now();
-        match invocation.input.clone() {
-            CapabilityInput::ContextRequest {
-                paths,
-                mode,
-                budget_tokens,
-            } => self.invoke_context(&invocation, &paths, &mode, budget_tokens, start),
-            CapabilityInput::ShellCommand { .. } | CapabilityInput::ModelRequest { .. } => {
-                Err(OclaError::InvalidRequest(
-                    "native context optimization accepts ContextRequest only".into(),
-                ))
-            }
-        }
+        self.invoke_with_output_identity(&invocation)
+            .map(|result| result.result)
+            .map_err(NativeContextInvocationFailure::into_ocla_error)
     }
 
     fn health_check(&self) -> OclaResult<bool> {
@@ -230,5 +298,36 @@ mod tests {
             timeout_ms: 100,
         };
         assert!(adapter.invoke(invocation).is_err());
+    }
+
+    #[test]
+    fn internal_output_identity_is_canonical_sha256_without_payload() {
+        let root = tempfile::tempdir().expect("temporary adapter root");
+        std::fs::write(root.path().join("fixture.md"), "hello context").expect("fixture write");
+        let adapter = NativeContextAdapter::with_root(root.path());
+        let invocation = CapabilityInvocation {
+            task_id: "task-1".into(),
+            capability_id: adapter.manifest().capability_id.as_str().into(),
+            capability_version: adapter.manifest().version.clone(),
+            input: CapabilityInput::ContextRequest {
+                paths: vec!["fixture.md".into()],
+                mode: "raw".into(),
+                budget_tokens: None,
+            },
+            policy_constraints: PolicyConstraints::default(),
+            timeout_ms: 0,
+        };
+
+        let result = adapter
+            .invoke_with_output_identity(&invocation)
+            .expect("native invocation succeeds");
+        assert_eq!(
+            result.output_digest,
+            format!(
+                "sha256:{}",
+                crate::core::agent_identity::hex_encode(&Sha256::digest(b"hello context"))
+            )
+        );
+        assert!(result.result.evidence_ref.is_some());
     }
 }

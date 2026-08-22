@@ -18,6 +18,8 @@ pub mod context_prefetch;
 pub(crate) mod datadog_push;
 #[allow(dead_code)]
 pub(crate) mod edit_snapshot;
+#[allow(dead_code)]
+pub(crate) mod engine_interface;
 pub mod entropy;
 pub mod etpao;
 pub mod eval_ab;
