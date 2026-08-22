@@ -17,7 +17,7 @@ pub(in crate::server) async fn dispatch_and_post_process(
 ) -> Result<CallToolResult, ErrorData> {
     let tool_start = std::time::Instant::now();
     let shadow_auto_record = config.shadow.enabled && config.shadow.auto_record;
-    let (mut result_text, tool_saved_tokens, mut shell_outcome, content_blocks) =
+    let (mut result_text, tool_saved_tokens, shell_outcome, content_blocks) =
         match server.dispatch_tool(name, args, minimal).await {
             Ok(tuple) => tuple,
             Err(e) => {
@@ -56,6 +56,7 @@ pub(in crate::server) async fn dispatch_and_post_process(
                 return Err(e);
             }
         };
+    let mut shell_outcome = shell_outcome;
 
     let task_profile = {
         let session = server.session.read().await;
@@ -294,7 +295,9 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // the firewall must NOT replace their content with a structural digest.
     // The output is still *archived* (so ctx_expand works), but stays inline.
     // `minimal` (no-overhead mode) skips even archiving.
-    let archive_hint = if background_status {
+    let archive_hint = if minimal {
+        None
+    } else if background_status {
         use crate::core::archive;
         let chars = result_text.chars().count();
         let lines = result_text.lines().count();
@@ -307,7 +310,7 @@ pub(in crate::server) async fn dispatch_and_post_process(
             format!("{chars} chars, {lines} lines")
         };
         let mut stored_result = None;
-        if !minimal && archive::should_archive(&result_text) {
+        if archive::should_archive(&result_text) {
             let job_id = match shell_outcome.as_ref() {
                 Some(crate::server::tool_trait::ShellOutcome::Background(outcome)) => {
                     outcome.job_id.clone()
@@ -363,8 +366,6 @@ pub(in crate::server) async fn dispatch_and_post_process(
                 outcome.archived_chars = Some(stored.archived_chars);
             }
         }
-        None
-    } else if minimal {
         None
     } else {
         use crate::core::archive;
