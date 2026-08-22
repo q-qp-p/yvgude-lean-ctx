@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[path = "../src/v2.rs"]
@@ -244,4 +245,48 @@ fn v2_rejects_impossible_rfc3339_created_at_before_trust_evaluation() {
 
     assert!(!report.valid);
     assert_eq!(report.steps[0].name, "v2 structure");
+}
+
+#[test]
+fn v2_cli_proves_external_trust_and_rejects_tampered_sidecars() {
+    let proof = fixture();
+    let bundle_path = proof.root.join("customer-proof.json");
+    let trust_store_path = proof.root.join("trust-store.json");
+    fs::write(&bundle_path, &proof.bundle).unwrap();
+    fs::write(&trust_store_path, &proof.trust_store).unwrap();
+
+    let verify = || {
+        Command::new(env!("CARGO_BIN_EXE_leanctx-verify"))
+            .args([
+                "v2",
+                bundle_path.to_str().unwrap(),
+                "--trust-store",
+                trust_store_path.to_str().unwrap(),
+                "--artifact-root",
+                proof.root.to_str().unwrap(),
+                "--json",
+            ])
+            .output()
+            .expect("standalone verifier binary must execute")
+    };
+
+    let output = verify();
+    assert!(
+        output.status.success(),
+        "expected valid V2 proof: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["valid"], Value::Bool(true));
+    assert_eq!(report["proof_eligible"], Value::Bool(true));
+
+    fs::write(proof.root.join("arms/control.json"), b"tampered").unwrap();
+    let output = verify();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["valid"], Value::Bool(false));
+    assert_eq!(
+        report["steps"][0]["name"],
+        Value::String("artifact inventory".into())
+    );
 }

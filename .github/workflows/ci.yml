@@ -346,6 +346,37 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
 
+
+  evidence-verifier:
+    # This is deliberately separate from the engine workspace: it verifies the
+    # published V1 archive and V2 customer-proof contracts without linking
+    # LeanCTX, and must remain buildable as an auditor's offline binary.
+    name: Evidence Verifier (standalone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: packages/leanctx-verify -> target
+      - name: Format
+        working-directory: packages/leanctx-verify
+        run: cargo fmt --check
+      - name: Test (V1 frozen boundary + V2 external trust)
+        working-directory: packages/leanctx-verify
+        run: cargo test
+      - name: Clippy
+        working-directory: packages/leanctx-verify
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Release build
+        working-directory: packages/leanctx-verify
+        run: cargo build --release
+
   embed-sdk:
     # Track A — the in-process embedding SDK (rust/crates/lean-ctx-sdk). It is a
     # workspace member but excluded from `default-members`, so the engine's own
