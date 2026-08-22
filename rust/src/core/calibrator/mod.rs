@@ -48,6 +48,8 @@ mod tests {
             mean_latency_ms: 100.0,
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
+            quality_evaluated: true,
+            receipt_evidence_complete: false,
         }
     }
 
@@ -63,7 +65,7 @@ mod tests {
         let report = calibrate(results, &CalibrationConfig::default());
         assert!(!report.frontier.is_empty());
         assert!(report.recommendation.is_some());
-        assert!(report.report_text.contains("RECOMMENDED"));
+        assert!(report.report_text.contains("OBSERVED"));
     }
 
     #[test]
@@ -71,9 +73,8 @@ mod tests {
         let results = vec![result("bad-a", 0.10, 0.80), result("bad-b", 0.20, 0.85)];
         let report = calibrate(results, &CalibrationConfig::default());
         assert!(report.frontier.is_empty());
-        assert!(report.recommendation.is_some());
-        assert!(report.report_text.contains("RECOMMENDED"));
-        assert!(report.report_text.contains("closest to quality floor"));
+        assert!(report.recommendation.is_none());
+        assert!(report.report_text.contains("No recommendation"));
     }
 
     #[test]

@@ -116,7 +116,7 @@ cargo fmt --check
 | 4.5 | Add capability ID + version to Receipt schema | **done** (634dedc) |
 | 4.6 | Run Benchmark through capability path (same result, new plumbing) | **done** (634dedc) |
 | 4.7 | Write conformance test for `compression_provider` | **done** (634dedc) |
-| 4.8 | Sample external local-process capability (trivial example) | pending |
+| 4.8 | Sample external local-process capability (trivial example) | **done** (discovery, fixed executable boundary, bounded stdio, timeout/disable, registry + conformance; 10,199 Rust tests and 3 cookbook tests) |
 
 ---
 
@@ -158,7 +158,7 @@ entwickelt.
 | 6.7 | Implement calibrate CLI command | done |
 | 6.8 | Agent Connector v0: programmatic invocation of one agent for benchmark | **done** (AgentConnector trait + Codex/Claude/Cursor connectors + detection; 3 tests) |
 | 6.9 | LocalRunner wiring and named-profile propagation for live calibration | **done** (LocalRunner, timeout, and `LEAN_CTX_PROFILE` propagation) |
-| 6.10 | Local verified comparison artifact: explicit quality evaluator + Receipt linkage | next |
+| 6.10 | Local verified comparison artifact: explicit quality evaluator + Receipt linkage | **in progress** (deterministic evaluator + `--spec` gate + canonical locally signed connector receipt from explicit provider usage/cost; live paid-provider evidence remains) |
 
 **Anti-scope:** No gamification, social profiles, achievements, badges, community platform, marketplace. V1 = one agent, two profiles, controlled benchmark, Receipt, recommendation.
 

@@ -6,8 +6,11 @@ use crate::core::agent_connector::traits::{AgentConnector, TaskRequest, TaskResu
 #[cfg(test)]
 use crate::core::agent_connector::traits::{AgentInfo, TokenUsage};
 use crate::core::benchmark_spec::types::{
-    BenchmarkOutcome, BenchmarkResult, BenchmarkSpecV1, BenchmarkSummary, BenchmarkTask, TaskKind,
+    BenchmarkEvaluation, BenchmarkOutcome, BenchmarkResult, BenchmarkSpecV1, BenchmarkSummary,
+    BenchmarkTask, EvaluationSpecV1, TaskKind,
 };
+use crate::core::eval_ab::scorers::score_task;
+use crate::core::eval_ab::suite::{Domain, Task as EvaluationTask};
 
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
 
@@ -55,6 +58,8 @@ impl AgentConnector for MockConnector {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
             }),
+            provider_cost_micros: None,
+            execution_receipt_ref: None,
         })
     }
 
@@ -162,8 +167,8 @@ impl LocalRunner {
                 });
                 let request = self.task_request_for_profile(spec, task, profile_name);
                 let result = self.connector.execute(&request)?;
-                let passed = result.success;
-                let outcome = outcome_from_task_result(task, &result);
+                let outcome = outcome_from_task_result(task, &result, &self.config.working_dir)?;
+                let passed = outcome.passed;
                 on_progress(RunProgress::TaskComplete {
                     task_id: task.id.clone(),
                     passed,
@@ -232,23 +237,75 @@ pub(crate) fn task_to_prompt(task: &BenchmarkTask) -> String {
     format!("{kind_instruction}\n\n{}", task.description)
 }
 
-fn outcome_from_task_result(task: &BenchmarkTask, result: &TaskResult) -> BenchmarkOutcome {
+fn outcome_from_task_result(
+    task: &BenchmarkTask,
+    result: &TaskResult,
+    working_dir: &std::path::Path,
+) -> Result<BenchmarkOutcome> {
     let tokens_in = result.tokens_used.as_ref().map_or(0, |t| t.input_tokens);
     let tokens_out = result.tokens_used.as_ref().map_or(0, |t| t.output_tokens);
-    let cost = (tokens_in as f64 * 3.0 + tokens_out as f64 * 15.0) / 1_000_000.0;
-    BenchmarkOutcome {
+    let cost = result
+        .provider_cost_micros
+        .map_or(0.0, |micros| micros as f64 / 1_000_000.0);
+    let evaluation = task
+        .evaluation
+        .as_ref()
+        .map(|spec| evaluate_task(task, spec, &result.stdout, working_dir))
+        .transpose()?;
+    let (passed, quality_score) = evaluation.as_ref().map_or((false, 0.0), |evaluation| {
+        (evaluation.passed, evaluation.score)
+    });
+    let error = match (result.stderr.trim(), result.success) {
+        (stderr, _) if !stderr.is_empty() => Some(stderr.to_owned()),
+        (_, false) => Some(format!("agent exited with code {}", result.exit_code)),
+        _ => None,
+    };
+    Ok(BenchmarkOutcome {
         task_id: task.id.clone(),
-        passed: result.success,
+        passed,
         cost_usd: cost,
-        quality_score: if result.success { 1.0 } else { 0.0 },
+        quality_score,
         latency_ms: result.duration_ms,
         tokens_input: tokens_in,
         tokens_output: tokens_out,
-        error: if result.stderr.is_empty() {
-            None
-        } else {
-            Some(result.stderr.clone())
-        },
+        error,
+        evaluation,
+        execution_receipt_ref: result.execution_receipt_ref.clone(),
+    })
+}
+
+fn evaluate_task(
+    task: &BenchmarkTask,
+    spec: &EvaluationSpecV1,
+    output: &str,
+    working_dir: &std::path::Path,
+) -> Result<BenchmarkEvaluation> {
+    spec.validate().map_err(anyhow::Error::msg)?;
+    match spec {
+        EvaluationSpecV1::Qa {
+            answers,
+            minimum_f1,
+        } => {
+            let evaluation_task = EvaluationTask {
+                id: task.id.clone(),
+                domain: Domain::Qa,
+                prompt: task.description.clone(),
+                workspace: working_dir.display().to_string(),
+                retrieval_query: None,
+                answers: answers.clone(),
+                target_file: None,
+                test_cmd: None,
+            };
+            let score = score_task(&evaluation_task, output, working_dir)?;
+            Ok(BenchmarkEvaluation {
+                evaluator_id: spec.id().to_owned(),
+                metric: score.metric,
+                score: score.value,
+                passed: score.passed && score.value >= *minimum_f1,
+                detail: score.detail,
+                output_digest: blake3::hash(output.as_bytes()).to_hex().to_string(),
+            })
+        }
     }
 }
 
@@ -283,6 +340,10 @@ mod tests {
                         description: "Do task 1".into(),
                         kind: TaskKind::Explore,
                         timeout_ms: Some(60_000),
+                        evaluation: Some(EvaluationSpecV1::Qa {
+                            answers: vec!["task output".into()],
+                            minimum_f1: 1.0,
+                        }),
                     },
                     BenchmarkTask {
                         id: "t2".into(),
@@ -290,6 +351,10 @@ mod tests {
                         description: "Do task 2".into(),
                         kind: TaskKind::FixBug,
                         timeout_ms: Some(120_000),
+                        evaluation: Some(EvaluationSpecV1::Qa {
+                            answers: vec!["task output".into()],
+                            minimum_f1: 1.0,
+                        }),
                     },
                 ],
             },
@@ -318,6 +383,89 @@ mod tests {
         assert_eq!(result.outcomes.len(), 2);
         assert!(result.outcomes.iter().all(|o| o.passed));
         assert_eq!(result.summary.passed_tasks, 2);
+        assert!(result.summary.quality_evaluated);
+        assert!(!result.summary.receipt_evidence_complete);
+    }
+
+    #[test]
+    fn evaluator_not_exit_code_decides_quality_and_preserves_receipt_link() {
+        let mut spec = test_spec();
+        let task = spec.suite.tasks.remove(0);
+        let result = TaskResult {
+            task_id: task.id.clone(),
+            agent: "mock".into(),
+            model: "test-model".into(),
+            success: false,
+            exit_code: 1,
+            stdout: "task output".into(),
+            stderr: String::new(),
+            duration_ms: 1000,
+            tokens_used: None,
+            provider_cost_micros: None,
+            execution_receipt_ref: Some("receipt:task-1".into()),
+        };
+
+        let outcome = outcome_from_task_result(&task, &result, std::path::Path::new("."))
+            .expect("declared evaluator should score output");
+
+        assert!(outcome.passed);
+        assert_eq!(outcome.quality_score, 1.0);
+        assert_eq!(
+            outcome.execution_receipt_ref.as_deref(),
+            Some("receipt:task-1")
+        );
+        assert_eq!(outcome.error.as_deref(), Some("agent exited with code 1"));
+    }
+
+    #[test]
+    fn outcome_uses_only_explicit_provider_cost() {
+        let mut spec = test_spec();
+        let task = spec.suite.tasks.remove(0);
+        let result = TaskResult {
+            task_id: task.id.clone(),
+            agent: "mock".into(),
+            model: "test-model".into(),
+            success: true,
+            exit_code: 0,
+            stdout: "task output".into(),
+            stderr: String::new(),
+            duration_ms: 1_000,
+            tokens_used: Some(TokenUsage {
+                input_tokens: 1_000,
+                output_tokens: 500,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+            }),
+            provider_cost_micros: Some(42),
+            execution_receipt_ref: Some("receipt:task-1".into()),
+        };
+
+        let outcome = outcome_from_task_result(&task, &result, std::path::Path::new("."))
+            .expect("declared evaluator should score output");
+        assert!((outcome.cost_usd - 0.000_042).abs() < f64::EPSILON);
+
+        let unpriced = TaskResult {
+            provider_cost_micros: None,
+            ..result
+        };
+        let outcome = outcome_from_task_result(&task, &unpriced, std::path::Path::new("."))
+            .expect("declared evaluator should score output");
+        assert_eq!(outcome.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn missing_evaluator_blocks_quality_floor() {
+        let mut spec = test_spec();
+        spec.suite.tasks[0].evaluation = None;
+        let runner = LocalRunner::new(RunConfig::default(), Box::new(MockConnector::new(true)));
+
+        let result = runner
+            .run(&spec)
+            .expect("runner should preserve observed output");
+
+        assert!(!result.summary.quality_evaluated);
+        assert!(!result.summary.quality_floor_met);
+        assert!(!result.outcomes[0].passed);
     }
 
     #[test]
@@ -336,6 +484,7 @@ mod tests {
             description: "Use the runner default".into(),
             kind: TaskKind::Custom,
             timeout_ms: None,
+            evaluation: None,
         };
         assert_eq!(
             runner.task_request(&spec, &task_without_timeout).timeout_ms,
@@ -380,6 +529,7 @@ mod tests {
                 description: "Test task".into(),
                 kind: *kind,
                 timeout_ms: None,
+                evaluation: None,
             };
             let prompt = task_to_prompt(&task);
             assert!(!prompt.is_empty());

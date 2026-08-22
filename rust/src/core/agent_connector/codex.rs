@@ -1,3 +1,4 @@
+use super::receipt::{record_provider_receipt, visible_output};
 use super::timeout::run_with_timeout;
 use super::traits::{
     AgentConnector, AgentInfo, TaskRequest, TaskResult, TokenUsage, apply_profile_environment,
@@ -32,6 +33,7 @@ impl AgentConnector for CodexConnector {
         let start = Instant::now();
         let mut cmd = Command::new(&self.info.path);
         cmd.arg("exec")
+            .arg("--json")
             .arg("--approve-for-me")
             .arg(&request.prompt)
             .current_dir(&request.working_dir);
@@ -45,6 +47,16 @@ impl AgentConnector for CodexConnector {
         if timed_output.timed_out {
             stderr.push_str(&format!("task timed out after {}ms", request.timeout_ms));
         }
+        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let receipt = record_provider_receipt("codex", "openai", request, &raw_stdout, duration_ms);
+        let tokens_used = receipt
+            .as_ref()
+            .map(|link| link.tokens_used)
+            .or_else(|| parse_codex_usage(&output.stdout));
+        let provider_cost_micros = receipt.as_ref().map(|link| link.provider_cost_micros);
+        let execution_receipt_ref = receipt.map(|link| link.reference);
+        let stdout = visible_output(&raw_stdout);
         Ok(TaskResult {
             task_id: request.id.clone(),
             agent: "codex".into(),
@@ -55,10 +67,12 @@ impl AgentConnector for CodexConnector {
             } else {
                 output.status.code().unwrap_or(-1)
             },
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stdout,
             stderr,
-            duration_ms: start.elapsed().as_millis() as u64,
-            tokens_used: parse_codex_usage(&output.stdout),
+            duration_ms,
+            tokens_used,
+            provider_cost_micros,
+            execution_receipt_ref,
         })
     }
     fn name(&self) -> &'static str {

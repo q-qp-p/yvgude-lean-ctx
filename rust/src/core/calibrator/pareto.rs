@@ -10,6 +10,11 @@ pub(crate) struct CalibratedResult {
     pub mean_latency_ms: f64,
     pub pass_rate: f64,
     pub quality_floor_met: bool,
+    /// True only when every outcome has an explicit deterministic evaluation.
+    pub quality_evaluated: bool,
+    /// True only when every outcome links an instrumented execution receipt.
+    /// This is evidence linkage, not an independent verification claim.
+    pub receipt_evidence_complete: bool,
 }
 
 impl CalibratedResult {
@@ -24,6 +29,8 @@ impl CalibratedResult {
             mean_latency_ms: benchmark.summary.mean_latency_ms,
             pass_rate: benchmark.summary.pass_rate,
             quality_floor_met: benchmark.summary.quality_floor_met,
+            quality_evaluated: benchmark.summary.quality_evaluated,
+            receipt_evidence_complete: benchmark.summary.receipt_evidence_complete,
         }
     }
 }
@@ -37,6 +44,7 @@ pub(crate) fn compute_pareto_frontier(
         .filter(|r| {
             r.cost_per_task.is_finite()
                 && r.mean_quality.is_finite()
+                && r.quality_evaluated
                 && r.mean_quality >= quality_floor
         })
         .cloned()
@@ -61,7 +69,9 @@ pub(crate) fn compute_pareto_frontier(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::benchmark_spec::types::{BenchmarkOutcome, BenchmarkResult, BenchmarkSummary};
+    use crate::core::benchmark_spec::types::{
+        BenchmarkEvaluation, BenchmarkOutcome, BenchmarkResult, BenchmarkSummary,
+    };
 
     fn result(id: &str, cost: f64, quality: f64) -> CalibratedResult {
         CalibratedResult {
@@ -78,6 +88,8 @@ mod tests {
             mean_latency_ms: 100.0,
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
+            quality_evaluated: true,
+            receipt_evidence_complete: false,
         }
     }
 
@@ -115,6 +127,15 @@ mod tests {
                 tokens_input: 100,
                 tokens_output: 10,
                 error: None,
+                evaluation: Some(BenchmarkEvaluation {
+                    evaluator_id: "qa-f1-v1".into(),
+                    metric: "f1".into(),
+                    score: 1.0,
+                    passed: true,
+                    detail: String::new(),
+                    output_digest: "passed".into(),
+                }),
+                execution_receipt_ref: None,
             },
             BenchmarkOutcome {
                 task_id: "failed".into(),
@@ -125,6 +146,15 @@ mod tests {
                 tokens_input: 100,
                 tokens_output: 10,
                 error: Some("failed".into()),
+                evaluation: Some(BenchmarkEvaluation {
+                    evaluator_id: "qa-f1-v1".into(),
+                    metric: "f1".into(),
+                    score: 0.5,
+                    passed: false,
+                    detail: "failed".into(),
+                    output_digest: "failed".into(),
+                }),
+                execution_receipt_ref: None,
             },
         ];
         let benchmark = BenchmarkResult {

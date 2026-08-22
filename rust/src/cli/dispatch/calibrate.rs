@@ -1,6 +1,7 @@
 use crate::core::agent_connector;
 use crate::core::agent_connector::traits::AgentConnector;
 use crate::core::benchmark_spec::profile_bridge;
+use crate::core::benchmark_spec::types::{BenchmarkSpecV1, BenchmarkSuite};
 use crate::core::calibrator::candidate::CandidateProfile;
 use crate::core::calibrator::pareto::CalibratedResult;
 use crate::core::calibrator::{self, CalibrationConfig};
@@ -28,6 +29,7 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
     let quality_floor = parse_flag_f64(args, "--quality-floor").unwrap_or(0.95);
     let max_candidates = parse_flag_usize(args, "--max-candidates").unwrap_or(12);
     let live = args.iter().any(|arg| arg == "--live");
+    let export_spec = args.iter().any(|arg| arg == "--export-spec");
     let requested_agent = parse_flag_str(args, "--agent");
 
     eprintln!("lean-ctx calibrate");
@@ -48,6 +50,24 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         eprintln!("  available: lean-ctx profile list");
         return 1;
     };
+    let suite = if live {
+        match live_calibration_suite(args) {
+            Ok(suite) => suite,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return 2;
+            }
+        }
+    } else {
+        profile_bridge::default_coding_suite()
+    };
+    if live && suite.tasks.iter().any(|task| task.evaluation.is_none()) {
+        eprintln!(
+            "  Warning: suite has no deterministic evaluator; results remain observed, not eligible."
+        );
+        eprintln!("  Supply --spec PATH with an explicitly evaluated suite for selection.");
+        eprintln!();
+    }
 
     let config = CalibrationConfig {
         quality_floor,
@@ -112,7 +132,8 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
 
         eprintln!("  Using agent:    {}", connector.name());
         eprintln!();
-        match run_live_benchmark_results(&live_candidates, &config, working_dir, connector) {
+        match run_live_benchmark_results(&live_candidates, &config, working_dir, connector, &suite)
+        {
             Ok(results) => results,
             Err(error) => {
                 eprintln!("error: live calibration failed: {error}");
@@ -125,7 +146,11 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
 
     let report = calibrator::calibrate(results, &config);
 
-    println!("{}", report.report_text);
+    if export_spec {
+        eprintln!("{}", report.report_text);
+    } else {
+        println!("{}", report.report_text);
+    }
 
     if let Some(rec) = &report.recommendation {
         eprintln!();
@@ -137,14 +162,24 @@ pub(crate) fn cmd_calibrate(args: &[String]) -> i32 {
         }
     }
 
-    let suite = profile_bridge::default_coding_suite();
     match profile_bridge::create_spec(profile_name, suite) {
         Ok(spec) => {
             let json = serde_json::to_string_pretty(&spec).unwrap_or_default();
             eprintln!();
             eprintln!("  BenchmarkSpec written to stdout (pipe to file):");
             eprintln!("  lean-ctx calibrate {profile_name} --export-spec > spec.json");
-            if args.iter().any(|a| a == "--export-spec") {
+            if export_spec
+                && spec
+                    .suite
+                    .tasks
+                    .iter()
+                    .any(|task| task.evaluation.is_none())
+            {
+                eprintln!(
+                    "  Note: add a deterministic evaluation to every task before using this spec with --live."
+                );
+            }
+            if export_spec {
                 println!("{json}");
             }
         }
@@ -191,6 +226,8 @@ fn simulate_benchmark_results(
                 mean_latency_ms: latency,
                 pass_rate: if quality >= 0.95 { 1.0 } else { 0.8 },
                 quality_floor_met: quality >= 0.95,
+                quality_evaluated: false,
+                receipt_evidence_complete: false,
             }
         })
         .collect()
@@ -201,6 +238,7 @@ fn run_live_benchmark_results(
     calibration_config: &CalibrationConfig,
     working_dir: PathBuf,
     connector: Box<dyn AgentConnector>,
+    suite: &BenchmarkSuite,
 ) -> anyhow::Result<Vec<CalibratedResult>> {
     let agent_name = connector.name().to_owned();
     let runner = LocalRunner::new(
@@ -228,10 +266,7 @@ fn run_live_benchmark_results(
                 candidates.len(),
                 candidate.candidate.label
             );
-            let mut spec = profile_bridge::create_spec(
-                &candidate.profile_name,
-                profile_bridge::default_coding_suite(),
-            )?;
+            let mut spec = profile_bridge::create_spec(&candidate.profile_name, suite.clone())?;
             spec.id = format!("{}-{}", spec.id, candidate.candidate.id);
             spec.name = format!("{} ({})", spec.name, candidate.candidate.label);
             spec.configuration.quality_floor = calibration_config.quality_floor;
@@ -243,6 +278,36 @@ fn run_live_benchmark_results(
             ))
         })
         .collect()
+}
+
+fn live_calibration_suite(args: &[String]) -> Result<BenchmarkSuite, String> {
+    let Some(path) = parse_flag_str(args, "--spec") else {
+        return Ok(profile_bridge::default_coding_suite());
+    };
+    let source = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read benchmark spec '{path}': {error}"))?;
+    let spec: BenchmarkSpecV1 = serde_json::from_str(&source)
+        .map_err(|error| format!("invalid benchmark spec '{path}': {error}"))?;
+    validate_evaluated_suite(&spec.suite)?;
+    Ok(spec.suite)
+}
+
+fn validate_evaluated_suite(suite: &BenchmarkSuite) -> Result<(), String> {
+    if suite.tasks.is_empty() {
+        return Err("benchmark spec must contain at least one task".into());
+    }
+    for task in &suite.tasks {
+        let evaluator = task.evaluation.as_ref().ok_or_else(|| {
+            format!(
+                "benchmark task '{}' has no explicit evaluator; live selection requires one",
+                task.id
+            )
+        })?;
+        evaluator
+            .validate()
+            .map_err(|error| format!("invalid evaluator for task '{}': {error}", task.id))?;
+    }
+    Ok(())
 }
 
 fn build_live_candidates(
@@ -375,17 +440,19 @@ OPTIONS:
     --profiles A,B      Existing profiles to compare with --live (at least two)
     --agent NAME        Agent to use with --live (default: first detected)
     --working-dir PATH  Agent working directory with --live (default: current directory)
+    --spec PATH         Evaluated BenchmarkSpec JSON for --live selection
     --export-spec       Print BenchmarkSpec JSON to stdout
     -h, --help          Show this help
 
 EXAMPLES:
     lean-ctx calibrate
     lean-ctx calibrate coder --quality-floor 0.90
-    lean-ctx calibrate --live --profiles coder,exploration --agent codex --working-dir .
+    lean-ctx calibrate --live --profiles coder,exploration --agent codex --spec bench.json
     lean-ctx calibrate monorepo --max-candidates 20 --export-spec > spec.json
 
 NOTE:
     Live calibration applies each selected profile through LEAN_CTX_PROFILE.
+    --spec requires a deterministic evaluator per task; otherwise runs are observed only.
     Without --live, calibration uses simulated benchmark results."
     );
 }
@@ -393,6 +460,7 @@ NOTE:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::benchmark_spec::types::{BenchmarkTask, EvaluationSpecV1, TaskKind};
     use crate::core::local_runner::runner::MockConnector;
 
     fn candidate() -> CandidateProfile {
@@ -403,6 +471,23 @@ mod tests {
             compression: "balanced".into(),
             reuse_threshold: 0.85,
             capability_variant: "leanctx".into(),
+        }
+    }
+
+    fn evaluated_suite() -> BenchmarkSuite {
+        BenchmarkSuite {
+            kind: crate::core::benchmark_spec::types::BenchmarkKind::TaskScore,
+            tasks: vec![BenchmarkTask {
+                id: "task".into(),
+                name: "Task".into(),
+                description: "Return task output".into(),
+                kind: TaskKind::Custom,
+                timeout_ms: None,
+                evaluation: Some(EvaluationSpecV1::Qa {
+                    answers: vec!["task output".into()],
+                    minimum_f1: 1.0,
+                }),
+            }],
         }
     }
 
@@ -417,6 +502,7 @@ mod tests {
             &config,
             std::env::current_dir().expect("test working directory"),
             Box::new(MockConnector::new(true)),
+            &evaluated_suite(),
         )
         .expect("mock connector must complete live calibration");
 
@@ -424,6 +510,12 @@ mod tests {
         assert_eq!(results[0].candidate.id, "candidate-001");
         assert_eq!(results[0].pass_rate, 1.0);
         assert!(results[0].quality_floor_met);
+    }
+
+    #[test]
+    fn live_selection_requires_an_evaluator_for_each_task() {
+        assert!(validate_evaluated_suite(&profile_bridge::default_coding_suite()).is_err());
+        assert!(validate_evaluated_suite(&evaluated_suite()).is_ok());
     }
 
     #[test]

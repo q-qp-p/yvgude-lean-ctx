@@ -17,7 +17,6 @@ pub(crate) struct Recommendation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum RecommendationReason {
     LowestCostAboveFloor,
-    ClosestToFloor,
     OnlyCandidate,
 }
 
@@ -31,7 +30,7 @@ pub(crate) struct BaselineComparison {
 pub(crate) fn recommend(
     all_results: &[CalibratedResult],
     frontier: &[CalibratedResult],
-    config: &CalibrationConfig,
+    _config: &CalibrationConfig,
 ) -> Option<Recommendation> {
     let baseline = all_results.first()?;
     if let Some(best) = frontier.iter().min_by(|a, b| compare_by_preference(a, b)) {
@@ -63,24 +62,7 @@ pub(crate) fn recommend(
             vs_baseline: Some(comparison),
         });
     }
-    all_results
-        .iter()
-        .filter(|result| result.mean_quality.is_finite())
-        .min_by(|a, b| {
-            let distance_order = (a.mean_quality - config.quality_floor)
-                .abs()
-                .total_cmp(&(b.mean_quality - config.quality_floor).abs());
-            distance_order.then_with(|| compare_by_preference(a, b))
-        })
-        .map(|closest| Recommendation {
-            candidate_id: closest.candidate.id.clone(),
-            label: closest.candidate.label.clone(),
-            cost_per_task: closest.cost_per_task,
-            mean_quality: closest.mean_quality,
-            mean_latency_ms: closest.mean_latency_ms,
-            reason: RecommendationReason::ClosestToFloor,
-            vs_baseline: None,
-        })
+    None
 }
 
 fn compare_by_preference(a: &CalibratedResult, b: &CalibratedResult) -> Ordering {
@@ -111,6 +93,8 @@ mod tests {
             mean_latency_ms: 100.0,
             pass_rate: 1.0,
             quality_floor_met: quality >= 0.95,
+            quality_evaluated: true,
+            receipt_evidence_complete: false,
         }
     }
 
@@ -123,10 +107,9 @@ mod tests {
     }
 
     #[test]
-    fn fallback_closest() {
+    fn all_below_floor_returns_no_recommendation() {
         let all = vec![result("baseline", 1.00, 0.90), result("close", 0.50, 0.93)];
-        let rec = recommend(&all, &[], &CalibrationConfig::default()).unwrap();
-        assert_eq!(rec.candidate_id, "close");
+        assert!(recommend(&all, &[], &CalibrationConfig::default()).is_none());
     }
 
     #[test]

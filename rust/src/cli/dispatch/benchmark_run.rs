@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn non_dry_run_uses_local_runner_without_legacy_message() {
+    fn unevaluated_suite_uses_local_runner_without_claiming_success() {
         let spec = test_spec();
 
         let (exit_code, output) = run_with_connector(
@@ -282,7 +282,7 @@ mod tests {
         .expect("mock connector must run through LocalRunner");
 
         let legacy_message = ["Local Runner not yet", "wired"].join(" ");
-        assert_eq!(exit_code, 0);
+        assert_eq!(exit_code, 1);
         assert!(output.contains("Benchmark Result"));
         assert!(!output.contains(&legacy_message));
     }

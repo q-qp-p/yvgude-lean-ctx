@@ -95,7 +95,9 @@ pub(crate) fn format_json(result: &BenchmarkResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::benchmark_spec::types::{BenchmarkOutcome, BenchmarkSummary};
+    use crate::core::benchmark_spec::types::{
+        BenchmarkEvaluation, BenchmarkOutcome, BenchmarkSummary,
+    };
 
     fn sample_result() -> BenchmarkResult {
         let outcomes = vec![BenchmarkOutcome {
@@ -107,6 +109,15 @@ mod tests {
             tokens_input: 15000,
             tokens_output: 3000,
             error: None,
+            evaluation: Some(BenchmarkEvaluation {
+                evaluator_id: "qa-f1-v1".into(),
+                metric: "f1".into(),
+                score: 0.962,
+                passed: true,
+                detail: String::new(),
+                output_digest: "digest".into(),
+            }),
+            execution_receipt_ref: None,
         }];
         let summary = BenchmarkSummary::from_outcomes(&outcomes, 0.95);
         BenchmarkResult {

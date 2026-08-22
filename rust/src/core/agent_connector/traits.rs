@@ -49,6 +49,13 @@ pub(crate) struct TaskResult {
     pub stderr: String,
     pub duration_ms: u64,
     pub tokens_used: Option<TokenUsage>,
+    /// Explicit provider-reported charge, never a table-derived estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_cost_micros: Option<u64>,
+    /// Canonical receipt emitted from explicit provider usage and cost evidence.
+    /// It remains absent when CLI output does not carry both observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_receipt_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -130,9 +137,12 @@ mod tests {
                 cache_read_tokens: 500,
                 cache_write_tokens: 100,
             }),
+            provider_cost_micros: Some(1_500),
+            execution_receipt_ref: Some("receipt:test".into()),
         };
         let json = serde_json::to_string(&result).unwrap();
         let restored: TaskResult = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.agent, "codex");
+        assert_eq!(restored.provider_cost_micros, Some(1_500));
     }
 }

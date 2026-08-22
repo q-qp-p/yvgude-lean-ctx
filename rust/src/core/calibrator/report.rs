@@ -18,7 +18,11 @@ pub(crate) fn format_calibration_report(
     out.push(format!("  {thin}"));
     for r in results {
         let status = match recommendation {
-            Some(rec) if rec.candidate_id == r.candidate.id => "RECOMMENDED",
+            _ if !r.quality_evaluated => "UNEVALUATED",
+            Some(rec) if rec.candidate_id == r.candidate.id && r.receipt_evidence_complete => {
+                "LINKED"
+            }
+            Some(rec) if rec.candidate_id == r.candidate.id => "OBSERVED",
             _ if r.quality_floor_met => "PASS",
             _ => "FAILED",
         };
@@ -66,7 +70,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn report_contains_recommended() {
+    fn report_marks_unlinked_recommendation_as_observed() {
         let results = vec![CalibratedResult {
             candidate: CandidateProfile {
                 id: "opt".into(),
@@ -81,6 +85,8 @@ mod tests {
             mean_latency_ms: 100.0,
             pass_rate: 1.0,
             quality_floor_met: true,
+            quality_evaluated: true,
+            receipt_evidence_complete: false,
         }];
         let rec = Some(Recommendation {
             candidate_id: "opt".into(),
@@ -96,7 +102,7 @@ mod tests {
             }),
         });
         let report = format_calibration_report(&results, rec.as_ref());
-        assert!(report.contains("RECOMMENDED"));
+        assert!(report.contains("OBSERVED"));
     }
 
     #[test]
@@ -123,6 +129,8 @@ mod tests {
             mean_latency_ms: 100.0,
             pass_rate: 1.0,
             quality_floor_met: true,
+            quality_evaluated: true,
+            receipt_evidence_complete: false,
         }];
         let report = format_calibration_report(&results, None);
         assert!(report.contains(&"é".repeat(30)));

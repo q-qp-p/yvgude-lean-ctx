@@ -44,6 +44,7 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
                 description: "Navigate and understand the codebase structure".into(),
                 kind: TaskKind::Explore,
                 timeout_ms: Some(120_000),
+                evaluation: None,
             },
             BenchmarkTask {
                 id: "locate-regression".into(),
@@ -51,6 +52,7 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
                 description: "Find the source of a known regression".into(),
                 kind: TaskKind::LocateRegression,
                 timeout_ms: Some(180_000),
+                evaluation: None,
             },
             BenchmarkTask {
                 id: "fix-bug".into(),
@@ -58,6 +60,7 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
                 description: "Diagnose and fix a reported bug".into(),
                 kind: TaskKind::FixBug,
                 timeout_ms: Some(300_000),
+                evaluation: None,
             },
             BenchmarkTask {
                 id: "run-tests".into(),
@@ -65,6 +68,7 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
                 description: "Execute the test suite and interpret results".into(),
                 kind: TaskKind::RunTests,
                 timeout_ms: Some(120_000),
+                evaluation: None,
             },
             BenchmarkTask {
                 id: "explain-arch".into(),
@@ -72,6 +76,7 @@ pub(crate) fn default_coding_suite() -> BenchmarkSuite {
                 description: "Produce a clear architectural summary".into(),
                 kind: TaskKind::ExplainArchitecture,
                 timeout_ms: Some(120_000),
+                evaluation: None,
             },
         ],
     }

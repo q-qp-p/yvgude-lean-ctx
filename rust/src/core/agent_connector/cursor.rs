@@ -1,3 +1,4 @@
+use super::receipt::{record_provider_receipt, visible_output};
 use super::timeout::run_with_timeout;
 use super::traits::{
     AgentConnector, AgentInfo, TaskRequest, TaskResult, apply_profile_environment,
@@ -32,8 +33,14 @@ impl AgentConnector for CursorConnector {
         let start = Instant::now();
         let mut cmd = Command::new(&self.info.path);
         cmd.arg("agent")
+            .arg("--print")
+            .arg("--output-format")
+            .arg("stream-json")
             .arg(&request.prompt)
             .current_dir(&request.working_dir);
+        if let Some(model) = &request.model {
+            cmd.arg("--model").arg(model);
+        }
         apply_profile_environment(&mut cmd, request);
         let timed_output = run_with_timeout(&mut cmd, request.timeout_ms)?;
         let output = timed_output.output;
@@ -41,6 +48,14 @@ impl AgentConnector for CursorConnector {
         if timed_output.timed_out {
             stderr.push_str(&format!("task timed out after {}ms", request.timeout_ms));
         }
+        let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let receipt =
+            record_provider_receipt("cursor", "cursor", request, &raw_stdout, duration_ms);
+        let tokens_used = receipt.as_ref().map(|link| link.tokens_used);
+        let provider_cost_micros = receipt.as_ref().map(|link| link.provider_cost_micros);
+        let execution_receipt_ref = receipt.map(|link| link.reference);
+        let stdout = visible_output(&raw_stdout);
         Ok(TaskResult {
             task_id: request.id.clone(),
             agent: "cursor".into(),
@@ -51,10 +66,12 @@ impl AgentConnector for CursorConnector {
             } else {
                 output.status.code().unwrap_or(-1)
             },
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stdout,
             stderr,
-            duration_ms: start.elapsed().as_millis() as u64,
-            tokens_used: None,
+            duration_ms,
+            tokens_used,
+            provider_cost_micros,
+            execution_receipt_ref,
         })
     }
     fn name(&self) -> &'static str {
