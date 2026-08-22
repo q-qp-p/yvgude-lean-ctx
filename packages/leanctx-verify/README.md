@@ -1,8 +1,30 @@
 # leanctx-verify
 
-Standalone offline verifier for LeanCTX evidence bundles
-(`evidence-bundle-v1`). For auditors: **no LeanCTX installation, no
-network access, no trust in the audited system required.**
+Standalone offline verifier for LeanCTX evidence bundles. It has two deliberately
+separate contracts: frozen audit archives (`evidence-bundle-v1`) and customer-proof
+documents (`customer-proof-v2`). For auditors: **no LeanCTX installation or network
+access is required.**
+
+## Customer-proof V2
+
+V2 verifies a canonical JSON document and its bounded, local artifact directory:
+
+```
+leanctx-verify v2 <customer-proof.json> \
+  --trust-store <customer-trust.json> \
+  --artifact-root <proof-directory> [--json]
+```
+
+V2 always requires an external canonical trust store. It never accepts an embedded
+or self-attested key as proof of signer trust. A valid result covers canonical bytes,
+strict JSON (including duplicate-key rejection), signed identity, artifact hashes and
+path containment, matching/quality/replay joins, and the declared claim semantics.
+See `docs/contracts/evidence-bundle-v2.md` and
+`docs/contracts/evidence-bundle-v2-verification-v1.md` for the normative contract.
+
+## Audit bundle V1 (frozen)
+
+V1 remains an archive-integrity verifier:
 
 ```
 leanctx-verify <bundle.zip> [--pubkey <hex ed25519 key>] [--json]
@@ -19,7 +41,7 @@ Five independent checks, each reported PASS/FAIL:
 Exit code `0` = VALID, `1` = INVALID, `2` = usage error.
 
 Without `--pubkey` the manifest's embedded key is used (self-attested
-mode — proves internal consistency only). Auditors should obtain the
+mode — proves internal consistency only; never use it for V2). Auditors should obtain the
 organisation's public key out-of-band; see
 `docs/enterprise/reading-evidence.md` for the full auditor guide.
 
