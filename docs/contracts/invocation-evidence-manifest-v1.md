@@ -1,0 +1,61 @@
+# Invocation Evidence Manifest v1
+
+Status: normative local evidence contract
+Wire owner: `lean-ctx-protocol::InvocationEvidenceManifestV1`
+Media type: `application/vnd.leanctx.invocation-evidence-manifest+json`
+
+`InvocationEvidenceManifestV1` is the strict digest-only join for one admitted
+Engine invocation. It does not replace `ReceiptDocumentV1`, add a ledger field,
+or embed source, policy, capability, invocation, or receipt payload bytes.
+
+## Wire shape
+
+The JSON Schema in `invocation-evidence-manifest-v1.schema.json` is normative.
+Unknown fields are rejected recursively. Collections contain at most 64
+entries; source and capability collections contain at least one entry. All
+digests use `sha256:` followed by exactly 64 lowercase hexadecimal characters.
+Opaque identifiers and references use the shared bounded protocol primitives.
+Schema `maxLength` is a Unicode code-point prefilter; an independent verifier
+MUST additionally enforce the exact shared UTF-8 byte bounds (256 bytes for
+opaque IDs and 1,024 bytes for protocol references). This keeps schema and
+Rust acceptance aligned for multibyte input.
+
+`invocation_ref` is the canonical digest of the exact Engine invocation record.
+`engine_receipt.receipt_digest` identifies the complete Engine receipt bytes,
+and `engine_receipt.receipt_ref` is required to be exactly
+`receipt:<receipt_digest>` (for example,
+`receipt:sha256:aaaaaaaa…`). A matching digest with another locator is invalid.
+
+`source_bindings` is the complete source lineage. Every source locator has one
+digest binding, source locators and digests are unique, and exactly one binding
+has role `input`; all other bindings have role `context`.
+
+`policy_bindings` must contain exactly one unique binding for each role:
+`task_region`, `task_model`, `plan_decision`, and `invocation_admission`.
+Policy locators, digests, and roles are unique. These bindings cover task
+region/model policy, the selected plan decision, and invocation admission.
+
+`capability_bindings` maps each selected capability ID and SemVer pair to the
+digest of its canonical `CapabilityManifestV1` bytes. Capability ID/version
+pairs and manifest digests are unique.
+
+## Canonical bytes
+
+Canonical JSON means:
+
+1. input is valid UTF-8 with no duplicate object key at any depth;
+2. values contain no non-finite numbers, floating-point values, or integers
+   outside the JSON-safe integer range;
+3. objects are recursively sorted by Unicode key and emitted compactly;
+4. arrays retain declared order; strings use JSON UTF-8 escaping rules;
+5. exact raw bytes, including key order, whitespace, escapes, and UTF-8, are
+   the accepted representation.
+
+`InvocationEvidenceManifestV1::from_canonical_bytes` rejects duplicate keys,
+trailing data, alternate whitespace, alternate key order, alternate string
+escaping, unknown fields, and every invalid semantic binding before accepting
+the manifest.
+
+Cross-language byte vectors live under
+`invocation-evidence-manifest/v1/`. Implementations compare canonical bytes,
+not only parsed object equality.

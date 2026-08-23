@@ -42,6 +42,11 @@ persist canonical receipt bytes before appending a chain link.  Retry is
 idempotent by `receipt_id`; changing, deleting, inserting, or reordering an
 accepted receipt invalidates the next link.
 
+`previous_signature_digest` is the `sha256:` digest of the exact predecessor
+receipt's canonical signature-coverage bytes (the bytes returned by
+`ReceiptDocumentV1::signing_bytes`, with only its `signature` field omitted),
+not a digest of the decoded signature text or of the full predecessor JSON.
+
 ## Canonical bytes and signatures
 
 Canonical JSON means:

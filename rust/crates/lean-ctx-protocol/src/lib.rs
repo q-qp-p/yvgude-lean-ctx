@@ -19,6 +19,7 @@ mod engine_interface;
 mod execution;
 pub mod fleet_control;
 mod identity;
+mod invocation_evidence;
 pub mod knowledge;
 pub mod knowledge_routing;
 pub mod outcome;
@@ -46,6 +47,11 @@ pub use gap::{BillingPeriodStatus, EvidenceGapClosedV1, EvidenceGapOpenedV1, Gap
 pub use identity::{
     EventId, HandoffId, KitId, PackageId, PolicyId, ProfileId, ProjectContextId, ProtocolReference,
     RunId, SemanticVersion, Sha256Digest, SourceId, UtcTimestamp, ViewId, WorkspaceId,
+};
+pub use invocation_evidence::{
+    InvocationCapabilityBindingV1, InvocationEngineReceiptBindingV1, InvocationEvidenceManifestV1,
+    InvocationPolicyBindingV1, InvocationPolicyRoleV1, InvocationSourceBindingV1,
+    InvocationSourceRoleV1, MAX_INVOCATION_EVIDENCE_ITEMS,
 };
 pub use knowledge::{ClassificationLevel, KnowledgeObjectV1, ValidityWindow};
 pub use knowledge_routing::{
