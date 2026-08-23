@@ -49,14 +49,14 @@ jobs:
         working-directory: rust
         run: |
           set -euo pipefail
-          cargo package --locked --no-verify --list -p lean-ctx > package-files.txt
+          cargo package --locked --no-verify --list -p lean-ctx > "$RUNNER_TEMP/package-files.txt"
           for asset in \
             assets/ocla/capability-manifests/leanctx/context-optimization-v1.json \
             assets/ocla/capability-manifests/leanctx/passthrough-v1.json \
             assets/ocla/capability-manifests/example/word-count-optimizer-v1.json \
             assets/ocla/capability-manifests/rtk/rtk-shell-v1.json \
             assets/kits/code-review/kit.toml; do
-            grep -Fx "$asset" package-files.txt
+            grep -Fx "$asset" "$RUNNER_TEMP/package-files.txt"
           done
 
   test:
@@ -726,6 +726,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Install delivery test runner
+        run: python3 -m pip install --disable-pip-version-check pytest
       - name: Verify OCLA contract-pack suite
         run: |
           cargo build --locked --manifest-path clients/rust/lean-ctx-client/Cargo.toml \

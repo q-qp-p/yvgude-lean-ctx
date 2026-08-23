@@ -564,10 +564,7 @@ fn selection_id(record: &ManualSelectionRecordV1) -> String {
 }
 
 fn reject_environment_override() -> Result<(), String> {
-    if std::env::var("LEAN_CTX_PROFILE")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
+    if std::env::var("LEAN_CTX_PROFILE").is_ok_and(|value| !value.trim().is_empty()) {
         return Err("LEAN_CTX_PROFILE overrides config; unset it before apply or rollback".into());
     }
     Ok(())

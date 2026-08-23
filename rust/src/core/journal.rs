@@ -147,10 +147,7 @@ pub fn maybe_day_separator() {
         }
 
         let today = Local::now().format("%Y-%m-%d").to_string();
-        if std::fs::read_to_string(journal_day_path())
-            .ok()
-            .is_some_and(|stored| stored.trim() == today)
-        {
+        if std::fs::read_to_string(journal_day_path()).is_ok_and(|stored| stored.trim() == today) {
             return;
         }
 
