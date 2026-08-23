@@ -109,7 +109,7 @@ class DeliveryManifestTests(unittest.TestCase):
                 VERIFIER.confined_file(ROOT, str((directory / "linked/sbom.cdx.json").relative_to(ROOT)))
 
     def test_rejects_symlink_escape(self):
-        with tempfile.NamedTemporaryFile(dir="/private/tmp") as outside, tempfile.TemporaryDirectory(dir=ROOT) as directory:
+        with tempfile.NamedTemporaryFile() as outside, tempfile.TemporaryDirectory(dir=ROOT) as directory:
             link = Path(directory) / "outside.json"
             link.symlink_to(outside.name)
             with self.assertRaises(VERIFIER.InvalidManifest):
