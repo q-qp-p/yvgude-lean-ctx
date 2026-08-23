@@ -3,7 +3,7 @@
 **Status:** Active — single source of truth for all execution  
 **Owner:** Yves Gugger  
 **Created:** 2026-08-20  
-**Updated:** 2026-08-22
+**Updated:** 2026-08-23
 **Tracking:** GitLab issues on `origin` (project ID 5, `gitlab.pounce.ch/root/lean-ctx`)
 
 ---
@@ -11,12 +11,12 @@
 ## Workstreams (parallel)
 
 ```text
-WS-1: CODEBASE CLEANUP          ██████████  DONE (2026-08-20)
+WS-1: CODEBASE CLEANUP          ██████████  Cleanup done; P0 delivery gate closed; CI security aggregation remains
 WS-2: SDK V1 + EVIDENCE         ██████████  Phase-A substrate complete; public SDK remains Preview
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     ██████████  Substrate complete; public capability composition remains Research
+WS-4: OCLA + COMPOSABLE (B)     ██████████  Substrate complete; P1 runtime caller remains open
 WS-5: PARTNERSHIP (C)           —— DEFERRED (no near-term partner execution)
-WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; no automated selection claims
+WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; P2 evidence gate remains open
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
 WS-8: MANUAL SELECTION (D)      ██████░░░░  Signed evidence is revalidated at apply time; independent verification and cross-implementation conformance remain
 WS-9: THINKERY CONTROL PLANE(E) ░░░░░░░░░░  Private commercial work; separate repository/infrastructure
@@ -31,6 +31,22 @@ the ContextWorkspace, checkpoint and `.ctxpkg` target gates are in
 The cross-product implementation sequence, RFC backlog and stop conditions are
 in [`../vision/08-COMPLETE-IMPLEMENTATION-ROADMAP.md`](../vision/08-COMPLETE-IMPLEMENTATION-ROADMAP.md).
 This file schedules approved work; it does not supersede those authorities.
+
+## Cross-product execution state
+
+| Roadmap phase | Current state | Next exit |
+| --- | --- | --- |
+| **P0 — delivery/security** | Partial: local promotion is now fail-closed — exact-tag, OCLA conformance, signed manifest, evidence, and rehearsal gates block build/release/publishing; contract metadata and immutable artifact hashes are verified. Regular CI still needs one explicit delivery/security aggregation job. | Wire the delivery and security suites into regular CI, then complete a clean CI release rehearsal. |
+| **P1 — Engine runtime spine** | Pending: Engine interface and native adapter proofs exist, but no canonical `ctx_read`/daemon caller invokes `NativeContextEngine`. | One bounded compression caller with policy/identity/digest/receipt linkage and a real-path fixture. |
+| **P2 — canonical evidence** | Partial: receipt, ledger and verifier substrates exist but have no single producer-to-ledger-to-independent-verifier chain. | Canonical Task → Plan → Invocation → Receipt → Outcome projection and replay/tamper verification. |
+| **P3 — Python Preview** | Blocked on P1/P2: the wrapper is fixture-backed; Rust session/Kit/receipt routes are absent. | Live-runtime parity or an explicitly narrowed facade with migration tests. |
+| **P4 — production SDK repo** | Not entered: all four repository/license/release/security approvals remain pending. | Approved decision record plus P3 evidence, then separate SDK repo and five-primitive contract. |
+| **P5–P7 — Workspace, package, handoff** | Research queue: target architecture only. | Start only after P4; never promote legacy stores/artifacts as the new truth. |
+| **P8–P9 — Cloud/optimization** | Private and blocked. | Separate private repository only after local proof, trusted evidence and designated owners. |
+
+**Execution order:** P0 release/security repair → P1 runtime Engine caller →
+P2 canonical evidence → P3 live Python Preview parity → P4 SDK repository.
+No later workstream may bypass an earlier exit.
 
 ---
 
