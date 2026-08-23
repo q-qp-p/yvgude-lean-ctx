@@ -414,6 +414,7 @@ mod unix {
 
         #[cfg(target_os = "linux")]
         {
+            // SAFETY: both directory descriptors are held; names are NUL-terminated.
             let result = unsafe {
                 libc::renameat2(
                     directory_fd,
@@ -474,10 +475,7 @@ mod unix {
         }
         let publish_errno = errno();
         temp.cleanup()?;
-        if matches!(
-            publish_errno,
-            libc::EPERM | libc::ENOTSUP | libc::EOPNOTSUPP | libc::EXDEV
-        ) {
+        if [libc::EPERM, libc::ENOTSUP, libc::EOPNOTSUPP, libc::EXDEV].contains(&publish_errno) {
             Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned())
         } else {
             Err(ARTIFACT_PUBLISH_FAILED.to_owned())
