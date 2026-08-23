@@ -180,6 +180,8 @@ jobs:
           if [ "$FOUND_CRITICAL" -eq 0 ]; then
             echo "✅ No critical files modified" >> $GITHUB_STEP_SUMMARY
           fi
+      - name: Protocol surface freeze gate
+        run: python3 scripts/check-open-core-boundary.py
 
       - name: Dependency audit
         shell: bash
