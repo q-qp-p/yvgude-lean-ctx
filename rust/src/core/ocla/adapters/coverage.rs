@@ -194,13 +194,19 @@ mod tests {
         path
     }
 
-    fn printf_adapter(temp: &tempfile::TempDir) -> ExternalProcessAdapter {
+    fn stdin_consuming_adapter(temp: &tempfile::TempDir) -> ExternalProcessAdapter {
+        // Keep the child alive until the host closes stdin; an output-only
+        // fixture can exit before `write_all` and race into EPIPE on Linux.
         ExternalProcessAdapter::discover(
             write_manifest(temp),
-            "/usr/bin/printf",
-            [OsString::from(
-                "{\"word_count\":3,\"char_count\":15,\"line_count\":1}",
-            )],
+            "/bin/sh",
+            [
+                OsString::from("-c"),
+                OsString::from(
+                    "while IFS= read -r _; do :; done; \
+                     printf '%s' '{\"word_count\":3,\"char_count\":15,\"line_count\":1}'",
+                ),
+            ],
         )
         .expect("bounded external adapter")
     }
@@ -215,7 +221,7 @@ mod tests {
         .expect("native fixture");
 
         let native = Arc::new(NativeContextAdapter::with_root(temp.path()));
-        let external = Arc::new(printf_adapter(&temp));
+        let external = Arc::new(stdin_consuming_adapter(&temp));
         let registry = AdapterRegistry::new();
         registry
             .register_arc(native.clone())
