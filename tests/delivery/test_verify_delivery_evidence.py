@@ -240,7 +240,7 @@ class DeliveryEvidenceTests(unittest.TestCase):
     def test_rejects_symlink_evidence_before_open(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             link = Path(directory) / "source.rs"
-            link.symlink_to(ROOT / "rust/tests/setup_ci_smoke.rs")
+            link.symlink_to(ROOT / "rust/tests/suite/setup_ci_smoke.rs")
             with self.assertRaisesRegex(
                 VERIFIER.InvalidDeliveryEvidence, "symlink path"
             ):

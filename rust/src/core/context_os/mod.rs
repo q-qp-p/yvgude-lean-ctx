@@ -47,9 +47,18 @@ pub struct ContextOsRuntime {
 
 impl Default for ContextOsRuntime {
     fn default() -> Self {
+        #[cfg(test)]
+        let bus = ContextBus::open_at(
+            crate::core::data_dir::test_sandbox_dir()
+                .join("context-os")
+                .join("context-os.db"),
+        );
+        #[cfg(not(test))]
+        let bus = ContextBus::new();
+
         Self {
             shared_sessions: Arc::new(SharedSessionStore::new()),
-            bus: Arc::new(ContextBus::new()),
+            bus: Arc::new(bus),
             metrics: Arc::new(ContextOsMetrics::default()),
         }
     }
@@ -192,5 +201,21 @@ pub fn secondary_event_kind(tool: &str, action: Option<&str>) -> Option<ContextE
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_bus_uses_stable_process_sandbox() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+        let runtime = ContextOsRuntime::new();
+        let expected = crate::core::data_dir::test_sandbox_dir()
+            .join("context-os")
+            .join("context-os.db");
+
+        assert_eq!(runtime.bus.db_path(), expected);
     }
 }

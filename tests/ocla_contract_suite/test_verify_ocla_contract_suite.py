@@ -63,6 +63,13 @@ class OclaContractSuiteTests(unittest.TestCase):
     def test_contract_pack_artifacts_are_hash_bound(self) -> None:
         SUITE.validate_contract_pack()
 
+    def test_contract_pack_uses_the_single_canonical_proto_path(self) -> None:
+        pack = json.loads(SUITE.CONTRACT_PACK.read_text(encoding="utf-8"))
+        paths = [artifact["path"] for artifact in pack["artifacts"]]
+        self.assertIn("docs/contracts/ocla/v1/ocla.proto", paths)
+        self.assertNotIn("contracts/ocla/v1/ocla.proto", paths)
+        self.assertEqual(paths.count("docs/contracts/ocla/v1/ocla.proto"), 1)
+
     def test_contract_pack_drift_and_extra_entries_fail_closed(self) -> None:
         pack = json.loads(SUITE.CONTRACT_PACK.read_text(encoding="utf-8"))
         drifted = json.loads(json.dumps(pack))

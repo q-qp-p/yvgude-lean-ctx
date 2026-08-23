@@ -40,8 +40,8 @@ change requires a new major pack version; additive compatible changes require
 a minor version; evidence-only corrections require a patch version. The
 explicit `compatibility.supported` array is authoritative: `N-1` is listed only
 while its immutable artifacts and conformance evidence remain supported. The
-current `2.0.0` pack intentionally lists only `2.0.0`; it makes no compatibility
-claim for the tightened `1.0.0` wire schemas.
+current `3.0.0` pack lists `3.0.0` and `2.0.0`; it makes no compatibility
+claim for the superseded `1.0.0` wire schemas.
 
 The committed valid-delivery fixture is reproducible with the public RFC 8032
 test vector used by `tests/delivery/test_verify_delivery_manifest.py`. That

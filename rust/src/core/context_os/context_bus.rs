@@ -369,6 +369,11 @@ impl ContextBus {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn db_path(&self) -> &std::path::Path {
+        &self.inner.db_path
+    }
+
     pub fn subscribe(
         &self,
         workspace_id: &str,

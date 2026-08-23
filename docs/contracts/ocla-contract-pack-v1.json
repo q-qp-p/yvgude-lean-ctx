@@ -21,7 +21,7 @@
       "sha256": "ea27d6010674753f0091f9f55a75448eedf637b858f3901866d4f1dacd36610f"
     },
     {
-      "path": "contracts/ocla/v1/ocla.proto",
+      "path": "docs/contracts/ocla/v1/ocla.proto",
       "sha256": "c381d02f3eaf9af0423a744faac8e6045bc7fb0f20100d9c4ea23f90e51fdeeb"
     },
     {
@@ -30,11 +30,11 @@
     },
     {
       "path": "docs/contracts/README.md",
-      "sha256": "004f5982b5a7a5d4c64a3f65433729efae3a12b013ba422575fc6fd3a7bbf51c"
+      "sha256": "8546326a361b9b888d118b9d67fce1b4340fe4dbaae4ffddd84898e804fe9dc6"
     },
     {
       "path": "docs/contracts/capabilities-contract-v1.md",
-      "sha256": "334e6b25f1700d35d8b4319965d30db3a25b2ac4e01658b99b782a123d967571"
+      "sha256": "d66eb5bdcdaf3740c4ef9ab3cd945bf6b6bd5224fa2c1d0c25b7fbc750c57979"
     },
     {
       "path": "docs/contracts/certification-levels-v1.md",
@@ -42,7 +42,7 @@
     },
     {
       "path": "docs/contracts/conformance-v1.md",
-      "sha256": "c89957e769975df358fd67ec5a97a29b15e180f8f5606e3c4c7c4b20a48ec064"
+      "sha256": "3eed2cc06483e6f25391a39fdf70a62df590267ef708936fad15f18dcf51ae4c"
     },
     {
       "path": "docs/contracts/ocla-agent-envelope-v1.schema.json",
@@ -58,7 +58,7 @@
     },
     {
       "path": "scripts/verify-ocla-contract-suite.py",
-      "sha256": "beae55da08a2f1cf1b65c1c828cada8875d64cb6c136a0b40562aeb235fdcfd9"
+      "sha256": "4e344baa9ddc7c17618824160c9e61c310081fccf8171abc26c09c4ee20e7df9"
     }
   ],
   "compatibility": {

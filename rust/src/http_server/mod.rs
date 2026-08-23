@@ -1512,6 +1512,8 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".git")).expect("git marker");
         std::fs::write(dir.path().join("a.txt"), "ok").expect("file");
         let root_str = dir.path().to_string_lossy().to_string();
+        let workspace = format!("ws-events-{}", std::process::id());
+        let channel = format!("ch-events-{}", std::process::id());
 
         let state = AppState {
             token: None,
@@ -1529,8 +1531,8 @@ mod tests {
         // Directly append an event to the bus — no fire-and-forget timing dependency.
         let rt = context_os::runtime();
         rt.bus.append(
-            "ws1",
-            "ch1",
+            &workspace,
+            &channel,
             &ContextEventKindV1::ToolCallRecorded,
             Some("test-agent"),
             json!({"tool": "ctx_session", "action": "status"}),
@@ -1538,7 +1540,9 @@ mod tests {
 
         let req = Request::builder()
             .method("GET")
-            .uri("/v1/events?workspaceId=ws1&channelId=ch1&since=0&limit=1")
+            .uri(format!(
+                "/v1/events?workspaceId={workspace}&channelId={channel}&since=0&limit=1"
+            ))
             .header("Host", "localhost")
             .header("Accept", "text/event-stream")
             .body(Body::empty())
@@ -1548,7 +1552,7 @@ mod tests {
 
         let msg = read_first_sse_message(resp.into_body()).await;
         assert!(msg.contains("event: tool_call_recorded"), "msg={msg:?}");
-        assert!(msg.contains("\"ws1\""), "msg={msg:?}");
-        assert!(msg.contains("\"ch1\""), "msg={msg:?}");
+        assert!(msg.contains(&format!("\"{workspace}\"")), "msg={msg:?}");
+        assert!(msg.contains(&format!("\"{channel}\"")), "msg={msg:?}");
     }
 }

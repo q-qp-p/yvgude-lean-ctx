@@ -47,9 +47,40 @@ jobs:
             grep -Fx "$asset" package-files.txt
           done
 
+  delivery-gate:
+    name: Release gates (tag + delivery evidence)
+    needs: sdk-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Verify exact release tag coupling
+        run: python3 scripts/check-release-tag.py "${GITHUB_REF_NAME}" --root .
+      - name: Verify OCLA contract-pack suite
+        run: |
+          cargo build --locked --manifest-path clients/rust/lean-ctx-client/Cargo.toml \
+            --bin lean-ctx-ocla-verify
+          python3 scripts/verify-ocla-contract-suite.py \
+            --verifier clients/rust/lean-ctx-client/target/debug/lean-ctx-ocla-verify
+      - name: Verify signed delivery manifest contract
+        run: |
+          python3 scripts/verify-delivery-manifest.py \
+            tests/delivery/valid/delivery-manifest.json \
+            --root . \
+            --trust-root tests/delivery/valid/release-trust-root.json
+      - name: Verify delivery evidence contract
+        run: |
+          python3 scripts/verify-delivery-evidence.py \
+            docs/contracts/delivery-evidence-v1.json --root .
+      - name: Rehearse hermetic rollback contract
+        run: python3 tests/delivery/test_rehearse_delivery.py
+
   build:
     name: Build ${{ matrix.artifact || matrix.target }}
-    needs: sdk-gate
+    needs: delivery-gate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

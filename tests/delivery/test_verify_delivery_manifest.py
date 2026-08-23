@@ -49,17 +49,24 @@ class DeliveryManifestTests(unittest.TestCase):
     def test_valid_manifest(self):
         VERIFIER.verify(FIXTURE, ROOT, TRUST_ROOT)
 
-    def test_contract_pack_declares_only_current_breaking_major(self):
+    def test_contract_pack_declares_closed_current_and_previous_major_set(self):
         pack = json.loads((ROOT / "docs/contracts/ocla-contract-pack-v1.json").read_text())
         VERIFIER.verify_contract_pack_metadata(pack)
-        self.assertEqual(pack["version"], "2.0.0")
-        self.assertEqual(pack["compatibility"]["supported"], ["2.0.0"])
+        self.assertEqual(pack["version"], "3.0.0")
+        self.assertEqual(pack["compatibility"]["supported"], ["3.0.0", "2.0.0"])
         self.assertNotIn("1.0.0", pack["compatibility"]["supported"])
 
         stale = copy.deepcopy(pack)
-        stale["compatibility"]["supported"] = ["1.0.0"]
+        stale["compatibility"]["supported"] = ["3.0.0"]
         with self.assertRaises(VERIFIER.InvalidManifest):
             VERIFIER.verify_contract_pack_metadata(stale)
+
+    def test_contract_pack_metadata_rejects_artifact_digest_drift(self):
+        pack = json.loads((ROOT / "docs/contracts/ocla-contract-pack-v1.json").read_text())
+        drifted = copy.deepcopy(pack)
+        drifted["artifacts"][0]["sha256"] = "0" * 64
+        with self.assertRaises(VERIFIER.InvalidManifest):
+            VERIFIER.verify_contract_pack_metadata(drifted, ROOT)
 
     def test_valid_signature_fixture_is_deterministic_test_vector(self):
         public = VERIFIER.TRUST.public_from_seed(TEST_RELEASE_SEED)

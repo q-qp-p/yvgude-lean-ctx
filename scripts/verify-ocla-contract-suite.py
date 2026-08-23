@@ -36,7 +36,7 @@ CONTRACT_PACK_ARTIFACTS = frozenset(
         "clients/rust/lean-ctx-client/tests/fixtures/invalid-agent-envelope-v1.json",
         "clients/rust/lean-ctx-client/tests/fixtures/invalid-token-envelope-v1.json",
         "clients/rust/lean-ctx-client/tests/fixtures/self-relay-agent-envelope-v1.json",
-        "contracts/ocla/v1/ocla.proto",
+        "docs/contracts/ocla/v1/ocla.proto",
         "docs/contracts/capabilities-contract-v1.md",
         "docs/contracts/conformance-v1.md",
         "docs/contracts/ocla-agent-envelope-v1.schema.json",
@@ -221,7 +221,9 @@ def validate_contract_pack(root: Path = ROOT, pack: object | None = None) -> Non
 
     if pack is None:
         try:
-            pack = json.loads(CONTRACT_PACK.read_text(encoding="utf-8"))
+            pack = json.loads(
+                (root / CONTRACT_PACK.relative_to(ROOT)).read_text(encoding="utf-8")
+            )
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise SuiteError("contract_pack_invalid") from error
     if not isinstance(pack, dict) or pack.get("schema_version") != "leanctx.contract-pack/v1":
