@@ -12,6 +12,7 @@ use crate::core::tokens;
 const MAX_CONTEXT_PATHS: usize = 32;
 
 pub mod coverage;
+#[cfg(unix)]
 pub(crate) mod external_process;
 pub mod native_context;
 pub mod passthrough;
