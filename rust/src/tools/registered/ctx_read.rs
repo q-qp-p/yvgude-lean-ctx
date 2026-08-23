@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmcp::ErrorData;
-use rmcp::model::{ContentBlock, Tool};
+use rmcp::model::Tool;
 use serde_json::{Map, Value, json};
 
 use crate::core::cache::ReuseOutcome;
@@ -54,7 +54,8 @@ impl McpTool for CtxReadTool {
                     "limit": { "type": "integer", "description": "Max lines" },
                     "fresh": { "type": "boolean", "description": "Bypass cache" },
                     "aggressiveness": { "type": "number", "description": "0.0–1.0 density (entropy/task)" },
-                    "protect": { "type": "array", "items": { "type": "string" }, "description": "Symbols kept verbatim" }
+                    "protect": { "type": "array", "items": { "type": "string" }, "description": "Symbols kept verbatim" },
+                    "engine_interface": engine::interface_schema()
                 },
                 "required": []
             }),
@@ -66,6 +67,8 @@ impl McpTool for CtxReadTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
     ) -> Result<ToolOutput, ErrorData> {
+        let engine_interface_v1 = engine::interface_v1_requested(args)?;
+        engine::validate_v1_request_shape(args, engine_interface_v1)?;
         // #509: ctx_read absorbs multi-file batch reads (supersedes ctx_multi_read).
         // A non-empty `paths` array routes to the one shared batch implementation.
         if args
@@ -101,7 +104,7 @@ impl McpTool for CtxReadTool {
         };
 
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.handle_inner(args, ctx, &path)
+            self.handle_inner(args, ctx, &path, engine_interface_v1)
         })) {
             Ok(result) => result,
             Err(_) => Err(ErrorData::internal_error(
@@ -149,6 +152,7 @@ impl CtxReadTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
         path: &str,
+        engine_interface_v1: bool,
     ) -> Result<ToolOutput, ErrorData> {
         let session_lock = ctx
             .session
@@ -226,7 +230,7 @@ impl CtxReadTool {
         let mut fresh = get_bool(args, "fresh").unwrap_or(false);
         // #513: a raw/verbatim request always reads from disk — the whole point
         // is exact current bytes, never a cached stub or delta.
-        if arg_raw {
+        if arg_raw || engine_interface_v1 {
             fresh = true;
         }
         let cache_policy = crate::server::compaction_sync::effective_cache_policy();
@@ -274,12 +278,13 @@ impl CtxReadTool {
             pressure_action,
             resolved_agent_id.as_deref(),
         );
-        if gate_result.budget_blocked {
-            let msg = gate_result
-                .budget_warning
-                .unwrap_or_else(|| "Agent token budget exceeded".to_string());
-            return Err(ErrorData::invalid_params(msg, None));
-        }
+        let mut engine_policy_admission = engine::admission_or_reject(
+            engine_interface_v1,
+            &gate_result,
+            &mode,
+            &ctx.project_root,
+            path,
+        )?;
         let budget_warning = gate_result.budget_warning.clone();
         // #513: an explicit raw/verbatim request is never silently downgraded by
         // the budget gate — the caller asked for exact bytes.
@@ -308,6 +313,13 @@ impl CtxReadTool {
             } else {
                 auto_degrade_read_mode(&mode)
             };
+        engine::require_aggressive(
+            engine_interface_v1,
+            &mode,
+            &ctx.project_root,
+            path,
+            &mut engine_policy_admission,
+        )?;
 
         // Delta-aware explicit re-reads (opt-in: config `delta_explicit`, env
         // LCTX_DELTA_EXPLICIT). Re-requesting full/lines:N-M content for a file
@@ -342,14 +354,20 @@ impl CtxReadTool {
             fresh = true;
         }
 
+        engine::reject_non_text_extension(
+            engine_interface_v1,
+            &ctx.project_root,
+            path,
+            &mut engine_policy_admission,
+        )?;
         if crate::core::binary_detect::is_llm_viewable_image(path) {
             return read_image_file(path);
         }
-        if crate::core::binary_detect::is_binary_file(path) {
+        if !engine_interface_v1 && crate::core::binary_detect::is_binary_file(path) {
             let msg = crate::core::binary_detect::binary_file_message(path);
             return Err(ErrorData::invalid_params(msg, None));
         }
-        {
+        if !engine_interface_v1 {
             let cap = crate::core::limits::max_read_bytes() as u64;
             if let Ok(meta) = std::fs::metadata(path)
                 && meta.len() > cap
@@ -380,12 +398,12 @@ impl CtxReadTool {
         // channel overhead for the ~90% of calls that are cache hits.
         let read_timeout = std::time::Duration::from_secs(30);
         let cancelled = Arc::new(AtomicBool::new(false));
+        let engine_snapshot = engine::SourceSnapshot::default();
         // Hash once for cross-agent delivery (avoids re-reading on record).
-        let delivery_metadata = crate::core::config::Config::load()
-            .ocla
-            .delivery_enabled()
-            .then(|| crate::tools::ctx_read::file_blake3_prefix(path))
-            .flatten();
+        let delivery_metadata = (!engine_interface_v1
+            && crate::core::config::Config::load().ocla.delivery_enabled())
+        .then(|| crate::tools::ctx_read::file_blake3_prefix(path))
+        .flatten();
         let (output, resolved_mode, original, is_cache_hit, file_ref, cache_stats, reuse_outcome) = {
             let crp_mode = ctx.crp_mode;
             let fast_result = 'fast: {
@@ -442,7 +460,9 @@ impl CtxReadTool {
                 let task_owned = current_task.clone();
                 let protect_owned = protect.clone();
                 let path_owned = path.to_string();
+                let project_root_owned = ctx.project_root.clone();
                 let cancel_flag = cancelled.clone();
+                let snapshot_worker = engine_snapshot.clone();
                 let (tx, rx) = std::sync::mpsc::sync_channel(1);
                 std::thread::spawn(move || {
                     let file_lock = per_file_lock(&path_owned);
@@ -531,10 +551,27 @@ impl CtxReadTool {
                     }
 
                     // Phase 2a: disk I/O under per-file lock but WITHOUT cache lock.
-                    let preread = match crate::tools::ctx_read::read_file_lossy(&path_owned) {
+                    let preread = match engine::read_source(
+                        engine_interface_v1,
+                        &path_owned,
+                        &project_root_owned,
+                        &snapshot_worker,
+                    ) {
                         Ok(c) => Some(c),
                         Err(e) => {
                             tracing::warn!("ctx_read: cannot read {path_owned}: {e}");
+                            if engine_interface_v1 {
+                                let _ = tx.send((
+                                    "Engine v1 source read failed".to_owned(),
+                                    "error".into(),
+                                    0,
+                                    false,
+                                    None,
+                                    (0, 0),
+                                    ReuseOutcome::Cold,
+                                ));
+                                return;
+                            }
                             None
                         }
                     };
@@ -1002,10 +1039,26 @@ impl CtxReadTool {
             } // end else (slow path)
         };
 
+        engine::reject_read_failure_if_enabled(
+            engine_interface_v1,
+            &resolved_mode,
+            &ctx.project_root,
+            path,
+            &mut engine_policy_admission,
+        )?;
+        engine::require_aggressive(
+            engine_interface_v1,
+            &resolved_mode,
+            &ctx.project_root,
+            path,
+            &mut engine_policy_admission,
+        )?;
         if resolved_mode == "error" {
             return Err(ErrorData::invalid_params(output, None));
         }
 
+        let engine_warning =
+            engine_snapshot.record_if_enabled(&ctx.project_root, engine_policy_admission);
         let output_tokens = crate::core::tokens::count_tokens(&output);
         let saved = original.saturating_sub(output_tokens);
 
@@ -1278,7 +1331,7 @@ impl CtxReadTool {
                 .unwrap_or_default();
             crate::core::rule_discovery::rules_suffix_for_read(path, &ctx.project_root, &client_id)
         };
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<&str> = engine_warning.as_deref().into_iter().collect();
         if let Some(ref w) = budget_warning {
             warnings.push(w.as_str());
         }
@@ -1352,6 +1405,11 @@ impl CtxReadTool {
     }
 }
 
+#[path = "ctx_read_engine.rs"]
+mod engine;
+#[path = "ctx_read_image.rs"]
+mod image;
+use image::read_image_file;
 #[path = "ctx_read_window.rs"]
 mod window;
 #[allow(unused_imports)]
@@ -1430,53 +1488,12 @@ fn extract_file_summary(output: &str, path: &str) -> String {
 #[path = "ctx_read_inline_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "ctx_read_security_tests.rs"]
+mod security_tests;
+
 // #660 LOC gate: repo-param tests split out to keep this file under the line
 // cap — see `ctx_read_repo_param_tests.rs`.
-
-/// Read an image file and return it as MCP ContentBlock::Image for visual LLM processing.
-fn read_image_file(path: &str) -> Result<ToolOutput, ErrorData> {
-    use crate::core::binary_detect::{IMAGE_MAX_BYTES, image_mime_type};
-    use base64::Engine;
-
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| ErrorData::invalid_params(format!("Cannot read image: {e}"), None))?;
-
-    if metadata.len() > IMAGE_MAX_BYTES {
-        return Err(ErrorData::invalid_params(
-            format!(
-                "Image too large ({:.1} MB, limit {:.0} MB). Resize or use a smaller image.",
-                metadata.len() as f64 / 1024.0 / 1024.0,
-                IMAGE_MAX_BYTES as f64 / 1024.0 / 1024.0,
-            ),
-            None,
-        ));
-    }
-
-    let mime_type = image_mime_type(path)
-        .ok_or_else(|| ErrorData::invalid_params("Unsupported image format".to_string(), None))?;
-
-    let bytes = std::fs::read(path)
-        .map_err(|e| ErrorData::invalid_params(format!("Cannot read image: {e}"), None))?;
-
-    let base64_data = base64::prelude::BASE64_STANDARD.encode(&bytes);
-    let short_name = std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path);
-
-    let text_block = ContentBlock::text(format!(
-        "[Image: {} ({} KB, {})]",
-        short_name,
-        bytes.len() / 1024,
-        mime_type
-    ));
-    let image_block = ContentBlock::image(base64_data, mime_type);
-
-    Ok(ToolOutput::image(
-        vec![text_block, image_block],
-        path.to_string(),
-    ))
-}
 
 #[cfg(test)]
 #[path = "ctx_read_repo_param_tests.rs"]

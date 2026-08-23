@@ -129,7 +129,7 @@ const LLM_VIEWABLE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 pub(crate) const IMAGE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 /// Fast extension-based binary detection (zero I/O).
-fn has_binary_extension(path: &str) -> bool {
+pub(crate) fn has_binary_extension(path: &str) -> bool {
     Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
