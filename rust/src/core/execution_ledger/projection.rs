@@ -20,6 +20,19 @@ pub struct TaskCostSummary {
     pub total_latency_ms: u64,
 }
 
+/// Verified ledger projection of the authoritative canonical receipt artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalReceiptProjectionV1 {
+    pub task_id: String,
+    pub invocation_id: String,
+    pub receipt_id: String,
+    pub receipt_ref: String,
+    pub receipt_digest: String,
+    pub chain_id: String,
+    pub sequence_number: u64,
+    pub previous_receipt_id: Option<String>,
+}
+
 /// Read-only projection facade for callers that want to keep the store explicit.
 pub struct ExecutionProjection<'a> {
     store: &'a ExecutionLedgerStore,
@@ -40,6 +53,15 @@ impl<'a> ExecutionProjection<'a> {
     pub fn receipt_for_task(&self, task_id: &str) -> Option<ExecutionReceiptV1> {
         receipt_for_task_from_store(self.store, task_id)
     }
+
+    /// Returns the latest authoritative canonical receipt for a task.
+    #[must_use]
+    pub fn canonical_receipt_for_task(
+        &self,
+        task_id: &str,
+    ) -> Option<CanonicalReceiptProjectionV1> {
+        canonical_receipt_for_task_from_store(self.store, task_id)
+    }
 }
 
 impl ExecutionLedgerStore {
@@ -54,6 +76,50 @@ impl ExecutionLedgerStore {
     pub fn receipt_for_task(&self, task_id: &str) -> Option<ExecutionReceiptV1> {
         receipt_for_task_from_store(self, task_id)
     }
+
+    /// Returns the latest authoritative canonical receipt for a task.
+    #[must_use]
+    pub fn canonical_receipt_for_task(
+        &self,
+        task_id: &str,
+    ) -> Option<CanonicalReceiptProjectionV1> {
+        canonical_receipt_for_task_from_store(self, task_id)
+    }
+}
+
+/// Projects the latest canonical receipt metadata from a verified event snapshot.
+#[must_use]
+pub fn canonical_receipt_for_task_from_store(
+    store: &ExecutionLedgerStore,
+    task_id: &str,
+) -> Option<CanonicalReceiptProjectionV1> {
+    store.by_task(task_id).into_iter().rev().find_map(|event| {
+        if let ExecutionEvent::CanonicalReceiptRecorded {
+            task_id,
+            invocation_id,
+            receipt_id,
+            receipt_ref,
+            receipt_digest,
+            receipt_chain_id,
+            receipt_sequence_number,
+            previous_receipt_id,
+            ..
+        } = event
+        {
+            Some(CanonicalReceiptProjectionV1 {
+                task_id,
+                invocation_id,
+                receipt_id,
+                receipt_ref,
+                receipt_digest,
+                chain_id: receipt_chain_id,
+                sequence_number: receipt_sequence_number,
+                previous_receipt_id,
+            })
+        } else {
+            None
+        }
+    })
 }
 
 /// Projects the default execution ledger for `task_id`.
@@ -175,7 +241,9 @@ pub fn receipt_for_task_from_store(
             } => receipt_identity = Some((receipt_id, receipt_hash, signature)),
             ExecutionEvent::OutcomeRecorded { outcome_id, .. } => outcome_ref = Some(outcome_id),
             ExecutionEvent::DecisionRecorded { decision_id, .. } => decision_refs.push(decision_id),
-            ExecutionEvent::TaskStarted { .. } => {}
+            ExecutionEvent::TaskStarted { .. }
+            | ExecutionEvent::EngineInvoked { .. }
+            | ExecutionEvent::CanonicalReceiptRecorded { .. } => {}
         }
     }
 

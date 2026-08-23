@@ -13,6 +13,7 @@
 use std::io::Read;
 use std::process::ExitCode;
 
+mod receipt;
 mod v2;
 mod verify;
 

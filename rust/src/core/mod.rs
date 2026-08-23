@@ -49,6 +49,8 @@ pub(crate) mod protect;
 pub mod rabin_karp;
 #[allow(dead_code)]
 pub(crate) mod read_provenance;
+#[allow(dead_code)]
+pub(crate) mod receipt_document_adapter;
 pub mod relevance_tracker;
 pub mod rule_artifacts;
 pub(crate) mod rule_discovery;

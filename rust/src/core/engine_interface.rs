@@ -33,6 +33,15 @@ const RECOVERY_DIRECTORY: &str = "engine-interface/v1/recovery";
 #[path = "engine_artifact.rs"]
 mod artifact_store;
 
+pub(super) fn persist_engine_artifact_content(
+    directory: &str,
+    digest: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<std::fs::File, String> {
+    artifact_store::persist_content(directory, digest, extension, bytes)
+}
+
 /// Inputs intentionally retained inside the local Engine proof boundary.
 ///
 /// The caller provides source and input identities before dispatch. The bridge

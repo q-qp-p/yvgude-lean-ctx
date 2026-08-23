@@ -25,24 +25,46 @@ const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CustomerProofArtifactKind {
     ArmReceipt,
+    ReceiptPredecessor,
     QualityMeasurement,
     ReplayInput,
     ReplayResult,
     RunMetadata,
     ClaimBasis,
     FrozenAuditBundleV1,
+    TaskEnvelope,
+    ExecutionPlan,
+    EngineInvocation,
+    AcceptedOutcome,
+    Measurement,
+    Assumption,
+    Formula,
+    PriceTable,
+    Invoice,
+    AcceptanceEvidence,
 }
 
 impl CustomerProofArtifactKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::ArmReceipt => "arm_receipt",
+            Self::ReceiptPredecessor => "receipt_predecessor",
             Self::QualityMeasurement => "quality_measurement",
             Self::ReplayInput => "replay_input",
             Self::ReplayResult => "replay_result",
             Self::RunMetadata => "run_metadata",
             Self::ClaimBasis => "claim_basis",
             Self::FrozenAuditBundleV1 => "frozen_audit_bundle_v1",
+            Self::TaskEnvelope => "task_envelope",
+            Self::ExecutionPlan => "execution_plan",
+            Self::EngineInvocation => "engine_invocation",
+            Self::AcceptedOutcome => "accepted_outcome",
+            Self::Measurement => "measurement",
+            Self::Assumption => "assumption",
+            Self::Formula => "formula",
+            Self::PriceTable => "price_table",
+            Self::Invoice => "invoice",
+            Self::AcceptanceEvidence => "acceptance_evidence",
         }
     }
 }

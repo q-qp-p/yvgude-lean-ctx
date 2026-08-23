@@ -306,11 +306,22 @@ fn parse_v2_artifact(
 
     let kind = match input.kind.as_str() {
         "arm_receipt" => Kind::ArmReceipt,
+        "receipt_predecessor" => Kind::ReceiptPredecessor,
         "quality_measurement" => Kind::QualityMeasurement,
         "replay_input" => Kind::ReplayInput,
         "replay_result" => Kind::ReplayResult,
         "run_metadata" => Kind::RunMetadata,
         "claim_basis" => Kind::ClaimBasis,
+        "task_envelope" => Kind::TaskEnvelope,
+        "execution_plan" => Kind::ExecutionPlan,
+        "engine_invocation" => Kind::EngineInvocation,
+        "accepted_outcome" => Kind::AcceptedOutcome,
+        "measurement" => Kind::Measurement,
+        "assumption" => Kind::Assumption,
+        "formula" => Kind::Formula,
+        "price_table" => Kind::PriceTable,
+        "invoice" => Kind::Invoice,
+        "acceptance_evidence" => Kind::AcceptanceEvidence,
         "frozen_audit_bundle_v1" => Kind::FrozenAuditBundleV1,
         _ => anyhow::bail!("unsupported V2 artifact kind '{}'", input.kind),
     };

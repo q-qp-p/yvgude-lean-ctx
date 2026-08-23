@@ -24,7 +24,7 @@
     "agent_id": { "$ref": "#/$defs/identifier" },
     "complexity": {
       "type": "string",
-      "enum": ["low", "medium", "high", "critical"]
+      "enum": ["unknown", "low", "medium", "high", "critical"]
     },
     "created_at": { "type": "string", "format": "date-time", "minLength": 1 },
     "parent_task_id": { "anyOf": [{ "$ref": "#/$defs/identifier" }, { "type": "null" }] },
