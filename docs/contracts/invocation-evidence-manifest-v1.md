@@ -23,7 +23,7 @@ validator `InvocationEvidenceManifestV1::from_canonical_bytes`. The
 machine-readable `x-conformance` metadata declares this two-stage requirement
 and that `x-maxUtf8Bytes` is only a schema annotation whose semantic check is
 mandatory. References that are whitespace-only or contain C0/C1 controls,
-including U+0085, are invalid.
+including U+0085, or contain U+FEFF are invalid.
 
 `invocation_ref` is the canonical digest of the exact Engine invocation record.
 `engine_receipt.receipt_digest` identifies the complete Engine receipt bytes,

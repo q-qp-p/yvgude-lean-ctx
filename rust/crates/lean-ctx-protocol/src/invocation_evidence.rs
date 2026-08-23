@@ -78,6 +78,7 @@ pub struct InvocationEngineReceiptBindingV1 {
 
 impl InvocationEngineReceiptBindingV1 {
     fn validate(&self) -> Result<(), ValidationError> {
+        validate_manifest_reference(&self.receipt_ref, "receipt_ref")?;
         let expected = format!("receipt:{}", self.receipt_digest.as_str());
         if self.receipt_ref.as_str() != expected {
             return Err(ValidationError::new(
@@ -86,6 +87,18 @@ impl InvocationEngineReceiptBindingV1 {
         }
         Ok(())
     }
+}
+
+fn validate_manifest_reference(
+    reference: &ProtocolReference,
+    field: &str,
+) -> Result<(), ValidationError> {
+    if reference.as_str().contains('\u{feff}') {
+        return Err(ValidationError::new(format!(
+            "{field} must not contain U+FEFF"
+        )));
+    }
+    Ok(())
 }
 
 /// Strict, canonical evidence join for one Engine invocation.
@@ -161,6 +174,7 @@ fn validate_source_bindings(bindings: &[InvocationSourceBindingV1]) -> Result<()
     let mut digests = BTreeSet::new();
     let mut input_count = 0usize;
     for binding in bindings {
+        validate_manifest_reference(&binding.source_ref, "source_ref")?;
         if binding.source_ref.as_str().trim().is_empty() {
             return Err(ValidationError::new(
                 "InvocationSourceBindingV1 source_ref must not be empty",
@@ -198,6 +212,7 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
     let mut digests = BTreeSet::new();
     let mut roles = BTreeSet::new();
     for binding in bindings {
+        validate_manifest_reference(&binding.policy_ref, "policy_ref")?;
         if binding.policy_ref.as_str().trim().is_empty() {
             return Err(ValidationError::new(
                 "InvocationPolicyBindingV1 policy_ref must not be empty",
@@ -530,6 +545,24 @@ mod tests {
     }
 
     #[test]
+    fn manifest_protocol_references_reject_feff_on_all_paths() {
+        let mut manifest = valid_manifest();
+        manifest.source_bindings[0].source_ref = reference("source:\u{feff}");
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid_manifest();
+        manifest.policy_bindings[0].policy_ref = reference("policy:\u{feff}");
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid_manifest();
+        manifest.engine_receipt.receipt_ref = reference(&format!(
+            "receipt:\u{feff}{}",
+            manifest.engine_receipt.receipt_digest.as_str()
+        ));
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn canonical_decoder_rejects_whitespace_key_order_and_duplicates() {
         let canonical = valid_manifest().canonical_bytes().expect("canonicalizes");
         let pretty =
@@ -683,6 +716,9 @@ mod tests {
             "invalid-missing-invocation-admission.json",
             "invalid-whitespace-reference.json",
             "invalid-c1-control-reference.json",
+            "invalid-feff-source-reference.json",
+            "invalid-feff-policy-reference.json",
+            "invalid-feff-receipt-reference.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-unknown-field.json" => include_bytes!(
@@ -726,6 +762,15 @@ mod tests {
                 ),
                 "invalid-c1-control-reference.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-c1-control-reference.json"
+                ),
+                "invalid-feff-source-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-feff-source-reference.json"
+                ),
+                "invalid-feff-policy-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-feff-policy-reference.json"
+                ),
+                "invalid-feff-receipt-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-feff-receipt-reference.json"
                 ),
                 _ => unreachable!(),
             };
