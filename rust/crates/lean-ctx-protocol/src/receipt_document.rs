@@ -563,13 +563,13 @@ impl ReceiptDocumentV1 {
         self.outcome.validate(&evidence)?;
         match (self.status, self.outcome.state) {
             (ReceiptTerminalStatusV1::Rejected, AcceptanceState::Rejected)
-            | (_, AcceptanceState::Unknown)
             | (ReceiptTerminalStatusV1::Succeeded, AcceptanceState::Accepted) => {}
             (ReceiptTerminalStatusV1::Rejected, _) => {
                 return Err(ValidationError::new(
                     "rejected terminal status requires a rejected outcome",
                 ));
             }
+            (_, AcceptanceState::Unknown) => {}
             (_, AcceptanceState::Rejected) => {
                 return Err(ValidationError::new(
                     "rejected outcome requires a rejected terminal status",
@@ -1115,6 +1115,9 @@ mod tests {
     fn rejected_outcome_requires_outcome_evidence_and_terminal_status() {
         let mut document = document();
         document.status = ReceiptTerminalStatusV1::Rejected;
+        document.receipt_id = document.derived_receipt_id().unwrap();
+        assert!(document.validate().is_err());
+
         document.evidence_refs.push(evidence(
             ReceiptEvidenceKindV1::Outcome,
             D,
