@@ -3,6 +3,7 @@ mod experiment;
 mod gap;
 mod money;
 mod policy;
+mod receipt_document;
 pub mod savings;
 mod usage;
 
@@ -55,6 +56,7 @@ pub use money::{CurrencyCode, MoneyV1};
 pub use outcome::*;
 pub use outcome_engine::*;
 pub use policy::{ExpiryBehavior, PolicyClassification, PolicyCriticality};
+pub use receipt_document::*;
 pub use savings::{MeasurementMethod, SavingsObservationV1, SavingsReceiptV1};
 pub use task::*;
 pub use triage::{TaskProfileV1, TaskScope, TriageBackend, TriageResultV1};
