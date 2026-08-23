@@ -1037,13 +1037,29 @@ mod tests {
         let digest = digest(bytes);
         let final_name = format!("{}.txt", digest.hex());
 
+        let relocated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let barrier_data_root = data_root.clone();
         let barrier_opened_root = opened_root.clone();
-        let barrier = Box::new(move || {
-            std::fs::rename(&barrier_data_root, &barrier_opened_root)
-                .expect("relocate bound data root");
-            std::fs::create_dir(&barrier_data_root).expect("replacement data root");
-        });
+        let barrier_relocated = std::sync::Arc::clone(&relocated);
+        let barrier =
+            Box::new(
+                move || match std::fs::rename(&barrier_data_root, &barrier_opened_root) {
+                    Ok(()) => {
+                        std::fs::create_dir(&barrier_data_root).expect("replacement data root");
+                        barrier_relocated.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    Err(error) => {
+                        #[cfg(windows)]
+                        assert_eq!(
+                            error.kind(),
+                            std::io::ErrorKind::PermissionDenied,
+                            "Windows may only reject relocation while held handles are open"
+                        );
+                        #[cfg(unix)]
+                        panic!("relocate bound data root: {error}");
+                    }
+                },
+            );
         let result = artifact_store::persist_content_with_test_barrier(
             OUTPUT_DIRECTORY,
             digest.hex(),
@@ -1052,23 +1068,40 @@ mod tests {
             barrier,
         );
 
-        assert_eq!(
-            std::fs::read_dir(&data_root)
-                .expect("replacement data root")
-                .count(),
-            0,
-            "replacement root received no artifact or temporary leaf"
-        );
+        let did_relocate = relocated.load(std::sync::atomic::Ordering::SeqCst);
+        let bound_root = if did_relocate {
+            assert_eq!(
+                std::fs::read_dir(&data_root)
+                    .expect("replacement data root")
+                    .count(),
+                0,
+                "replacement root received no artifact or temporary leaf"
+            );
+            &opened_root
+        } else {
+            #[cfg(unix)]
+            {
+                panic!("Unix relocation must succeed");
+            }
+            #[cfg(windows)]
+            {
+                assert!(
+                    !opened_root.exists(),
+                    "denied relocation must not create a partial target"
+                );
+                &data_root
+            }
+        };
         match result {
             Ok(_) => assert_eq!(
-                std::fs::read(opened_root.join(OUTPUT_DIRECTORY).join(final_name))
+                std::fs::read(bound_root.join(OUTPUT_DIRECTORY).join(final_name))
                     .expect("artifact remains under bound root object"),
                 bytes
             ),
             Err(error) => {
                 assert!(error.starts_with("engine_artifact_"));
                 assert!(
-                    std::fs::read_dir(opened_root.join(OUTPUT_DIRECTORY))
+                    std::fs::read_dir(bound_root.join(OUTPUT_DIRECTORY))
                         .expect("bound output directory")
                         .flatten()
                         .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp")),
@@ -1076,7 +1109,9 @@ mod tests {
                 );
             }
         }
-        std::fs::remove_dir_all(&opened_root).expect("remove relocated test root");
+        if did_relocate {
+            std::fs::remove_dir_all(&opened_root).expect("remove relocated test root");
+        }
     }
 
     #[cfg(unix)]
@@ -1173,6 +1208,37 @@ mod tests {
                 .count(),
             1,
             "successful retry leaves only the addressed artifact"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_windows_temp_validation_cleans_provisional_leaf_and_is_retryable() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let bytes = b"Windows temp validation fixture";
+        let digest = digest(bytes);
+        let output_dir = data_dir::lean_ctx_data_dir()
+            .expect("isolated data dir")
+            .join(OUTPUT_DIRECTORY);
+        let final_path = output_dir.join(format!("{}.txt", digest.hex()));
+
+        artifact_store::inject_test_temp_validation_failure();
+        assert_eq!(
+            persist_output(digest.hex(), bytes).expect_err("injected validation failure"),
+            "engine_artifact_leaf_untrusted"
+        );
+        assert_eq!(
+            std::fs::read_dir(&output_dir)
+                .expect("output directory")
+                .count(),
+            0,
+            "failed validation must delete its provisional leaf"
+        );
+
+        persist_output(digest.hex(), bytes).expect("retry publishes complete artifact");
+        assert_eq!(
+            std::fs::read(&final_path).expect("published artifact after retry"),
+            bytes
         );
     }
 

@@ -58,16 +58,19 @@ engine-interface/v1/recovery/<sha256>.json
 - Windows opens only the drive/UNC anchor by absolute name, validates that
   handle's final DOS path, then walks every data-root and artifact component by
   held handles with native relative create/open operations and reparse
-  protection; it has no probe/canonicalize/reopen window. Relative rename and
-  disposition complete publication. If a required native
+  protection; root binding has no probe/canonicalize/reopen window. Relative
+  rename completes publication; handle-relative disposition removes failed
+  temporary or final objects. The published name is intentionally reopened
+  through the held directory handle and its digest is verified before the
+  original temporary handle is released. If a required native
   primitive or runtime filesystem behavior is unsupported, the writer returns
   the stable `engine_artifact_boundary_unsupported` category and never falls
   back to pathname mutation. Any provisional directory remains confined beneath
-  the held root; temporary leaves are delete-on-close and cleaned by handle.
-  Artifact files are flushed before publication. Directory-handle flush is
-  applied where the filesystem supports it; documented unsupported directory
-  flush results neither weaken containment nor invalidate an already verified
-  content-addressed artifact.
+  the held root; handled failures delete temporary leaves through their held
+  handles. Artifact files are flushed before publication. Directory-handle
+  flush is applied where the filesystem supports it; documented unsupported
+  directory flush results neither weaken containment nor invalidate an already
+  verified content-addressed artifact.
 - Existing artifact paths must be regular, non-symlink files whose contents
   match their address.
 - P1 rejects pre-existing symlink/reparse escape and never writes payload bytes

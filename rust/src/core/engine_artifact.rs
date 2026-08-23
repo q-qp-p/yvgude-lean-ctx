@@ -27,6 +27,8 @@ const ARTIFACT_CLEANUP_FAILED: &str = "engine_artifact_cleanup_failed";
 #[cfg(test)]
 thread_local! {
     static TEST_FAIL_BEFORE_PUBLISH: Cell<bool> = const { Cell::new(false) };
+    #[cfg(windows)]
+    static TEST_FAIL_TEMP_VALIDATION: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -34,10 +36,27 @@ pub(super) fn inject_test_pre_publish_failure() {
     TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.set(true));
 }
 
+#[cfg(all(test, windows))]
+pub(super) fn inject_test_temp_validation_failure() {
+    TEST_FAIL_TEMP_VALIDATION.with(|failpoint| failpoint.set(true));
+}
+
 fn test_pre_publish_failure() -> bool {
     #[cfg(test)]
     {
         TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.replace(false))
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn test_temp_validation_failure() -> bool {
+    #[cfg(test)]
+    {
+        TEST_FAIL_TEMP_VALIDATION.with(|failpoint| failpoint.replace(false))
     }
     #[cfg(not(test))]
     {
@@ -622,11 +641,10 @@ mod windows {
     use std::ptr::{null, null_mut};
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_DELETE,
-        FILE_DISPOSITION_DO_NOT_DELETE, FILE_DISPOSITION_INFORMATION_EX, FILE_NON_DIRECTORY_FILE,
-        FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION,
-        FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformationEx, FileRenameInformationEx,
-        NtCreateFile, NtSetInformationFile,
+        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_DELETE, FILE_DISPOSITION_INFORMATION_EX,
+        FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT,
+        FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformationEx,
+        FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
     };
     use windows_sys::Win32::Foundation::{
         ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
@@ -929,17 +947,26 @@ mod windows {
                 &name,
                 TEMP_ACCESS,
                 FILE_CREATE,
-                FILE_NON_DIRECTORY_FILE
-                    | FILE_OPEN_REPARSE_POINT
-                    | FILE_SYNCHRONOUS_IO_NONALERT
-                    | FILE_DELETE_ON_CLOSE,
+                FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
             ) {
                 Ok(file) => {
-                    ensure_regular(&file)?;
-                    return Ok(TempArtifact {
+                    let mut temp = TempArtifact {
                         file: Some(file),
                         disarmed: false,
-                    });
+                    };
+                    let validation = if super::test_temp_validation_failure() {
+                        Err(ARTIFACT_LEAF_UNTRUSTED.to_owned())
+                    } else {
+                        ensure_regular(
+                            temp.file
+                                .as_ref()
+                                .ok_or_else(|| ARTIFACT_TEMP_CREATE_FAILED.to_owned())?,
+                        )
+                    };
+                    if let Err(error) = validation {
+                        return Err(temp.cleanup().err().unwrap_or(error));
+                    }
+                    return Ok(temp);
                 }
                 Err(ArtifactStatus::Collision) => continue,
                 Err(ArtifactStatus::Unsupported) => {
@@ -978,34 +1005,28 @@ mod windows {
             .file
             .as_ref()
             .ok_or_else(|| ARTIFACT_PUBLISH_FAILED.to_owned())?;
-        clear_delete_on_close(file)?;
         let publish = match rename_relative(file, directory.as_raw_handle(), final_name) {
             Ok(result) => result,
             Err(error) => return Err(temp.cleanup().err().unwrap_or(error)),
         };
         match publish {
             PublishResult::Published => {
+                let published = match verify_existing_artifact(directory, final_name, digest) {
+                    Ok(published) => published,
+                    Err(error) => return Err(temp.cleanup().err().unwrap_or(error)),
+                };
+                if let Err(error) = sync_directory(directory.as_raw_handle()) {
+                    return Err(temp.cleanup().err().unwrap_or(error));
+                }
                 temp.disarmed = true;
-                finish_published(temp, directory.as_raw_handle())
+                temp.file.take();
+                Ok(published)
             }
             PublishResult::Collision => {
                 temp.cleanup()?;
                 verify_existing_artifact(directory, final_name, digest)
             }
         }
-    }
-
-    fn finish_published(
-        temp: &mut TempArtifact,
-        directory_handle: HANDLE,
-    ) -> Result<std::fs::File, String> {
-        sync_directory(directory_handle)?;
-        let mut file = temp
-            .file
-            .take()
-            .ok_or_else(|| ARTIFACT_PUBLISH_FAILED.to_owned())?;
-        file.rewind().map_err(|_| ARTIFACT_SYNC_FAILED.to_owned())?;
-        Ok(file)
     }
 
     fn sync_directory(directory_handle: HANDLE) -> Result<(), String> {
@@ -1197,27 +1218,6 @@ mod windows {
             Ok(())
         } else {
             Err(ARTIFACT_CLEANUP_FAILED.to_owned())
-        }
-    }
-
-    fn clear_delete_on_close(file: &std::fs::File) -> Result<(), String> {
-        let mut info = FILE_DISPOSITION_INFORMATION_EX {
-            Flags: FILE_DISPOSITION_DO_NOT_DELETE,
-        };
-        let mut io_status = IO_STATUS_BLOCK::default();
-        let status = unsafe {
-            NtSetInformationFile(
-                file.as_raw_handle(),
-                &mut io_status,
-                (&mut info as *mut FILE_DISPOSITION_INFORMATION_EX).cast::<c_void>(),
-                size_of::<FILE_DISPOSITION_INFORMATION_EX>() as u32,
-                FileDispositionInformationEx,
-            )
-        };
-        if status == STATUS_SUCCESS {
-            Ok(())
-        } else {
-            Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())
         }
     }
 
