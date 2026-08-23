@@ -4,8 +4,7 @@ use lean_ctx_protocol::{
     EvidenceKind, EvidenceRefV1, ExecutionReceiptV1, ReceiptId, SignatureStatus, TaskId,
 };
 
-use super::event::ExecutionEvent;
-use super::store::ExecutionLedgerStore;
+use super::{Result, event::ExecutionEvent, store::ExecutionLedgerStore};
 
 /// Token and model-call totals for one task.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -54,13 +53,21 @@ impl<'a> ExecutionProjection<'a> {
         receipt_for_task_from_store(self.store, task_id)
     }
 
-    /// Returns the latest authoritative canonical receipt for a task.
+    /// Compatibility projection; exact consumers must use the verified variant.
     #[must_use]
     pub fn canonical_receipt_for_task(
         &self,
         task_id: &str,
     ) -> Option<CanonicalReceiptProjectionV1> {
         canonical_receipt_for_task_from_store(self.store, task_id)
+    }
+
+    /// Returns authoritative receipt metadata or a verified unavailable error.
+    pub fn canonical_receipt_for_task_verified(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<CanonicalReceiptProjectionV1>> {
+        canonical_receipt_for_task_verified_from_store(self.store, task_id)
     }
 }
 
@@ -77,7 +84,7 @@ impl ExecutionLedgerStore {
         receipt_for_task_from_store(self, task_id)
     }
 
-    /// Returns the latest authoritative canonical receipt for a task.
+    /// Compatibility projection; exact consumers must use the verified variant.
     #[must_use]
     pub fn canonical_receipt_for_task(
         &self,
@@ -85,15 +92,41 @@ impl ExecutionLedgerStore {
     ) -> Option<CanonicalReceiptProjectionV1> {
         canonical_receipt_for_task_from_store(self, task_id)
     }
+
+    /// Returns authoritative receipt metadata or a verified unavailable error.
+    pub fn canonical_receipt_for_task_verified(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<CanonicalReceiptProjectionV1>> {
+        canonical_receipt_for_task_verified_from_store(self, task_id)
+    }
 }
 
-/// Projects the latest canonical receipt metadata from a verified event snapshot.
+/// Compatibility projection that maps unavailable ledger state to no receipt.
+///
+/// Exact consumers must use [`canonical_receipt_for_task_verified_from_store`].
 #[must_use]
 pub fn canonical_receipt_for_task_from_store(
     store: &ExecutionLedgerStore,
     task_id: &str,
 ) -> Option<CanonicalReceiptProjectionV1> {
-    store.by_task(task_id).into_iter().rev().find_map(|event| {
+    canonical_receipt_for_events(store.by_task(task_id))
+}
+
+/// Projects authoritative receipt metadata from a verified, available snapshot.
+pub fn canonical_receipt_for_task_verified_from_store(
+    store: &ExecutionLedgerStore,
+    task_id: &str,
+) -> Result<Option<CanonicalReceiptProjectionV1>> {
+    Ok(canonical_receipt_for_events(
+        store.by_task_verified(task_id)?,
+    ))
+}
+
+fn canonical_receipt_for_events(
+    events: Vec<ExecutionEvent>,
+) -> Option<CanonicalReceiptProjectionV1> {
+    events.into_iter().rev().find_map(|event| {
         if let ExecutionEvent::CanonicalReceiptRecorded {
             task_id,
             invocation_id,

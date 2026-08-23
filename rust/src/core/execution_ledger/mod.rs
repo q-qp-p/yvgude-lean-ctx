@@ -20,8 +20,8 @@ pub use producer::{
 };
 pub use projection::{
     CanonicalReceiptProjectionV1, ExecutionProjection, TaskCostSummary,
-    canonical_receipt_for_task_from_store, receipt_for_task, receipt_for_task_from_store,
-    task_cost_summary, task_cost_summary_from_store,
+    canonical_receipt_for_task_from_store, canonical_receipt_for_task_verified_from_store,
+    receipt_for_task, receipt_for_task_from_store, task_cost_summary, task_cost_summary_from_store,
 };
 pub use store::{ExecutionLedgerStore, default_path};
 pub use verify::{GENESIS, hash_event, verify_events};
