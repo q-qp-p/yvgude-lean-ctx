@@ -14,7 +14,7 @@
 WS-1: CODEBASE CLEANUP          ██████████  Cleanup and P0 operational delivery/security gate complete
 WS-2: SDK V1 + EVIDENCE         ██████████  Phase-A substrate complete; public SDK remains Preview
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     █████████░  P1 runtime wired; security remediation and acceptance gates active
+WS-4: OCLA + COMPOSABLE (B)     ██████████  P1 Engine runtime exit complete; P2 evidence integration active
 WS-5: PARTNERSHIP (C)           —— DEFERRED (no near-term partner execution)
 WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; P2 evidence gate remains open
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
@@ -37,15 +37,15 @@ This file schedules approved work; it does not supersede those authorities.
 | Roadmap phase | Current state | Next exit |
 | --- | --- | --- |
 | **P0 — delivery/security** | **Operational exit complete (2026-08-23):** regular `main` CI run `32639983816`, Security Check `32639983788`, and CodeQL `32639983823` passed; declared GitHub `main` protection was applied and independently verified drift-free with required `CI Green` and `Security Scan`, admin enforcement, and force-push/deletion disabled. | Keep the declarative policy and drift verification green; release/publishing remains transitively gated by these checks. |
-| **P1 — Engine runtime spine** | Integration in acceptance: explicit single-path `ctx_read` `engine_interface="v1"` dispatches aggressive compression through `NativeContextEngine`; omission remains legacy-compatible. Post-admission non-text/mode rejection, descriptor-rooted source capture, artifact hardening and a positive deadline test are being closed against adversarial review. | Pass focused legacy/v1 integration tests, full Rust gates and GitHub cross-platform CI; only then feed the accepted invocation/receipt into P2. |
-| **P2 — canonical evidence** | Partial: receipt, ledger and verifier substrates exist but have no single producer-to-ledger-to-independent-verifier chain. | Canonical Task → Plan → Invocation → Receipt → Outcome projection and replay/tamper verification. |
+| **P1 — Engine runtime spine** | **Exit complete (2026-08-23):** PRs `#1515` and `#1516` merged; latest merge commit `dd55473302`. Explicit `ctx_read` `engine_interface="v1"` dispatch, legacy omission compatibility, policy/rejection receipts, deadline behavior, descriptor/handle-rooted source and artifact containment, failure-atomic publication and adversarial swap/relocation coverage passed final CI run `32662146660`, including native Ubuntu and Windows tests. | Preserve the accepted v1/legacy behavior and feed its invocation, observation and receipt link into the single P2 evidence chain. |
+| **P2 — canonical evidence** | **Active integration:** the signed canonical Receipt Document v1 protocol is committed on the isolated P2 branch; ledger, producer projection and standalone verifier changes remain unmerged until they are rebased on the P1 merge and pass one end-to-end trust review. | Canonical Task → Plan → Invocation → Receipt → Outcome projection, durable chain, independent replay/tamper verification and one provider-free fixture. |
 | **P3 — Python Preview** | Blocked on P1/P2: the wrapper is fixture-backed; Rust session/Kit/receipt routes are absent. | Live-runtime parity or an explicitly narrowed facade with migration tests. |
 | **P4 — production SDK repo** | Not entered: all four repository/license/release/security approvals remain pending. | Approved decision record plus P3 evidence, then separate SDK repo and five-primitive contract. |
 | **P5–P7 — Workspace, package, handoff** | Research queue: target architecture only. | Start only after P4; never promote legacy stores/artifacts as the new truth. |
 | **P8–P9 — Cloud/optimization** | Private and blocked. | Separate private repository only after local proof, trusted evidence and designated owners. |
 
 **Execution order:** P0 operational CI/branch-protection verification (**met**) → P1 runtime Engine caller
-(acceptance active) → P2 canonical evidence → P3 live Python Preview parity → P4 SDK repository.
+(**met**) → P2 canonical evidence (**active**) → P3 live Python Preview parity → P4 SDK repository.
 No later workstream may bypass an earlier exit.
 
 ---
