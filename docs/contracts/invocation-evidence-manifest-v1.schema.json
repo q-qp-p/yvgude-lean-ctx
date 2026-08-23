@@ -3,6 +3,19 @@
   "$id": "https://leanctx.com/contracts/invocation-evidence-manifest-v1.schema.json",
   "title": "LeanCTX InvocationEvidenceManifestV1",
   "description": "Strict digest-only evidence join for one admitted Engine invocation.",
+  "x-conformance": {
+    "mode": "two_stage",
+    "schema_validation_required": true,
+    "semantic_validation_required": true,
+    "semantic_validator": "lean_ctx_protocol::InvocationEvidenceManifestV1::from_canonical_bytes",
+    "utf8_bounds": {
+      "keyword": "x-maxUtf8Bytes",
+      "unit": "utf8_bytes",
+      "schema_enforcement": "annotation_only",
+      "semantic_enforcement": "mandatory",
+      "schema_alone_insufficient": true
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,10 +39,10 @@
     },
     "policy_bindings": {
       "type": "array",
-      "minItems": 4,
+      "minItems": 1,
       "maxItems": 4,
       "items": { "$ref": "#/$defs/policyBinding" },
-      "description": "Rust validation requires exactly one each of task_region, task_model, plan_decision, and invocation_admission."
+      "description": "Rust validation requires exactly one invocation_admission and rejects duplicate optional roles; a later cross-artifact verifier compares present roles to TaskEnvelope/Plan/Invocation refs without fabricating bindings."
     },
     "capability_bindings": {
       "type": "array",
@@ -48,7 +61,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
-      "pattern": "^[^\\u0000-\\u001F\\u007F]+$",
+      "pattern": "^(?=.*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "x-maxUtf8Bytes": 256,
       "description": "JSON Schema maxLength counts Unicode code points; an independent verifier MUST additionally enforce the shared 256-byte UTF-8 bound."
     },
@@ -56,7 +69,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 1024,
-      "pattern": "^[^\\u0000-\\u001F\\u007F]+$",
+      "pattern": "^(?=.*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F]+$",
       "x-maxUtf8Bytes": 1024,
       "description": "JSON Schema maxLength counts Unicode code points; an independent verifier MUST additionally enforce the shared 1024-byte UTF-8 ProtocolReference bound."
     },

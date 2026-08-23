@@ -99,7 +99,7 @@ pub struct InvocationEvidenceManifestV1 {
     pub engine_receipt: InvocationEngineReceiptBindingV1,
     /// Complete source lineage; exactly one binding has role `input`.
     pub source_bindings: Vec<InvocationSourceBindingV1>,
-    /// Exactly one binding for each required policy role.
+    /// One or more policy bindings; `invocation_admission` is always present.
     pub policy_bindings: Vec<InvocationPolicyBindingV1>,
     /// Selected capability ID/version to canonical manifest digest bindings.
     pub capability_bindings: Vec<InvocationCapabilityBindingV1>,
@@ -189,15 +189,9 @@ fn validate_source_bindings(bindings: &[InvocationSourceBindingV1]) -> Result<()
 }
 
 fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<(), ValidationError> {
-    const REQUIRED_ROLES: [InvocationPolicyRoleV1; 4] = [
-        InvocationPolicyRoleV1::TaskRegion,
-        InvocationPolicyRoleV1::TaskModel,
-        InvocationPolicyRoleV1::PlanDecision,
-        InvocationPolicyRoleV1::InvocationAdmission,
-    ];
-    if bindings.len() != REQUIRED_ROLES.len() {
+    if bindings.is_empty() || bindings.len() > 4 {
         return Err(ValidationError::new(
-            "policy_bindings must contain exactly four required policy roles",
+            "policy_bindings must contain 1..=4 entries",
         ));
     }
     let mut refs = BTreeSet::new();
@@ -225,9 +219,9 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
             ));
         }
     }
-    if REQUIRED_ROLES.iter().any(|role| !roles.contains(role)) {
+    if !roles.contains(&InvocationPolicyRoleV1::InvocationAdmission) {
         return Err(ValidationError::new(
-            "policy_bindings must include task_region, task_model, plan_decision, and invocation_admission",
+            "policy_bindings must include exactly one invocation_admission role",
         ));
     }
     Ok(())
@@ -509,6 +503,33 @@ mod tests {
     }
 
     #[test]
+    fn optional_policy_roles_are_valid_but_admission_is_mandatory() {
+        let mut manifest = valid_manifest();
+        manifest
+            .policy_bindings
+            .retain(|binding| binding.role == InvocationPolicyRoleV1::InvocationAdmission);
+        manifest
+            .validate()
+            .expect("admission-only policy set is valid");
+        manifest.policy_bindings.clear();
+        assert!(manifest.validate().is_err());
+        manifest.policy_bindings.push(InvocationPolicyBindingV1 {
+            policy_ref: reference("policy:task-region"),
+            digest: digest('e'),
+            role: InvocationPolicyRoleV1::TaskRegion,
+        });
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn shared_references_reject_whitespace_only_and_c1_controls() {
+        assert!(ProtocolReference::new(" \t\n").is_err());
+        assert!(ProtocolReference::new("\u{0085}").is_err());
+        assert!(CapabilityId::new(" \t\n").is_err());
+        assert!(CapabilityId::new("\u{0085}").is_err());
+    }
+
+    #[test]
     fn canonical_decoder_rejects_whitespace_key_order_and_duplicates() {
         let canonical = valid_manifest().canonical_bytes().expect("canonicalizes");
         let pretty =
@@ -570,6 +591,28 @@ mod tests {
     }
 
     #[test]
+    fn schema_declares_mandatory_two_stage_conformance() {
+        let schema: Value = serde_json::from_slice(include_bytes!(
+            "../../../../docs/contracts/invocation-evidence-manifest-v1.schema.json"
+        ))
+        .expect("manifest schema should be valid JSON");
+        assert_eq!(schema["x-conformance"]["mode"], "two_stage");
+        assert_eq!(schema["x-conformance"]["schema_validation_required"], true);
+        assert_eq!(
+            schema["x-conformance"]["semantic_validation_required"],
+            true
+        );
+        assert_eq!(
+            schema["x-conformance"]["utf8_bounds"]["keyword"],
+            "x-maxUtf8Bytes"
+        );
+        assert_eq!(
+            schema["x-conformance"]["utf8_bounds"]["schema_enforcement"],
+            "annotation_only"
+        );
+    }
+
+    #[test]
     fn canonical_golden_and_negative_fixtures_are_exhaustive() {
         let valid =
             include_bytes!("../../../../docs/contracts/invocation-evidence-manifest/v1/valid.json");
@@ -584,6 +627,13 @@ mod tests {
             decoded.canonical_bytes().expect("canonical bytes"),
             canonical
         );
+        let optional = include_bytes!(
+            "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-optional-policy.json"
+        );
+        let optional = optional.strip_suffix(b"\n").unwrap_or(optional);
+        let optional_manifest = InvocationEvidenceManifestV1::from_canonical_bytes(optional)
+            .expect("admission-only policy fixture should decode");
+        assert_eq!(optional_manifest.policy_bindings.len(), 1);
         let multibyte = include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-multibyte.json"
         );
@@ -591,11 +641,32 @@ mod tests {
         InvocationEvidenceManifestV1::from_canonical_bytes(multibyte)
             .expect("short multibyte reference fixture should decode");
 
+        let exact_reference = include_bytes!(
+            "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-reference-1024.json"
+        );
+        let exact_reference = exact_reference
+            .strip_suffix(b"\n")
+            .unwrap_or(exact_reference);
+        let exact_manifest = InvocationEvidenceManifestV1::from_canonical_bytes(exact_reference)
+            .expect("exact 1024-byte ProtocolReference fixture should decode");
+        assert_eq!(
+            exact_manifest.source_bindings[0].source_ref.as_str().len(),
+            1024
+        );
+
         let overlong = include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-utf8-byte-bound.json"
         );
         let overlong = overlong.strip_suffix(b"\n").unwrap_or(overlong);
         assert!(InvocationEvidenceManifestV1::from_canonical_bytes(overlong).is_err());
+
+        let overlong_reference = include_bytes!(
+            "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-reference-1025.json"
+        );
+        let overlong_reference = overlong_reference
+            .strip_suffix(b"\n")
+            .unwrap_or(overlong_reference);
+        assert!(InvocationEvidenceManifestV1::from_canonical_bytes(overlong_reference).is_err());
 
         for name in [
             "invalid-unknown-field.json",
@@ -603,6 +674,15 @@ mod tests {
             "invalid-source-input-count.json",
             "invalid-policy-role.json",
             "invalid-capability-key.json",
+            "invalid-duplicate-source-ref.json",
+            "invalid-duplicate-source-digest.json",
+            "invalid-duplicate-policy-digest.json",
+            "invalid-duplicate-policy-role.json",
+            "invalid-duplicate-policy-ref.json",
+            "invalid-duplicate-capability-manifest-digest.json",
+            "invalid-missing-invocation-admission.json",
+            "invalid-whitespace-reference.json",
+            "invalid-c1-control-reference.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-unknown-field.json" => include_bytes!(
@@ -619,6 +699,33 @@ mod tests {
                 ),
                 "invalid-capability-key.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-capability-key.json"
+                ),
+                "invalid-duplicate-source-ref.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-source-ref.json"
+                ),
+                "invalid-duplicate-source-digest.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-source-digest.json"
+                ),
+                "invalid-duplicate-policy-digest.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-policy-digest.json"
+                ),
+                "invalid-duplicate-policy-role.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-policy-role.json"
+                ),
+                "invalid-duplicate-policy-ref.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-policy-ref.json"
+                ),
+                "invalid-duplicate-capability-manifest-digest.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-duplicate-capability-manifest-digest.json"
+                ),
+                "invalid-missing-invocation-admission.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-missing-invocation-admission.json"
+                ),
+                "invalid-whitespace-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-whitespace-reference.json"
+                ),
+                "invalid-c1-control-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-c1-control-reference.json"
                 ),
                 _ => unreachable!(),
             };

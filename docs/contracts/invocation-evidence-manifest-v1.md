@@ -17,8 +17,13 @@ digests use `sha256:` followed by exactly 64 lowercase hexadecimal characters.
 Opaque identifiers and references use the shared bounded protocol primitives.
 Schema `maxLength` is a Unicode code-point prefilter; an independent verifier
 MUST additionally enforce the exact shared UTF-8 byte bounds (256 bytes for
-opaque IDs and 1,024 bytes for protocol references). This keeps schema and
-Rust acceptance aligned for multibyte input.
+opaque IDs and 1,024 bytes for protocol references). Generic JSON Schema alone
+is insufficient: conformance requires both schema validation and the semantic
+validator `InvocationEvidenceManifestV1::from_canonical_bytes`. The
+machine-readable `x-conformance` metadata declares this two-stage requirement
+and that `x-maxUtf8Bytes` is only a schema annotation whose semantic check is
+mandatory. References that are whitespace-only or contain C0/C1 controls,
+including U+0085, are invalid.
 
 `invocation_ref` is the canonical digest of the exact Engine invocation record.
 `engine_receipt.receipt_digest` identifies the complete Engine receipt bytes,
@@ -30,10 +35,13 @@ and `engine_receipt.receipt_ref` is required to be exactly
 digest binding, source locators and digests are unique, and exactly one binding
 has role `input`; all other bindings have role `context`.
 
-`policy_bindings` must contain exactly one unique binding for each role:
-`task_region`, `task_model`, `plan_decision`, and `invocation_admission`.
-Policy locators, digests, and roles are unique. These bindings cover task
-region/model policy, the selected plan decision, and invocation admission.
+`policy_bindings` contains 1..=4 unique bindings and MUST contain exactly one
+`invocation_admission` role. `task_region`, `task_model`, and `plan_decision`
+roles are optional and each may occur at most once. A later cross-artifact
+verifier compares the present roles with refs actually present in the
+TaskEnvelope, Plan, and Invocation; producers MUST NOT fabricate omitted policy
+bindings to satisfy a fixed role set. Policy locators, digests, and roles are
+unique.
 
 `capability_bindings` maps each selected capability ID and SemVer pair to the
 digest of its canonical `CapabilityManifestV1` bytes. Capability ID/version
