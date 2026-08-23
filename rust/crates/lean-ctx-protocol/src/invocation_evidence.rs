@@ -212,8 +212,9 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
             "policy_bindings must contain 1..=4 entries",
         ));
     }
-    let mut refs = BTreeSet::new();
-    let mut digests = BTreeSet::new();
+    let mut refs = BTreeMap::new();
+    let mut digests = BTreeMap::new();
+    let mut binding_keys = BTreeSet::new();
     let mut roles = BTreeSet::new();
     for binding in bindings {
         validate_manifest_reference(&binding.policy_ref, "policy_ref")?;
@@ -222,14 +223,14 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
                 "InvocationPolicyBindingV1 policy_ref must not be empty",
             ));
         }
-        if !refs.insert(binding.policy_ref.as_str()) {
+        let binding_key = (
+            binding.policy_ref.as_str(),
+            binding.digest.as_str(),
+            binding.role,
+        );
+        if !binding_keys.insert(binding_key) {
             return Err(ValidationError::new(
-                "policy_bindings policy_ref values must be unique",
-            ));
-        }
-        if !digests.insert(binding.digest.as_str()) {
-            return Err(ValidationError::new(
-                "policy_bindings digest values must be unique",
+                "policy_bindings contains a duplicate identical binding",
             ));
         }
         if !roles.insert(binding.role) {
@@ -237,6 +238,24 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
                 "policy_bindings role values must be unique",
             ));
         }
+        if refs
+            .get(binding.policy_ref.as_str())
+            .is_some_and(|digest| *digest != binding.digest.as_str())
+        {
+            return Err(ValidationError::new(
+                "policy_bindings policy_ref values must keep one digest",
+            ));
+        }
+        refs.insert(binding.policy_ref.as_str(), binding.digest.as_str());
+        if digests
+            .get(binding.digest.as_str())
+            .is_some_and(|policy_ref| *policy_ref != binding.policy_ref.as_str())
+        {
+            return Err(ValidationError::new(
+                "policy_bindings digest values must keep one policy_ref",
+            ));
+        }
+        digests.insert(binding.digest.as_str(), binding.policy_ref.as_str());
     }
     if !roles.contains(&InvocationPolicyRoleV1::InvocationAdmission) {
         return Err(ValidationError::new(
@@ -542,6 +561,51 @@ mod tests {
     }
 
     #[test]
+    fn shared_policy_alias_is_valid_across_distinct_roles() {
+        let mut manifest = valid_manifest();
+        let shared_ref = reference("policy:shared");
+        let shared_digest = digest('a');
+        manifest.policy_bindings = vec![
+            InvocationPolicyBindingV1 {
+                policy_ref: shared_ref.clone(),
+                digest: shared_digest.clone(),
+                role: InvocationPolicyRoleV1::PlanDecision,
+            },
+            InvocationPolicyBindingV1 {
+                policy_ref: shared_ref,
+                digest: shared_digest,
+                role: InvocationPolicyRoleV1::InvocationAdmission,
+            },
+        ];
+        manifest
+            .validate()
+            .expect("one policy may serve two distinct roles");
+    }
+
+    #[test]
+    fn policy_alias_rejects_conflicting_digest_and_duplicate_role() {
+        let mut manifest = valid_manifest();
+        let shared_ref = reference("policy:shared");
+        manifest.policy_bindings = vec![
+            InvocationPolicyBindingV1 {
+                policy_ref: shared_ref.clone(),
+                digest: digest('a'),
+                role: InvocationPolicyRoleV1::PlanDecision,
+            },
+            InvocationPolicyBindingV1 {
+                policy_ref: shared_ref,
+                digest: digest('b'),
+                role: InvocationPolicyRoleV1::InvocationAdmission,
+            },
+        ];
+        assert!(manifest.validate().is_err());
+
+        let mut manifest = valid_manifest();
+        manifest.policy_bindings[1].role = manifest.policy_bindings[0].role;
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn shared_references_reject_whitespace_only_and_c1_controls() {
         assert!(ProtocolReference::new(" \t\n").is_err());
         assert!(ProtocolReference::new("\u{0085}").is_err());
@@ -676,6 +740,17 @@ mod tests {
                 .iter()
                 .any(|requirement| { requirement == "resolve_and_verify_policy_artifact_bytes" })
         );
+        assert!(requirements.iter().any(|requirement| {
+            requirement == "policy_aliases_repeat_only_exact_ref_and_digest_across_distinct_roles"
+        }));
+        assert!(requirements.iter().any(|requirement| {
+            requirement == "policy_conflicting_ref_digest_and_duplicate_role_bindings_rejected"
+        }));
+        assert!(
+            requirements
+                .iter()
+                .any(|requirement| requirement == "policy_duplicate_identical_bindings_rejected")
+        );
     }
 
     #[test]
@@ -700,6 +775,13 @@ mod tests {
         let optional_manifest = InvocationEvidenceManifestV1::from_canonical_bytes(optional)
             .expect("admission-only policy fixture should decode");
         assert_eq!(optional_manifest.policy_bindings.len(), 1);
+        let shared = include_bytes!(
+            "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-shared-policy-alias.json"
+        );
+        let shared = shared.strip_suffix(b"\n").unwrap_or(shared);
+        let shared_manifest = InvocationEvidenceManifestV1::from_canonical_bytes(shared)
+            .expect("shared policy alias fixture should decode");
+        assert_eq!(shared_manifest.policy_bindings.len(), 2);
         let multibyte = include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-multibyte.json"
         );
@@ -782,6 +864,8 @@ mod tests {
             "invalid-feff-receipt-reference.json",
             "invalid-feff-capability-id.json",
             "invalid-schema-version-float.json",
+            "invalid-policy-alias-conflicting-digest.json",
+            "invalid-policy-alias-duplicate-role.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-unknown-field.json" => include_bytes!(
@@ -840,6 +924,12 @@ mod tests {
                 ),
                 "invalid-schema-version-float.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-schema-version-float.json"
+                ),
+                "invalid-policy-alias-conflicting-digest.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-policy-alias-conflicting-digest.json"
+                ),
+                "invalid-policy-alias-duplicate-role.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-policy-alias-duplicate-role.json"
                 ),
                 _ => unreachable!(),
             };

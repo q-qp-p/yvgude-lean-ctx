@@ -44,13 +44,16 @@ and `engine_receipt.receipt_ref` is required to be exactly
 digest binding, source locators and digests are unique, and exactly one binding
 has role `input`; all other bindings have role `context`.
 
-`policy_bindings` contains 1..=4 unique bindings and MUST contain exactly one
+`policy_bindings` contains 1..=4 bindings and MUST contain exactly one
 `invocation_admission` role. `task_region`, `task_model`, and `plan_decision`
-roles are optional and each may occur at most once. A later cross-artifact
-verifier compares the present roles with refs actually present in the
-TaskEnvelope, Plan, and Invocation; producers MUST NOT fabricate omitted policy
-bindings to satisfy a fixed role set. Policy locators, digests, and roles are
-unique.
+roles are optional and each may occur at most once. The same exact
+`policy_ref` + digest may alias across distinct roles (for example,
+`plan_decision` and `invocation_admission`). Each policy reference maps to one
+digest and each digest maps to one policy reference; conflicting aliases,
+duplicate roles, and duplicate identical bindings are invalid. A later
+cross-artifact verifier compares the present roles with refs actually present
+in the TaskEnvelope, Plan, and Invocation; producers MUST NOT fabricate
+omitted policy bindings to satisfy a fixed role set.
 
 `capability_bindings` maps each selected capability ID and SemVer pair to the
 digest of its canonical `CapabilityManifestV1` bytes. Capability ID/version
