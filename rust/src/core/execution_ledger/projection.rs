@@ -3,6 +3,7 @@
 use lean_ctx_protocol::{
     EvidenceKind, EvidenceRefV1, ExecutionReceiptV1, ReceiptId, SignatureStatus, TaskId,
 };
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{Result, event::ExecutionEvent, store::ExecutionLedgerStore};
 
@@ -19,7 +20,10 @@ pub struct TaskCostSummary {
     pub total_latency_ms: u64,
 }
 
-/// Verified ledger projection of the authoritative canonical receipt artifact.
+/// Verified ledger link to a canonical receipt artifact.
+///
+/// Exact proof still requires resolving the linked `ReceiptDocumentV1` bytes and
+/// cryptographically verifying them; this projection never substitutes for that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CanonicalReceiptProjectionV1 {
     pub task_id: String,
@@ -30,6 +34,48 @@ pub struct CanonicalReceiptProjectionV1 {
     pub chain_id: String,
     pub sequence_number: u64,
     pub previous_receipt_id: Option<String>,
+}
+
+/// Non-authoritative compatibility projection derived from legacy `ReceiptSigned`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct LegacyReceiptProjectionV1 {
+    receipt: ExecutionReceiptV1,
+}
+
+impl<'de> Deserialize<'de> for LegacyReceiptProjectionV1 {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let receipt = ExecutionReceiptV1::deserialize(deserializer)?;
+        receipt.validate().map_err(serde::de::Error::custom)?;
+        if receipt.outcome_ref.is_some()
+            || receipt
+                .evidence_refs
+                .iter()
+                .any(|evidence| evidence.signature_status == SignatureStatus::Verified)
+        {
+            return Err(serde::de::Error::custom(
+                "legacy receipt cannot carry outcome or verified-signature authority",
+            ));
+        }
+        Ok(Self { receipt })
+    }
+}
+
+impl LegacyReceiptProjectionV1 {
+    /// Borrows the non-authoritative legacy receipt payload.
+    #[must_use]
+    pub const fn legacy_receipt(&self) -> &ExecutionReceiptV1 {
+        &self.receipt
+    }
+
+    /// Consumes this wrapper for explicitly legacy interoperability.
+    #[must_use]
+    pub fn into_legacy_receipt(self) -> ExecutionReceiptV1 {
+        self.receipt
+    }
 }
 
 /// Read-only projection facade for callers that want to keep the store explicit.
@@ -49,8 +95,8 @@ impl<'a> ExecutionProjection<'a> {
     }
 
     #[must_use]
-    pub fn receipt_for_task(&self, task_id: &str) -> Option<ExecutionReceiptV1> {
-        receipt_for_task_from_store(self.store, task_id)
+    pub fn legacy_receipt_for_task(&self, task_id: &str) -> Option<LegacyReceiptProjectionV1> {
+        legacy_receipt_for_task_from_store(self.store, task_id)
     }
 
     /// Compatibility projection; exact consumers must use the verified variant.
@@ -78,10 +124,10 @@ impl ExecutionLedgerStore {
         task_cost_summary_from_store(self, task_id)
     }
 
-    /// Builds the protocol receipt projection for one task.
+    /// Builds the explicitly non-authoritative legacy receipt projection.
     #[must_use]
-    pub fn receipt_for_task(&self, task_id: &str) -> Option<ExecutionReceiptV1> {
-        receipt_for_task_from_store(self, task_id)
+    pub fn legacy_receipt_for_task(&self, task_id: &str) -> Option<LegacyReceiptProjectionV1> {
+        legacy_receipt_for_task_from_store(self, task_id)
     }
 
     /// Compatibility projection; exact consumers must use the verified variant.
@@ -201,33 +247,30 @@ pub fn task_cost_summary_from_store(
     summary
 }
 
-/// Builds a protocol `ExecutionReceiptV1` from the task's observed events.
+/// Builds a non-authoritative compatibility receipt from legacy observed events.
 ///
-/// A receipt is emitted only when the event stream contains the observations that
-/// make it auditable: at least one model invocation, a context balance, and a
-/// signed-receipt event.  Pricing is an estimate from the existing model-pricing
-/// table because `ModelInvoked` records usage, while the signed receipt remains
-/// the authoritative artifact for provider billing.
+/// This view exists only for the legacy CLI. It never conveys accepted outcome,
+/// billing, signature, or exact-proof authority; those require a verified
+/// `CanonicalReceiptRecorded` artifact path.
 #[must_use]
-pub fn receipt_for_task(task_id: &str) -> Option<ExecutionReceiptV1> {
+pub fn legacy_receipt_for_task(task_id: &str) -> Option<LegacyReceiptProjectionV1> {
     ExecutionLedgerStore::from_default()
         .ok()
-        .and_then(|store| receipt_for_task_from_store(&store, task_id))
+        .and_then(|store| legacy_receipt_for_task_from_store(&store, task_id))
 }
 
-/// Builds a protocol receipt from an explicitly selected store.
+/// Builds a non-authoritative compatibility receipt from an explicit store.
 #[must_use]
-pub fn receipt_for_task_from_store(
+pub fn legacy_receipt_for_task_from_store(
     store: &ExecutionLedgerStore,
     task_id: &str,
-) -> Option<ExecutionReceiptV1> {
+) -> Option<LegacyReceiptProjectionV1> {
     let events = store.by_task(task_id);
     let task_id = TaskId::try_from(task_id.to_owned()).ok()?;
 
     let mut plan_id = None;
     let mut context_balance = None;
     let mut receipt_identity: Option<(String, String, String)> = None;
-    let mut outcome_ref = None;
     let mut decision_refs = Vec::new();
     let mut model_calls = 0_u32;
     let mut total_input = 0_u64;
@@ -236,6 +279,7 @@ pub fn receipt_for_task_from_store(
     let mut first_model = None;
     let mut last_model = None;
     let mut provider = None;
+    let mut has_canonical_receipt = false;
 
     for event in events {
         match event {
@@ -272,12 +316,16 @@ pub fn receipt_for_task_from_store(
                 signature,
                 ..
             } => receipt_identity = Some((receipt_id, receipt_hash, signature)),
-            ExecutionEvent::OutcomeRecorded { outcome_id, .. } => outcome_ref = Some(outcome_id),
             ExecutionEvent::DecisionRecorded { decision_id, .. } => decision_refs.push(decision_id),
-            ExecutionEvent::TaskStarted { .. }
-            | ExecutionEvent::EngineInvoked { .. }
-            | ExecutionEvent::CanonicalReceiptRecorded { .. } => {}
+            ExecutionEvent::CanonicalReceiptRecorded { .. } => has_canonical_receipt = true,
+            ExecutionEvent::OutcomeRecorded { .. }
+            | ExecutionEvent::TaskStarted { .. }
+            | ExecutionEvent::EngineInvoked { .. } => {}
         }
+    }
+
+    if has_canonical_receipt {
+        return None;
     }
 
     let plan_id = plan_id?;
@@ -326,14 +374,14 @@ pub fn receipt_for_task_from_store(
         baseline_cost_micros: actual_cost_micros,
         avoided_cost_micros: 0,
         etpao_milli: 0,
-        outcome_ref,
+        outcome_ref: None,
         knowledge_refs: Vec::new(),
         decision_refs,
         evidence_refs,
         signature,
     };
     receipt.validate().ok()?;
-    Some(receipt)
+    Some(LegacyReceiptProjectionV1 { receipt })
 }
 
 fn estimate_cost_micros(model: &str, tokens_in: u64, tokens_out: u64) -> u64 {

@@ -19,16 +19,16 @@ pub use producer::{
     CanonicalReceiptRecordV1, ReceiptSignerAdmissionV1, record_canonical_engine_receipt,
 };
 pub use projection::{
-    CanonicalReceiptProjectionV1, ExecutionProjection, TaskCostSummary,
+    CanonicalReceiptProjectionV1, ExecutionProjection, LegacyReceiptProjectionV1, TaskCostSummary,
     canonical_receipt_for_task_from_store, canonical_receipt_for_task_verified_from_store,
-    receipt_for_task, receipt_for_task_from_store, task_cost_summary, task_cost_summary_from_store,
+    legacy_receipt_for_task, legacy_receipt_for_task_from_store, task_cost_summary,
+    task_cost_summary_from_store,
 };
 pub use store::{ExecutionLedgerStore, default_path};
 pub use verify::{GENESIS, hash_event, verify_events};
 
 use std::io;
 
-use lean_ctx_protocol::ExecutionReceiptV1;
 use serde::{Deserialize, Serialize};
 
 /// Errors returned while reading, serializing, or validating the execution ledger.
@@ -50,13 +50,18 @@ pub type Result<T> = std::result::Result<T, ExecutionLedgerError>;
 /// Compatibility view consumed by the existing `ledger execution` CLI.
 ///
 /// The event store remains the source of truth; this view groups the current
-/// task projection without introducing a second writable ledger format.
+/// task projection without introducing a second writable ledger format. Legacy
+/// receipt evidence and its estimates remain explicitly named and never occupy
+/// canonical receipt or accepted-cost fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionLedgerEntryV1 {
     pub task_id: String,
-    pub receipt: Option<ExecutionReceiptV1>,
-    pub actual_cost_micros: Option<u64>,
-    pub baseline_cost_micros: Option<u64>,
+    #[serde(alias = "receipt")]
+    pub legacy_receipt: Option<LegacyReceiptProjectionV1>,
+    #[serde(alias = "actual_cost_micros")]
+    pub legacy_estimated_actual_cost_micros: Option<u64>,
+    #[serde(alias = "baseline_cost_micros")]
+    pub legacy_estimated_baseline_cost_micros: Option<u64>,
     pub predicted_cost_micros: Option<u64>,
     pub actual_etpao: Option<crate::core::etpao::EtpaoResult>,
     pub baseline_etpao: Option<crate::core::etpao::EtpaoResult>,
@@ -92,16 +97,20 @@ impl ExecutionLedger {
         let entries = task_ids
             .into_iter()
             .map(|task_id| {
-                let receipt = receipt_for_task_from_store(&store, &task_id);
+                let legacy_receipt = legacy_receipt_for_task_from_store(&store, &task_id);
                 ExecutionLedgerEntryV1 {
                     task_id,
-                    actual_cost_micros: receipt.as_ref().map(|value| value.actual_cost_micros),
-                    baseline_cost_micros: receipt.as_ref().map(|value| value.baseline_cost_micros),
+                    legacy_estimated_actual_cost_micros: legacy_receipt
+                        .as_ref()
+                        .map(|value| value.legacy_receipt().actual_cost_micros),
+                    legacy_estimated_baseline_cost_micros: legacy_receipt
+                        .as_ref()
+                        .map(|value| value.legacy_receipt().baseline_cost_micros),
                     predicted_cost_micros: None,
                     actual_etpao: None,
                     baseline_etpao: None,
                     predicted_etpao: None,
-                    receipt,
+                    legacy_receipt,
                 }
             })
             .collect();
@@ -272,7 +281,7 @@ mod tests {
 
         assert!(store.verify_chain().unwrap());
         assert_eq!(store.task_cost_summary("task-1").model_calls, 0);
-        assert!(store.receipt_for_task("task-1").is_none());
+        assert!(store.legacy_receipt_for_task("task-1").is_none());
     }
 
     #[test]
@@ -453,6 +462,129 @@ mod tests {
             )),
             Err(ExecutionLedgerError::InvalidChain(_))
         ));
+
+        let mut duplicate_id = canonical_record("task-2", "trace-2", "invocation-engine-1", '1');
+        if let ExecutionEvent::CanonicalReceiptRecorded {
+            receipt_ref,
+            receipt_digest,
+            receipt_chain_id,
+            ..
+        } = &mut duplicate_id
+        {
+            *receipt_digest = format!("sha256:{}", "3".repeat(64));
+            *receipt_ref = format!("id:{receipt_digest}");
+            *receipt_chain_id = "independent-chain".to_owned();
+        }
+        assert!(matches!(
+            store.append(duplicate_id),
+            Err(ExecutionLedgerError::InvalidChain(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_receipts_never_authorize_or_downgrade_canonical_outcomes() {
+        let directory = tempdir().expect("temporary directory");
+        let store = ExecutionLedgerStore::new(directory.path().join("ledger.jsonl"));
+        store.append(task_started("task-1", "trace-1")).unwrap();
+        store
+            .append(ExecutionEvent::PlanCreated {
+                task_id: "task-1".to_owned(),
+                trace_id: "trace-1".to_owned(),
+                plan_id: "plan-1".to_owned(),
+                plan_ref: "plan:1".to_owned(),
+                timestamp: "2026-08-23T11:59:00Z".to_owned(),
+                sequence_number: 0,
+                prev_hash: String::new(),
+            })
+            .unwrap();
+        store
+            .append(context_delivered("task-1", "trace-1"))
+            .unwrap();
+        store.append(model_invoked("task-1", "trace-1")).unwrap();
+        let canonical_id = format!("sha256:{}", "1".repeat(64));
+        store
+            .append(ExecutionEvent::ReceiptSigned {
+                task_id: "task-1".to_owned(),
+                trace_id: "trace-1".to_owned(),
+                receipt_id: canonical_id.clone(),
+                receipt_hash: "arbitrary-nonempty-hash".to_owned(),
+                signature: "arbitrary-nonempty-signature".to_owned(),
+                timestamp: "2026-08-23T12:00:00Z".to_owned(),
+                sequence_number: 0,
+                prev_hash: String::new(),
+            })
+            .unwrap();
+        let legacy_outcome = |receipt_id: &str, outcome_id: &str| ExecutionEvent::OutcomeRecorded {
+            task_id: "task-1".to_owned(),
+            trace_id: "trace-1".to_owned(),
+            outcome_id: outcome_id.to_owned(),
+            receipt_id: receipt_id.to_owned(),
+            accepted: AcceptanceState::Accepted,
+            timestamp: "2026-08-23T12:00:01Z".to_owned(),
+            sequence_number: 0,
+            prev_hash: String::new(),
+        };
+
+        assert!(
+            store
+                .append(legacy_outcome(&canonical_id, "legacy-only"))
+                .is_err()
+        );
+        store
+            .append(canonical_record("task-1", "trace-1", "invocation-1", '1'))
+            .unwrap();
+        store
+            .append(ExecutionEvent::ReceiptSigned {
+                task_id: "task-1".to_owned(),
+                trace_id: "trace-1".to_owned(),
+                receipt_id: "legacy-downgrade".to_owned(),
+                receipt_hash: "still-arbitrary".to_owned(),
+                signature: "still-arbitrary".to_owned(),
+                timestamp: "2026-08-23T12:00:02Z".to_owned(),
+                sequence_number: 0,
+                prev_hash: String::new(),
+            })
+            .unwrap();
+        assert!(
+            store
+                .append(legacy_outcome("legacy-downgrade", "downgrade"))
+                .is_err()
+        );
+        store
+            .append(legacy_outcome(&canonical_id, "canonical-outcome"))
+            .unwrap();
+        assert!(
+            store
+                .append(ExecutionEvent::OutcomeRecorded {
+                    task_id: "task-1".to_owned(),
+                    trace_id: "trace-1".to_owned(),
+                    outcome_id: "contradictory-canonical-outcome".to_owned(),
+                    receipt_id: canonical_id.clone(),
+                    accepted: AcceptanceState::Rejected,
+                    timestamp: "2026-08-23T12:00:02Z".to_owned(),
+                    sequence_number: 0,
+                    prev_hash: String::new(),
+                })
+                .is_err()
+        );
+        assert!(
+            store
+                .append(ExecutionEvent::ReceiptSigned {
+                    task_id: "task-1".to_owned(),
+                    trace_id: "trace-1".to_owned(),
+                    receipt_id: "legacy-downgrade".to_owned(),
+                    receipt_hash: "different".to_owned(),
+                    signature: "different".to_owned(),
+                    timestamp: "2026-08-23T12:00:03Z".to_owned(),
+                    sequence_number: 0,
+                    prev_hash: String::new(),
+                })
+                .is_err()
+        );
+
+        let canonical = store.canonical_receipt_for_task("task-1").unwrap();
+        assert_eq!(canonical.receipt_id, canonical_id);
+        assert!(store.legacy_receipt_for_task("task-1").is_none());
     }
 
     #[test]
@@ -672,8 +804,8 @@ mod tests {
                 prev_hash: String::new(),
             })
             .unwrap();
-        store
-            .append(ExecutionEvent::OutcomeRecorded {
+        assert!(matches!(
+            store.append(ExecutionEvent::OutcomeRecorded {
                 task_id: "task-1".to_owned(),
                 trace_id: "trace-1".to_owned(),
                 outcome_id: "outcome-1".to_owned(),
@@ -682,15 +814,57 @@ mod tests {
                 timestamp: "2026-08-09T12:00:03Z".to_owned(),
                 sequence_number: 0,
                 prev_hash: String::new(),
-            })
-            .unwrap();
+            }),
+            Err(ExecutionLedgerError::InvalidChain(_))
+        ));
 
         let summary = task_cost_summary_from_store(&store, "task-1");
         assert_eq!(summary.total_tokens, 30);
         assert_eq!(summary.model_calls, 1);
-        let receipt = receipt_for_task_from_store(&store, "task-1").unwrap();
+        let legacy_receipt = legacy_receipt_for_task_from_store(&store, "task-1").unwrap();
+        let entry = ExecutionLedgerEntryV1 {
+            task_id: "task-1".to_owned(),
+            legacy_estimated_actual_cost_micros: Some(
+                legacy_receipt.legacy_receipt().actual_cost_micros,
+            ),
+            legacy_estimated_baseline_cost_micros: Some(
+                legacy_receipt.legacy_receipt().baseline_cost_micros,
+            ),
+            legacy_receipt: Some(legacy_receipt.clone()),
+            predicted_cost_micros: None,
+            actual_etpao: None,
+            baseline_etpao: None,
+            predicted_etpao: None,
+        };
+        let serialized = serde_json::to_value(entry).unwrap();
+        assert!(serialized.get("legacy_receipt").is_some());
+        assert!(
+            serialized
+                .get("legacy_estimated_actual_cost_micros")
+                .is_some()
+        );
+        assert!(
+            serialized
+                .get("legacy_estimated_baseline_cost_micros")
+                .is_some()
+        );
+        assert!(serialized.get("receipt").is_none());
+        assert!(serialized.get("actual_cost_micros").is_none());
+        assert!(serialized.get("baseline_cost_micros").is_none());
+        let mut invalid = serialized.clone();
+        invalid["legacy_receipt"]["schema_version"] = serde_json::json!(2);
+        assert!(serde_json::from_value::<ExecutionLedgerEntryV1>(invalid).is_err());
+        let mut outcome_authority = serialized.clone();
+        outcome_authority["legacy_receipt"]["outcome_ref"] = serde_json::json!("outcome-1");
+        assert!(serde_json::from_value::<ExecutionLedgerEntryV1>(outcome_authority).is_err());
+        let mut signature_authority = serialized;
+        signature_authority["legacy_receipt"]["evidence_refs"][0]["signature_status"] =
+            serde_json::json!("Verified");
+        assert!(serde_json::from_value::<ExecutionLedgerEntryV1>(signature_authority).is_err());
+
+        let receipt = legacy_receipt.into_legacy_receipt();
         assert_eq!(receipt.model_calls, 1);
         assert_eq!(receipt.output_tokens, 10);
-        assert_eq!(receipt.outcome_ref.as_deref(), Some("outcome-1"));
+        assert!(receipt.outcome_ref.is_none());
     }
 }
