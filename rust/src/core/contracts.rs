@@ -163,6 +163,19 @@ pub fn contract_docs() -> Vec<ContractDoc> {
             Stable,
         ),
         doc("release-integrity", "release-integrity-v1.md", 1, Stable),
+        doc("evidence-bundle-v2", "evidence-bundle-v2.md", 2, Stable),
+        doc(
+            "evidence-bundle-v2-verification",
+            "evidence-bundle-v2-verification-v1.md",
+            1,
+            Stable,
+        ),
+        doc(
+            "public-product-claims",
+            "public-product-claims-v1.md",
+            1,
+            Stable,
+        ),
         doc(
             "gotchas-reminders",
             "gotchas-reminders-contract-v1.md",
@@ -294,6 +307,18 @@ pub fn contract_docs() -> Vec<ContractDoc> {
         doc(
             "tokenizer-calibration",
             "tokenizer-calibration-v1.md",
+            1,
+            Experimental,
+        ),
+        doc(
+            "engine-interface-compatibility",
+            "engine-interface-compatibility-v1.md",
+            1,
+            Stable,
+        ),
+        doc(
+            "native-engine-context-proof",
+            "native-engine-context-proof-v1.md",
             1,
             Experimental,
         ),

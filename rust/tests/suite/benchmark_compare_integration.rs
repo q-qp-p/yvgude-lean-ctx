@@ -47,16 +47,16 @@ fn compare_generates_valid_markdown() {
     assert!(out_path.exists(), "BENCHMARKS.md should be created");
 
     let content = std::fs::read_to_string(&out_path).unwrap();
-    assert!(content.contains("# lean-ctx Benchmark: Head-to-Head Comparison"));
-    assert!(content.contains("## Methodology"));
-    assert!(content.contains("## Compression Comparison"));
+    assert!(content.contains("# lean-ctx Research-only representation comparison"));
+    assert!(content.contains("## Research methodology and boundary"));
+    assert!(content.contains("## Local representation comparison"));
     assert!(content.contains("## Feature Comparison"));
     assert!(content.contains("## Reproducibility"));
     assert!(content.contains("Repomix"));
     assert!(content.contains("lean-ctx"));
 
     let terminal = report::generate_terminal(&r);
-    assert!(terminal.contains("Head-to-Head Benchmark"));
+    assert!(terminal.contains("Research-only representation comparison"));
 }
 
 #[test]

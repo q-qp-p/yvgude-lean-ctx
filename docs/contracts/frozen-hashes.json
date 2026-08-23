@@ -2,9 +2,9 @@
   "context-ir-v1.md": "f551d5d48daeda34d7f7bee57582984e58d7f65659ec52a55b23946fc942a81c",
   "delivery-manifest-v1.md": "2aed9735fc42baa10ca96a7edd786f8c2e26b568b6a6325ce2e4bcded33fe5b1",
   "deployment-rehearsal-v1.md": "db76d9779887e3e5493a99b4356a1629df34607b54f52815e4da0e29ecfc832d",
-  "http-mcp-contract-v1.md": "0fcb2836bd54887f02c8be5bdfcc77936161fb034d15e2fa6b8a6d1664ba2c08",
-  "local-free-invariant-v1.md": "d2d91c34608a532bd48889404eff21de1a9d2e5b06cc1838683048aee4c77b1d",
+  "http-mcp-contract-v1.md": "7550166fcefddea0752129e99aaf03a7821589e998a637905388f0392129d240",
+  "local-free-invariant-v1.md": "492d4525152b90887bb7b189ebdc760b5de011e7809d78e09ef38d9b0d112e45",
   "oss-plane-separation-v1.md": "38612e3e61bc80e50195a993c2f14c0fb1da74d0aea17acb57a620324f3cdcd2",
   "release-key-rotation-v1.md": "814b6adb8e6c496b0554cf821738b41fe1472e4565449d1924f9324a491b19ea",
-  "wasm-abi-v1.md": "9f126d3d3cdc106b9fef30d2a8d3000e279980a7cc6f2ec0197b40c6aad2a707"
+  "wasm-abi-v1.md": "b75f6e0b8a54c4c9464b72f967611b263fceff8482ea83be69842d01b5dcc28d"
 }

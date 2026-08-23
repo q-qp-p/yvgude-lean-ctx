@@ -129,6 +129,7 @@ All `std::sync::Mutex` unless noted otherwise.
 | L110 | `ROI_CACHE` | `dashboard/routes/roi.rs:23` | `Mutex<Option<(Instant, String)>>` | Cached ROI dashboard response; independent leaf lock, never nested |
 | L111 | `DOCTOR_CACHE` | `dashboard/routes/doctor.rs:17` | `Mutex<Option<(Instant, String)>>` | Cached doctor check response; independent leaf lock, never nested |
 | L112 | `POLL_CACHE` | `tools/ctx_read/terminal_compress.rs:35` | `Mutex<Option<HashMap<String, PollState>>>` | Terminal poll content hash cache for dedup; independent leaf lock, never nested |
+| L113 | `JOURNAL_LOCK` | `core/journal.rs:14` | `LazyLock<Mutex<()>>` | Serializes journal rotation and writes; held while acquiring only the journal's independent OS file lock, never nested with another Rust static lock |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
@@ -262,9 +263,9 @@ Override via `LEAN_CTX_WORKER_THREADS` (positive integer) for environments with 
 concurrent subagents. Example: `LEAN_CTX_WORKER_THREADS=8`. The blocking thread pool
 is always `worker_threads * 4`, clamped to `[8, 32]`.
 
-### Independent Static Locks (L3–L90)
+### Independent Static Locks (L3–L113)
 
-All other static locks (L3–L90) — **except the L22 → L4 pair documented above** — are
+All other static locks (L3–L113) — **except the L22 → L4 pair documented above** — are
 **independent singletons**: they protect isolated subsystem state and are never nested inside
 each other. Each should be acquired in isolation:
 
@@ -323,6 +324,5 @@ across any other lock acquisition.
 3. Assign a lock number (append to Section 1) and document the acquisition order here.
 4. If nesting is required, document the outer → inner relationship in Section 3.
 5. Run `cargo check --all-features` to verify `Send`/`Sync` bounds.
-
 
 
