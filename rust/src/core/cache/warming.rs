@@ -352,6 +352,7 @@ mod tests {
         assert_eq!(result.len(), MAX_RECENT_FILES);
     }
 
+    #[cfg(not(feature = "no-jail"))]
     #[test]
     fn project_warming_rejails_paths_and_skips_stale_records() {
         let _data = crate::core::data_dir::isolated_data_dir();
@@ -384,6 +385,45 @@ mod tests {
         assert_eq!(
             warmed[0].path,
             good.canonicalize().unwrap().to_string_lossy().into_owned()
+        );
+    }
+
+    #[cfg(feature = "no-jail")]
+    #[test]
+    fn project_warming_no_jail_skips_stale_and_accepts_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let stale = root.path().join("stale.rs");
+        let outside_file = outside.path().join("outside.rs");
+        for path in [&stale, &outside_file] {
+            std::fs::write(path, "fixture").unwrap();
+        }
+
+        let mut session = session_at(10);
+        session.project_root = Some(root.path().to_string_lossy().into_owned());
+        for path in [&stale, &outside_file] {
+            session.touch_file(&path.to_string_lossy(), None, "full", 1);
+        }
+        session
+            .files_touched
+            .iter_mut()
+            .find(|file| file.path == stale.to_string_lossy().as_ref())
+            .expect("stale fixture")
+            .stale = true;
+
+        let warmed = collect_recent_files_in_project(
+            &[session],
+            root.path().to_str().expect("UTF-8 temporary root"),
+        );
+
+        assert_eq!(warmed.len(), 1);
+        assert_eq!(
+            warmed[0].path,
+            outside_file
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
         );
     }
 }

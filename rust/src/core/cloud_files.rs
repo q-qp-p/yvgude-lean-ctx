@@ -16,7 +16,7 @@ use std::path::Path;
 /// On platforms without an on-demand cloud-file convention this is always
 /// `false`.
 #[cfg(windows)]
-pub fn is_cloud_placeholder(path: &Path) -> bool {
+pub(crate) fn is_cloud_placeholder(path: &Path) -> bool {
     use std::os::windows::fs::MetadataExt;
     // `symlink_metadata` maps to GetFileAttributes, which reports the placeholder
     // attributes without recalling (downloading) the content.
@@ -46,7 +46,7 @@ pub(crate) fn is_cloud_placeholder(path: &Path) -> bool {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn is_cloud_placeholder(_path: &Path) -> bool {
+pub(crate) fn is_cloud_placeholder(_path: &Path) -> bool {
     false
 }
 

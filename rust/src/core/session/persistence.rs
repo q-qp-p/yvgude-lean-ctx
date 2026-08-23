@@ -41,7 +41,6 @@ fn project_index_path(dir: &std::path::Path, project_root: &str) -> std::path::P
 /// the already-committed session save.
 fn update_project_index(dir: &std::path::Path, project_root: &str, id: &str) -> Result<(), String> {
     use fs2::FileExt;
-    use std::io::ErrorKind;
     use std::time::{Duration, Instant};
 
     const LOCK_TIMEOUT: Duration = Duration::from_millis(200);
@@ -62,10 +61,12 @@ fn update_project_index(dir: &std::path::Path, project_root: &str, id: &str) -> 
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => break,
-            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+            Err(error)
+                if crate::core::file_lock::is_contended(&error) && Instant::now() < deadline =>
+            {
                 std::thread::sleep(RETRY_INTERVAL);
             }
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            Err(error) if crate::core::file_lock::is_contended(&error) => {
                 return Err("project index lock timed out".to_string());
             }
             Err(error) => return Err(format!("project index lock: {error}")),

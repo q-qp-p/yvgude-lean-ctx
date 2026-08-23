@@ -35,7 +35,6 @@ fn journal_lock_path() -> PathBuf {
 /// observational, so a contended lock is skipped instead of delaying a tool.
 fn with_journal_lock(f: impl FnOnce()) {
     use fs2::FileExt;
-    use std::io::ErrorKind;
 
     let _local = JOURNAL_LOCK
         .lock()
@@ -53,7 +52,7 @@ fn with_journal_lock(f: impl FnOnce()) {
         match lock.try_lock_exclusive() {
             Ok(()) => break,
             Err(error)
-                if error.kind() == ErrorKind::WouldBlock
+                if crate::core::file_lock::is_contended(&error)
                     && std::time::Instant::now() < deadline =>
             {
                 std::thread::sleep(std::time::Duration::from_millis(5));

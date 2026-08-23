@@ -351,6 +351,7 @@ pub mod extension_registry;
 pub mod extractors;
 pub mod feedback;
 pub(crate) mod fep_prefetch;
+pub(crate) mod file_lock;
 pub(crate) mod filters;
 pub mod gain;
 pub(crate) mod git;
