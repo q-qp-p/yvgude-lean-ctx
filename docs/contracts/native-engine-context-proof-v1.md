@@ -124,7 +124,8 @@ The proof covers admitted execution, canonical source and output integrity,
 deterministic version-scoped receipt identity across repeated calls, real gate
 admission,
 single-snapshot production dispatch, raw/redacted identity separation, durable
-and visible receipt-write failure plus successful retry, rooted-source refusal,
+and visible receipt-write failure plus successful retry, exact legacy omission
+even when Engine artifact storage is unavailable, rooted-source refusal,
 artifact-directory symlink containment, hard host deadline with no late output,
 permission re-hardening, no adapter invocation on rejection,
 structured source recovery, source-integrity mismatch, redaction non-disclosure,

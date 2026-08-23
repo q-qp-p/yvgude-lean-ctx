@@ -308,6 +308,21 @@ async fn mcp_aggressive_read_surfaces_engine_receipt_failure_without_hiding_cont
         session: Some(Arc::new(RwLock::new(SessionState::new()))),
         ..ToolContext::default()
     };
+    let legacy_args = json!({
+        "path": path,
+        "mode": "aggressive",
+        "fresh": true
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let legacy = tokio::task::block_in_place(|| CtxReadTool.handle(&legacy_args, &ctx))
+        .expect("omitted Engine interface ignores unavailable receipt storage");
+    assert!(!legacy.text.starts_with("[ENGINE RECEIPT WARNING]"));
+    assert!(legacy.text.contains("legacy_content_survives"));
+    assert!(!engine_dir.join("outputs").exists());
+    assert!(!engine_dir.join("recovery").exists());
+
     let args = json!({
         "path": path,
         "mode": "aggressive",
@@ -328,6 +343,11 @@ async fn mcp_aggressive_read_surfaces_engine_receipt_failure_without_hiding_cont
     );
     assert!(output.text.contains("recovery_ref=recovery:sha256:"));
     assert!(output.text.contains("legacy_content_survives"));
+    let (_, preserved) = output
+        .text
+        .split_once("\n\n")
+        .expect("stable Engine warning must be one paragraph before legacy content");
+    assert_eq!(preserved, legacy.text);
 
     let recovery_dir = engine_dir.join("recovery");
     let recovery: Vec<_> = std::fs::read_dir(&recovery_dir)
