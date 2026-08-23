@@ -1,0 +1,182 @@
+{
+  "schema_version": "leanctx.public-protocol-surface-freeze/v1",
+  "policy_source_path": "security/public-protocol-surface-freeze-v1.json",
+  "owner": "lean-ctx OSS protocol maintainers",
+  "status": "experimental-non-v1",
+  "experimental": true,
+  "v1": false,
+  "review_release": "v1",
+  "removal_not_before_release": "v2",
+  "surfaces": {
+    "auto_routing": {
+      "owner": "lean-ctx OSS protocol maintainers",
+      "status": "experimental-non-v1",
+      "experimental": true,
+      "v1": false,
+      "review_release": "v1",
+      "removal_not_before_release": "v2",
+      "module_path": "rust/crates/lean-ctx-protocol/src/auto_routing.rs",
+      "module_roots": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "declarations": ["pub mod auto_routing;"]
+        },
+        {
+          "path": "rust/src/proxy/mod.rs",
+          "declarations": ["pub mod auto_routing;"]
+        }
+      ],
+      "root_reexports": [
+        {
+          "path": "rust/src/proxy/auto_routing.rs",
+          "statements": [
+            "pub use lean_ctx_protocol::auto_routing::{ AutoRoutingConfig, AutoRoutingEvidence, AutoRoutingRequest, RoutingDecision, RoutingMode, RoutingReceipt, SchedulerGate, };"
+          ]
+        }
+      ],
+      "exported_symbols": [
+        {"kind": "enum", "name": "RoutingMode"},
+        {"kind": "struct", "name": "AutoRoutingConfig"},
+        {"kind": "struct", "name": "AutoRoutingEvidence"},
+        {"kind": "struct", "name": "AutoRoutingRequest"},
+        {"kind": "struct", "name": "RoutingDecision"},
+        {"kind": "struct", "name": "RoutingReceipt"},
+        {"kind": "struct", "name": "SchedulerGate"}
+      ],
+      "approved_consumers": [
+        {
+          "path": "rust/src/proxy/auto_routing.rs",
+          "statements": [
+            "pub use lean_ctx_protocol::auto_routing::{ AutoRoutingConfig, AutoRoutingEvidence, AutoRoutingRequest, RoutingDecision, RoutingMode, RoutingReceipt, SchedulerGate, };"
+          ]
+        }
+      ]
+    },
+    "control_plane": {
+      "owner": "lean-ctx OSS protocol maintainers",
+      "status": "experimental-non-v1",
+      "experimental": true,
+      "v1": false,
+      "review_release": "v1",
+      "removal_not_before_release": "v2",
+      "module_path": "rust/crates/lean-ctx-protocol/src/control_plane.rs",
+      "module_roots": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "declarations": ["pub mod control_plane;"]
+        }
+      ],
+      "root_reexports": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "statements": ["pub use control_plane::*;"]
+        }
+      ],
+      "exported_symbols": [
+        {"kind": "struct", "name": "ControlPlaneDecision"},
+        {"kind": "struct", "name": "ControlPlaneRequest"},
+        {"kind": "struct", "name": "LocalControlPlane"},
+        {"kind": "trait", "name": "ControlPlaneContract"}
+      ],
+      "approved_consumers": []
+    },
+    "fleet_control": {
+      "owner": "lean-ctx OSS protocol maintainers",
+      "status": "experimental-non-v1",
+      "experimental": true,
+      "v1": false,
+      "review_release": "v1",
+      "removal_not_before_release": "v2",
+      "module_path": "rust/crates/lean-ctx-protocol/src/fleet_control.rs",
+      "module_roots": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "declarations": ["pub mod fleet_control;"]
+        }
+      ],
+      "root_reexports": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "statements": ["pub use fleet_control::*;"]
+        }
+      ],
+      "exported_symbols": [
+        {"kind": "struct", "name": "AgentPolicy"},
+        {"kind": "struct", "name": "FleetState"},
+        {"kind": "struct", "name": "LocalFleetControl"},
+        {"kind": "trait", "name": "FleetControlContract"}
+      ],
+      "approved_consumers": []
+    },
+    "rollout": {
+      "owner": "lean-ctx OSS protocol maintainers",
+      "status": "experimental-non-v1",
+      "experimental": true,
+      "v1": false,
+      "review_release": "v1",
+      "removal_not_before_release": "v2",
+      "module_path": "rust/crates/lean-ctx-protocol/src/rollout.rs",
+      "module_roots": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "declarations": ["pub mod rollout;"]
+        },
+        {
+          "path": "rust/src/proxy/mod.rs",
+          "declarations": ["pub mod rollout;"]
+        }
+      ],
+      "root_reexports": [
+        {
+          "path": "rust/src/proxy/rollout.rs",
+          "statements": [
+            "pub use lean_ctx_protocol::rollout::{ RolloutAssignment, RolloutCohort, RolloutConfig, assign_rollout, };"
+          ]
+        }
+      ],
+      "exported_symbols": [
+        {"kind": "fn", "name": "assign_rollout"},
+        {"kind": "struct", "name": "RolloutAssignment"},
+        {"kind": "struct", "name": "RolloutCohort"},
+        {"kind": "struct", "name": "RolloutConfig"}
+      ],
+      "approved_consumers": [
+        {
+          "path": "rust/src/proxy/rollout.rs",
+          "statements": [
+            "pub use lean_ctx_protocol::rollout::{ RolloutAssignment, RolloutCohort, RolloutConfig, assign_rollout, };"
+          ]
+        }
+      ]
+    },
+    "value_share": {
+      "owner": "lean-ctx OSS protocol maintainers",
+      "status": "experimental-non-v1",
+      "experimental": true,
+      "v1": false,
+      "review_release": "v1",
+      "removal_not_before_release": "v2",
+      "module_path": "rust/crates/lean-ctx-protocol/src/value_share.rs",
+      "module_roots": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "declarations": ["pub mod value_share;"]
+        }
+      ],
+      "root_reexports": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
+          "statements": ["pub use value_share::*;"]
+        }
+      ],
+      "exported_symbols": [
+        {"kind": "enum", "name": "SettlementStatus"},
+        {"kind": "struct", "name": "LocalValueShare"},
+        {"kind": "struct", "name": "SavingsAttribution"},
+        {"kind": "struct", "name": "SettlementRecord"},
+        {"kind": "trait", "name": "ValueShareContract"}
+      ],
+      "approved_consumers": []
+    }
+  }
+}
