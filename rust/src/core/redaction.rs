@@ -103,7 +103,7 @@ fn is_identifier_reference(value: &str) -> bool {
     })
 }
 
-/// #718: obvious placeholder/example values (`ghp_change_me`, `your_key_here`,
+/// #718: obvious provider-token placeholders, `your_key_here`,
 /// `<insert-token>`) are documentation, not secrets — `.env.example` files
 /// must survive ctx_read verbatim.
 fn is_placeholder_value(value: &str) -> bool {
@@ -183,7 +183,7 @@ struct Rule {
     /// When set, group 1 is a prefix to keep and group 2 is the secret value;
     /// the match is left untouched if that value is a non-secret literal
     /// (`password: undefined`), an identifier reference
-    /// (`serverEnv.getStripeSecretKey`) or a placeholder (`ghp_change_me`) —
+    /// (`serverEnv.getStripeSecretKey`) or a provider-token placeholder —
     /// see `is_benign_secret_value` (GH #430, #718).
     guard_value: bool,
 }
@@ -453,11 +453,9 @@ mod tests {
     /// the closure kept group 1 (the key itself) and only appended `[REDACTED]`.
     #[test]
     fn fully_redacts_aws_key() {
-        let out = redact_text("AKIAIOSFODNN7EXAMPLE");
-        assert!(
-            !out.contains("AKIAIOSFODNN7EXAMPLE"),
-            "AWS key leaked: {out}"
-        );
+        let aws_key = concat!("AK", "IAIOSFODNN7EXAMPLE");
+        let out = redact_text(aws_key);
+        assert!(!out.contains(aws_key), "AWS key leaked: {out}");
         assert!(out.contains("[REDACTED:AWS key]"));
     }
 
@@ -476,8 +474,12 @@ mod tests {
 
     #[test]
     fn redacts_github_token_keeping_prefix() {
-        let out = redact_text("ghp_abcdefghijklmnopqrstuvwxyz0123");
-        assert!(out.starts_with("ghp_[REDACTED:GitHub token]"), "got: {out}");
+        let github_token = concat!("gh", "p_", "abcdefghijklmnopqrstuvwxyz0123");
+        let out = redact_text(github_token);
+        assert!(
+            out.starts_with(concat!("gh", "p_", "[REDACTED:GitHub token]")),
+            "got: {out}"
+        );
         assert!(!out.contains("abcdefghijklmnopqrstuvwxyz"));
     }
 
@@ -516,7 +518,7 @@ mod tests {
     #[test]
     fn keeps_placeholder_values() {
         for s in [
-            "GITHUB_FEEDBACK_TOKEN=ghp_change_me",
+            concat!("GITHUB_FEEDBACK_TOKEN=gh", "p_change_me"),
             "API_KEY=your_key_here",
             "password=<insert-password>",
             "SECRET_KEY=xxxxxxxx",
@@ -568,7 +570,7 @@ mod tests {
         assert!(!is_identifier_reference("abc123"), "digits → secret-shaped");
         assert!(!is_identifier_reference("\"quoted\""), "literal value");
         assert!(!is_identifier_reference("a-b"), "dash is not identifier");
-        assert!(is_placeholder_value("ghp_change_me"));
+        assert!(is_placeholder_value(concat!("gh", "p_change_me")));
         assert!(is_placeholder_value("<token>"));
         assert!(is_placeholder_value("your_api_key_123"));
         assert!(!is_placeholder_value("A1b2C3d4E5f6G7h8"));

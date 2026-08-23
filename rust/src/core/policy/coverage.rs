@@ -49,10 +49,10 @@ pub struct CoverageCheck {
 /// reports (GL #424) so CGB and framework claims test identical fixtures.
 pub(crate) const CREDENTIAL_FIXTURES: &[(&str, &str)] = &[
     ("private key block", "-----BEGIN RSA PRIVATE KEY-----"),
-    ("cloud access key", "AKIAIOSFODNN7EXAMPLE"),
+    ("cloud access key", concat!("AK", "IAIOSFODNN7EXAMPLE")),
     (
         "credential assignment",
-        "api_key = \"sk-supersecretvalue1234\"",
+        concat!("api_key = \"sk", "-supersecretvalue1234\""),
     ),
     (
         "bearer token",

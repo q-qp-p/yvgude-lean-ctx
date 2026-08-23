@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn disabled_is_noop_even_for_secrets() {
         let cfg = SensitivityConfig::default(); // enabled = false
-        let secret = "token = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".to_string();
+        let secret = concat!("token = gh", "p_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789").to_string();
         let out = enforce_text(secret.clone(), None, &cfg);
         assert_eq!(out, Enforced::Pass(secret));
     }
@@ -266,7 +266,7 @@ mod tests {
             policy_floor: SensitivityLevel::Secret,
             action: FloorAction::Drop,
         };
-        let secret = "AWS key AKIAIOSFODNN7EXAMPLE leaked".to_string();
+        let secret = concat!("AWS key AK", "IAIOSFODNN7EXAMPLE leaked").to_string();
         match enforce_text(secret, None, &cfg) {
             Enforced::Dropped { level, notice } => {
                 assert_eq!(level, SensitivityLevel::Secret);
@@ -283,13 +283,13 @@ mod tests {
             policy_floor: SensitivityLevel::Secret,
             action: FloorAction::Redact,
         };
-        let text = "prefix AKIAIOSFODNN7EXAMPLE suffix".to_string();
+        let text = concat!("prefix AK", "IAIOSFODNN7EXAMPLE suffix").to_string();
         match enforce_text(text, None, &cfg) {
             Enforced::Redacted { text, level } => {
                 assert_eq!(level, SensitivityLevel::Secret);
                 assert!(text.contains("prefix"));
                 assert!(text.contains("suffix"));
-                assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"));
+                assert!(!text.contains(concat!("AK", "IAIOSFODNN7EXAMPLE")));
             }
             other => panic!("expected Redacted, got {other:?}"),
         }

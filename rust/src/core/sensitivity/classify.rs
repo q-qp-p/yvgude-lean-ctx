@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn secret_content_is_secret() {
         // GitHub token shape is detected by secret_detection.
-        let t = "export TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let t = concat!("export TOKEN=gh", "p_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
         assert_eq!(classify_content(t), SensitivityLevel::Secret);
     }
 

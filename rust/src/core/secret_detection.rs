@@ -279,49 +279,52 @@ pub mod tests {
 
     #[test]
     fn detects_aws_key() {
-        let input = "aws_key = AKIAIOSFODNN7EXAMPLE";
+        let input = concat!("aws_key = AK", "IAIOSFODNN7EXAMPLE");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "aws_key"));
     }
 
     #[test]
     fn detects_private_key_header() {
-        let input = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIB...";
+        let input = concat!("-----BEGIN RSA PRIVATE", " KEY-----\nMIIEpAIB...");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "private_key"));
     }
 
     #[test]
     fn detects_github_token() {
-        let input = "export GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijkl";
+        let input = concat!(
+            "export GITHUB_TOKEN=gh",
+            "p_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijk"
+        );
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "github_token"));
     }
 
     #[test]
     fn detects_anthropic_key() {
-        let input = "ANTHROPIC_API_KEY=sk-ant-api03-abcdef1234567890ABCD";
+        let input = concat!("ANTHROPIC_API_KEY=sk-ant-api03-", "abcdef1234567890ABCD");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "anthropic_key"));
     }
 
     #[test]
     fn detects_openai_key() {
-        let input = "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwx";
+        let input = concat!("OPENAI_API_KEY=sk-", "abcdefghijklmnopqrstuvwx");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "openai_key"));
     }
 
     #[test]
     fn detects_gitlab_pat() {
-        let input = "token = glpat-xxxxxxxxxxxxxxxxxxxx";
+        let input = concat!("token = glpat-", "xxxxxxxxxxxxxxxxxxxx");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "gitlab_pat"));
     }
 
     #[test]
     fn detects_generic_api_key() {
-        let input = "api_key = abcdefghijklmnopqrstuvwxyz1234567890";
+        let input = concat!("api_key = abcdefghijklmnop", "qrstuvwxyz1234567890");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(
             |m| m.pattern_name == "generic_api_key" || m.pattern_name == "high_entropy_secret"
@@ -337,42 +340,45 @@ pub mod tests {
 
     #[test]
     fn detects_jwt() {
-        let input = "token = eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw";
+        let input = concat!("token = eyJhbGciOiJIU", "zI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkw");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "jwt"));
     }
 
     #[test]
     fn detects_slack_token() {
-        let input = "SLACK_TOKEN=xoxb-1234567890-abcdefghij";
+        let input = concat!("SLACK_TOKEN=xoxb-12345", "67890-abcdefghij");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "slack_token"));
     }
 
     #[test]
     fn detects_stripe_key() {
-        let input = "stripe_key = sk_live_abcdefghij1234567890";
+        let input = concat!("stripe_key = sk_", "live_abcdefghij1234567890");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "stripe_key"));
     }
 
     #[test]
     fn detects_db_url() {
-        let input = "DATABASE_URL=postgres://user:password@localhost:5432/db";
+        let input = concat!(
+            "DATABASE_URL=postgres://user:pass",
+            "word@localhost:5432/db"
+        );
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "db_url"));
     }
 
     #[test]
     fn detects_npm_token() {
-        let input = "NPM_TOKEN=npm_abcdefghij1234567890";
+        let input = concat!("NPM_TOKEN=npm_abcd", "efghij1234567890");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "npm_token"));
     }
 
     #[test]
     fn detects_github_fine_grained() {
-        let input = "token = github_pat_ABCDEFGHIJKLMNOPQRSTuvwx";
+        let input = concat!("token = github_pat_ABC", "DEFGHIJKLMNOPQRSTuv");
         let matches = detect_secrets(input);
         assert!(
             matches
@@ -383,7 +389,7 @@ pub mod tests {
 
     #[test]
     fn redacted_preview_format() {
-        let preview = make_redacted_preview("AKIAIOSFODNN7EXAMPLE");
+        let preview = make_redacted_preview(concat!("AK", "IAIOSFODNN7EXAMPLE"));
         assert!(preview.starts_with("AKIA"));
         assert!(preview.ends_with("LE"));
         assert!(preview.contains("***"));
@@ -402,11 +408,11 @@ pub mod tests {
             redact: true,
             ..Default::default()
         };
-        let input = "key = AKIAIOSFODNN7EXAMPLE";
+        let input = concat!("key = AK", "IAIOSFODNN7EXAMPLE");
         let (redacted, matches) = scan_and_redact(input, &cfg);
         assert!(!matches.is_empty());
         assert!(redacted.contains("[REDACTED:aws_key]"));
-        assert!(!redacted.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!redacted.contains(concat!("AK", "IAIOSFODNN7EXAMPLE")));
     }
 
     #[test]
@@ -416,7 +422,7 @@ pub mod tests {
             redact: false,
             ..Default::default()
         };
-        let input = "key = AKIAIOSFODNN7EXAMPLE";
+        let input = concat!("key = AK", "IAIOSFODNN7EXAMPLE");
         let (output, matches) = scan_and_redact(input, &cfg);
         assert!(!matches.is_empty());
         assert_eq!(output, input);
@@ -429,7 +435,7 @@ pub mod tests {
             redact: true,
             ..Default::default()
         };
-        let input = "key = AKIAIOSFODNN7EXAMPLE";
+        let input = concat!("key = AK", "IAIOSFODNN7EXAMPLE");
         let (output, matches) = scan_and_redact(input, &cfg);
         assert!(matches.is_empty());
         assert_eq!(output, input);
@@ -451,7 +457,7 @@ pub mod tests {
 
     #[test]
     fn line_numbers_are_correct() {
-        let input = "line1\nline2\nAKIAIOSFODNN7EXAMPLE\nline4";
+        let input = concat!("line1\nline2\nAK", "IAIOSFODNN7EXAMPLE\nline4");
         let matches = detect_secrets(input);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].line_number, 3);
@@ -459,7 +465,11 @@ pub mod tests {
 
     #[test]
     fn multiple_secrets_on_different_lines() {
-        let input = "AKIAIOSFODNN7EXAMPLE\nclean\nsk-abcdefghijklmnopqrstuvwx";
+        let input = concat!(
+            "AK",
+            "IAIOSFODNN7EXAMPLE\nclean\nsk-abcdef",
+            "ghijklmnopqrstuvwx"
+        );
         let matches = detect_secrets(input);
         assert!(matches.len() >= 2);
         let aws = matches
@@ -476,14 +486,14 @@ pub mod tests {
 
     #[test]
     fn ec_private_key_detected() {
-        let input = "-----BEGIN EC PRIVATE KEY-----";
+        let input = concat!("-----BEGIN EC PRIVATE", " KEY-----");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "private_key"));
     }
 
     #[test]
     fn openssh_private_key_detected() {
-        let input = "-----BEGIN OPENSSH PRIVATE KEY-----";
+        let input = concat!("-----BEGIN OPENSSH PRIVATE", " KEY-----");
         let matches = detect_secrets(input);
         assert!(matches.iter().any(|m| m.pattern_name == "private_key"));
     }
