@@ -40,20 +40,42 @@ engine-interface/v1/receipts/<sha256>.json
 engine-interface/v1/recovery/<sha256>.json
 ```
 
-- Directories are private on Unix. Every relative directory component is
-  rejected when it is a symlink/reparse point or resolves outside the canonical
-  data root. New content-addressed artifacts are written to an exclusive,
-  no-follow temporary leaf in the validated final directory. Only a fully
-  written, permission-hardened and synchronized temporary artifact may be
-  published under its digest by an atomic no-replace operation; an existing
-  digest path is never overwritten. Any failure before publication leaves the
-  final digest path absent and retryable. Unix artifacts use mode `0600`.
+- Directories are private on Unix. The deepest existing data-root ancestor is
+  acquired directly by a no-follow final-component `open`; there is no separate
+  metadata probe or canonicalize/reopen window. Missing root components and
+  every later `engine-interface/v1/<class>` component are opened or created
+  with `openat`/`mkdirat` relative to the held parent descriptor and no-follow
+  protection. New
+  content-addressed artifacts are written to an exclusive,
+  no-follow temporary leaf through the held final-directory descriptor. Only a
+  fully written, permission-hardened and synchronized temporary artifact may be
+  published under its digest by descriptor-relative atomic no-replace
+  publication (`renameat2` or contained `linkat`); an existing digest path is
+  never overwritten. The named temporary entry's device/inode identity is
+  checked against the held file before and after publication; a swapped entry
+  is removed and rejected. Any failure before publication leaves the final
+  digest path absent and retryable. Unix artifacts use mode `0600`.
+- Windows opens only the drive/UNC anchor by absolute name, validates that
+  handle's final DOS path, then walks every data-root and artifact component by
+  held handles with native relative create/open operations and reparse
+  protection; it has no probe/canonicalize/reopen window. Relative rename and
+  disposition complete publication. If a required native
+  primitive or runtime filesystem behavior is unsupported, the writer returns
+  the stable `engine_artifact_boundary_unsupported` category and never falls
+  back to pathname mutation. Any provisional directory remains confined beneath
+  the held root; temporary leaves are delete-on-close and cleaned by handle.
+  Artifact files are flushed before publication. Directory-handle flush is
+  applied where the filesystem supports it; documented unsupported directory
+  flush results neither weaken containment nor invalidate an already verified
+  content-addressed artifact.
 - Existing artifact paths must be regular, non-symlink files whose contents
   match their address.
 - P1 rejects pre-existing symlink/reparse escape and never writes payload bytes
-  outside the resolved data root. Malicious same-user relocation after artifact
-  handle validation is outside this boundary; that excluded race can leave an
-  empty external leaf, but cannot produce an external payload write.
+  outside the resolved data-root object. That object, not a later pathname
+  lookup, is the boundary after binding. Deterministic root- and parent-swap
+  sentinels relocate the held tree or output directory and replace the old
+  pathname; publication remains inside the held object or fails closed, and the
+  replacement/outside directory remains byte-for-byte unchanged.
 - Receipt JSON is canonical and contains references, digests, status and
   measurements only. It intentionally excludes raw source and output bytes.
 - The production source reference binds the canonical resolved path by SHA-256;
@@ -82,10 +104,14 @@ remain untouched when Engine v1 is omitted. Explicit Engine v1 forces a fresh
 bounded worker snapshot; identical calls reuse the same content-addressed
 output and receipt identities rather than silently accepting a legacy cache hit.
 
-The production worker opens the source through the Engine root one component at
-a time without following links. The Engine receives that descriptor-backed raw
-snapshot and canonical identity; it does not resolve or read the caller path a
-second time. Materialized compression runs in a dedicated worker behind a real
+On Unix, the production worker opens the source through the Engine root one
+component at a time without following links. On Windows, it validates the
+opened regular-file handle's normalized final path against the canonical root
+before reading. The Engine receives that handle-backed raw snapshot and
+canonical identity; it does not resolve or read the caller path a second time.
+Engine construction fails closed when its root cannot be securely canonicalized;
+it never substitutes the unresolved caller path. Materialized compression runs
+in a dedicated worker behind a real
 30-second host deadline. A timed-out worker cannot persist an artifact and late
 completion cannot publish output. The receiving Engine records the terminal
 `failed` / `resource_limit` observation and receipt itself.

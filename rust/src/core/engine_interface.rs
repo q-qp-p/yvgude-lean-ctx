@@ -189,13 +189,12 @@ struct EngineRecoveryArtifactV1 {
 }
 
 impl NativeContextEngine {
-    #[must_use]
-    pub(crate) fn with_root(root: impl AsRef<Path>) -> Self {
+    pub(crate) fn with_root(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = crate::core::pathutil::canonicalize_secure(root.as_ref())
-            .unwrap_or_else(|_| root.as_ref().to_path_buf());
-        Self {
+            .map_err(|_| "ctx_read Engine root cannot be bound securely".to_owned())?;
+        Ok(Self {
             adapter: NativeContextAdapter::with_root(root),
-        }
+        })
     }
 
     fn interface(&self) -> Result<EngineInterfaceV1, String> {
@@ -675,7 +674,7 @@ mod tests {
         let root = tempfile::tempdir().expect("native adapter root");
         let input = b"stable native context";
         std::fs::write(root.path().join("fixture.md"), input).expect("fixture write");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
 
         let (invocation, observation) = engine
             .execute(request(
@@ -713,7 +712,7 @@ mod tests {
         let root = tempfile::tempdir().expect("native adapter root");
         let input = b"stable native context";
         std::fs::write(root.path().join("fixture.md"), input).expect("fixture write");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
         let request = request("fixture.md", input, EnginePolicyDecisionV1::Admitted);
 
         let (first_invocation, first) = engine.execute(request.clone()).expect("first invocation");
@@ -738,7 +737,7 @@ mod tests {
             .expect("fixture write");
         std::fs::create_dir(root.path().join("alias-parent")).expect("alias directory");
         let input = "caller snapshot\nwith stable context";
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
         let policy_ref = "policy:ctx-read-context-gate-v1:fixture";
         let policy_admission = EnginePolicyAdmissionV1 {
             policy_ref: ProtocolReference::new(policy_ref).expect("policy ref"),
@@ -795,7 +794,7 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside root");
         let source = outside.path().join("escape.md");
         std::fs::write(&source, "outside").expect("outside fixture");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
         let admission = EnginePolicyAdmissionV1 {
             policy_ref: ProtocolReference::new("policy:ctx-read-context-gate-v1:fixture")
                 .expect("policy ref"),
@@ -939,6 +938,203 @@ mod tests {
         );
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn descriptor_relative_parent_swap_never_writes_replacement_or_outside() {
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink;
+
+        let _data_dir = data_dir::isolated_data_dir();
+        let data_root = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let output_dir = data_root.join(OUTPUT_DIRECTORY);
+        let opened_dir = data_root.join("engine-interface/v1/outputs.opened");
+        let outside = tempfile::tempdir().expect("outside directory");
+        let outside_path = outside.path().to_path_buf();
+        let sentinel = outside_path.join("sentinel.txt");
+        std::fs::write(&sentinel, b"OUTSIDE_SENTINEL_V1").expect("outside sentinel");
+        let bytes = b"descriptor-relative artifact";
+        let digest = digest(bytes);
+        let final_name = format!("{}.txt", digest.hex());
+
+        let barrier_output_dir = output_dir.clone();
+        let barrier_opened_dir = opened_dir.clone();
+        let barrier_outside_path = outside_path.clone();
+        let barrier = Box::new(move || {
+            std::fs::rename(&barrier_output_dir, &barrier_opened_dir)
+                .expect("rename opened directory");
+            #[cfg(unix)]
+            symlink(&barrier_outside_path, &barrier_output_dir).expect("replacement symlink");
+            #[cfg(windows)]
+            {
+                let _ = barrier_outside_path;
+                std::fs::create_dir(&barrier_output_dir).expect("replacement directory");
+            }
+        });
+        let result = artifact_store::persist_content_with_test_barrier(
+            OUTPUT_DIRECTORY,
+            digest.hex(),
+            "txt",
+            bytes,
+            barrier,
+        );
+
+        assert_eq!(
+            std::fs::read(&sentinel)
+                .expect("outside sentinel remains")
+                .as_slice(),
+            b"OUTSIDE_SENTINEL_V1"
+        );
+        assert_eq!(
+            std::fs::read_dir(&outside_path)
+                .expect("outside directory")
+                .count(),
+            1,
+            "replacement/outside received no artifact or temporary leaf"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            std::fs::read_dir(&output_dir)
+                .expect("replacement directory")
+                .count(),
+            0,
+            "replacement directory received no artifact or temporary leaf"
+        );
+        match result {
+            Ok(_) => {
+                assert_eq!(
+                    std::fs::read(opened_dir.join(final_name)).expect("held directory artifact"),
+                    bytes
+                );
+                assert_eq!(
+                    std::fs::read_dir(opened_dir)
+                        .expect("held directory")
+                        .count(),
+                    1,
+                    "held directory contains only the published artifact"
+                );
+            }
+            Err(error) => {
+                assert!(error.starts_with("engine_artifact_"));
+                assert!(!error.contains("errno"));
+                assert!(
+                    std::fs::read_dir(opened_dir)
+                        .expect("held directory")
+                        .flatten()
+                        .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp")),
+                    "failed publication leaves no temporary leaf"
+                );
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn descriptor_bound_root_relocation_never_retargets_a_replacement_root() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let data_root = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let opened_root = data_root.with_extension("opened");
+        let bytes = b"descriptor-bound root artifact";
+        let digest = digest(bytes);
+        let final_name = format!("{}.txt", digest.hex());
+
+        let barrier_data_root = data_root.clone();
+        let barrier_opened_root = opened_root.clone();
+        let barrier = Box::new(move || {
+            std::fs::rename(&barrier_data_root, &barrier_opened_root)
+                .expect("relocate bound data root");
+            std::fs::create_dir(&barrier_data_root).expect("replacement data root");
+        });
+        let result = artifact_store::persist_content_with_test_barrier(
+            OUTPUT_DIRECTORY,
+            digest.hex(),
+            "txt",
+            bytes,
+            barrier,
+        );
+
+        assert_eq!(
+            std::fs::read_dir(&data_root)
+                .expect("replacement data root")
+                .count(),
+            0,
+            "replacement root received no artifact or temporary leaf"
+        );
+        match result {
+            Ok(_) => assert_eq!(
+                std::fs::read(opened_root.join(OUTPUT_DIRECTORY).join(final_name))
+                    .expect("artifact remains under bound root object"),
+                bytes
+            ),
+            Err(error) => {
+                assert!(error.starts_with("engine_artifact_"));
+                assert!(
+                    std::fs::read_dir(opened_root.join(OUTPUT_DIRECTORY))
+                        .expect("bound output directory")
+                        .flatten()
+                        .all(|entry| !entry.file_name().to_string_lossy().contains(".tmp")),
+                    "failed publication leaves no known temporary leaf"
+                );
+            }
+        }
+        std::fs::remove_dir_all(&opened_root).expect("remove relocated test root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_unix_temp_leaf_is_rejected_and_never_published() {
+        use std::os::unix::fs::symlink;
+
+        let _data_dir = data_dir::isolated_data_dir();
+        let data_root = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let output_dir = data_root.join(OUTPUT_DIRECTORY);
+        let outside = tempfile::tempdir().expect("outside directory");
+        let sentinel = outside.path().join("sentinel.txt");
+        std::fs::write(&sentinel, b"OUTSIDE_SENTINEL_V1").expect("outside sentinel");
+        let bytes = b"held temporary artifact";
+        let digest = digest(bytes);
+        let temp_path = output_dir.join(format!(".{}.txt.tmp", digest.hex()));
+        let final_path = output_dir.join(format!("{}.txt", digest.hex()));
+
+        let barrier_temp_path = temp_path.clone();
+        let barrier_sentinel = sentinel.clone();
+        let barrier = Box::new(move || {
+            std::fs::remove_file(&barrier_temp_path).expect("unlink held temporary name");
+            symlink(&barrier_sentinel, &barrier_temp_path).expect("swap temporary name");
+        });
+        let error = artifact_store::persist_content_with_test_publish_barrier(
+            OUTPUT_DIRECTORY,
+            digest.hex(),
+            "txt",
+            bytes,
+            barrier,
+        )
+        .expect_err("swapped temporary leaf rejected");
+
+        assert_eq!(error, "engine_artifact_leaf_untrusted");
+        assert!(!final_path.exists());
+        assert!(!temp_path.exists());
+        assert_eq!(
+            std::fs::read(&sentinel).expect("outside sentinel remains"),
+            b"OUTSIDE_SENTINEL_V1"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn oversized_windows_artifact_component_is_rejected_before_child_mutation() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let bytes = b"bounded Windows component";
+        let digest = digest(bytes);
+        let oversized = "x".repeat((u16::MAX as usize / 2) + 1);
+
+        let error = artifact_store::persist_content(&oversized, digest.hex(), "txt", bytes)
+            .expect_err("oversized component rejected");
+
+        assert_eq!(error, "engine_artifact_boundary_rejected");
+        let data_root = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        assert_eq!(std::fs::read_dir(data_root).expect("data root").count(), 0);
+    }
+
     #[test]
     fn failed_engine_artifact_publish_leaves_final_absent_and_retryable() {
         let _data_dir = data_dir::isolated_data_dir();
@@ -1031,6 +1227,7 @@ mod tests {
         };
 
         let error = NativeContextEngine::with_root(root.path())
+            .expect("secure Engine root")
             .execute_ctx_read_snapshot(&path.to_string_lossy(), &secret, admission)
             .expect_err("blocked receipt must return a durable recovery error");
         assert!(!error.contains(&secret));
@@ -1048,7 +1245,7 @@ mod tests {
     fn rejected_policy_never_attempts_the_missing_source() {
         let _data_dir = data_dir::isolated_data_dir();
         let root = tempfile::tempdir().expect("native adapter root");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
 
         let (_, observation) = engine
             .execute(request(
@@ -1069,7 +1266,7 @@ mod tests {
     fn missing_source_has_structured_recovery_route() {
         let _data_dir = data_dir::isolated_data_dir();
         let root = tempfile::tempdir().expect("native adapter root");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
 
         let (_, observation) = engine
             .execute(request(
@@ -1089,7 +1286,7 @@ mod tests {
         let _data_dir = data_dir::isolated_data_dir();
         let root = tempfile::tempdir().expect("native adapter root");
         std::fs::write(root.path().join("fixture.md"), b"actual source").expect("fixture write");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
 
         let (_, observation) = engine
             .execute(request(
@@ -1115,7 +1312,7 @@ mod tests {
         let root = tempfile::tempdir().expect("native adapter root");
         let input = b"retryable native context";
         std::fs::write(root.path().join("fixture.md"), input).expect("fixture write");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
         let request = request("fixture.md", input, EnginePolicyDecisionV1::Admitted);
 
         let (_, failed) = engine.execute(request.clone()).expect("failed receipt");
@@ -1133,9 +1330,22 @@ mod tests {
     }
 
     #[test]
+    fn engine_root_binding_never_falls_back_to_an_unresolved_path() {
+        let parent = tempfile::tempdir().expect("root parent");
+        let missing = parent.path().join("missing-root");
+
+        let error = NativeContextEngine::with_root(&missing)
+            .err()
+            .expect("missing Engine root rejected");
+
+        assert_eq!(error, "ctx_read Engine root cannot be bound securely");
+        assert!(!missing.exists());
+    }
+
+    #[test]
     fn interface_matches_the_native_capability_contract() {
         let root = tempfile::tempdir().expect("native adapter root");
-        let engine = NativeContextEngine::with_root(root.path());
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
         let interface = engine.interface().expect("Engine interface");
         assert_eq!(interface.engine.engine_id, ENGINE_ID);
         assert_eq!(interface.supported_operations.len(), 1);
