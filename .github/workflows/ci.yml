@@ -714,6 +714,44 @@ jobs:
         working-directory: rust
         run: cargo run --example gen_testbench_recording --features dev-tools -- --check
 
+  delivery-security-gate:
+    # Keep promotion evidence and the audited public-tree delta on the regular
+    # CI path, not only on release/security-specific workflows.
+    name: Delivery + Security Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Verify OCLA contract-pack suite
+        run: |
+          cargo build --locked --manifest-path clients/rust/lean-ctx-client/Cargo.toml \
+            --bin lean-ctx-ocla-verify
+          python3 scripts/verify-ocla-contract-suite.py \
+            --verifier clients/rust/lean-ctx-client/target/debug/lean-ctx-ocla-verify
+      - name: Verify signed delivery manifest contract
+        run: |
+          python3 scripts/verify-delivery-manifest.py \
+            tests/delivery/valid/delivery-manifest.json \
+            --root . \
+            --trust-root tests/delivery/valid/release-trust-root.json
+      - name: Verify delivery evidence contract
+        run: |
+          python3 scripts/verify-delivery-evidence.py \
+            docs/contracts/delivery-evidence-v1.json --root .
+      - name: Rehearse hermetic rollback contract
+        run: python3 tests/delivery/test_rehearse_delivery.py
+      - name: Run delivery, security, and OCLA contract tests
+        run: python3 -m pytest -q tests/delivery tests/security tests/ocla_contract_suite
+      - name: Verify audited public-tree delta
+        run: >-
+          python3 scripts/history-policy-gate.py gate --root .
+          --policy security/history-policy-v1.json
+          --output "$RUNNER_TEMP/history-delta-evidence.json"
+
   # Single aggregating gate. Point branch protection at THIS one job ("CI Green")
   # instead of every matrix leg — it stays correct when jobs are added/removed and
   # cannot be bypassed by a silently-missing required check. Runs always() so it can
@@ -740,6 +778,10 @@ jobs:
       - bench
       - quality-gate
       - doc
+      - delivery-security-gate
+      - narrative-governance
+      - package-assets
+      - evidence-verifier
     runs-on: ubuntu-latest
     steps:
       - name: Verify no required job failed

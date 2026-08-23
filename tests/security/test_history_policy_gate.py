@@ -23,6 +23,8 @@ class HistoryPolicyGateTests(unittest.TestCase):
         (self.repo / "README.md").write_text("public\n")
         (self.repo / "scanner.py").write_text("# bounded scanner\n")
         self.commit("baseline")
+        # Keep checkout -b main portable when git init defaults to main.
+        self.git("branch", "-M", "base")
         self.base = self.git("rev-parse", "HEAD").strip()
         self.report_path = self.repo / "baseline.json"
         report = {

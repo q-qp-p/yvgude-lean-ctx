@@ -24,16 +24,17 @@ The GitHub `main` rule has these controls:
 | Control | Contract |
 | --- | --- |
 | Administrator enforcement | Enabled; administrators are subject to the same required checks. |
-| Status checks | `Format`, `Clippy`, `Test (ubuntu-latest)`, `Security Scan`, and `public-clean-room`. |
+| Status checks | `CI Green` and `Security Scan`. |
 | Strict up-to-date checks | Disabled; each required check must still succeed on the submitted commit. |
 | Pull-request reviews | Not required. |
 | Commit signatures | Not required by this contract. |
 | Force pushes and deletion | Disabled. |
 | Linear history | Not required. |
 
-`Format` protects source formatting, `Clippy` protects Rust static analysis,
-and `Test (ubuntu-latest)` protects functional behavior. `Security Scan` and
-`public-clean-room` protect the security and public-build boundaries.
+`CI Green` is the aggregate workflow gate for formatting, static analysis,
+tests, and other required CI jobs. `Security Scan` remains a separate required
+check for the security boundary; no nonexistent `public-clean-room` context is
+required.
 
 ## GitLab requirements
 

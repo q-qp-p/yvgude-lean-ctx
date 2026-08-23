@@ -283,6 +283,7 @@ pub fn stats() -> CacheStats {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// The cache is a process-wide global and tests mutate it (and the budget
     /// env var). Serialize them so they cannot observe each other's state.
@@ -302,6 +303,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn hit_after_insert_with_matching_state() {
         let _g = TEST_LOCK
             .lock()
@@ -317,6 +319,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn miss_paths_update_local_and_central_stats() {
         let _g = TEST_LOCK
             .lock()
@@ -350,6 +353,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn warm_hit_updates_local_and_central_stats() {
         let _g = TEST_LOCK
             .lock()
@@ -378,6 +382,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn mtime_or_size_change_invalidates() {
         let _g = TEST_LOCK
             .lock()
@@ -410,6 +415,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn get_or_read_populates_then_serves_from_cache() {
         let _g = TEST_LOCK
             .lock()
@@ -439,6 +445,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn eviction_keeps_cache_within_budget() {
         let _g = TEST_LOCK
             .lock()
@@ -467,6 +474,7 @@ pub mod tests {
     }
 
     #[test]
+    #[serial(cache_telemetry)]
     fn disabled_via_zero_budget_is_passthrough() {
         let _env_lock = crate::core::data_dir::test_env_lock();
         let _g = TEST_LOCK
