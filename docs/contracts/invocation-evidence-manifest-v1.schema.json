@@ -4,10 +4,35 @@
   "title": "LeanCTX InvocationEvidenceManifestV1",
   "description": "Strict digest-only evidence join for one admitted Engine invocation.",
   "x-conformance": {
-    "mode": "two_stage",
+    "mode": "three_stage",
     "schema_validation_required": true,
     "semantic_validation_required": true,
+    "cross_artifact_join_required": true,
     "semantic_validator": "lean_ctx_protocol::InvocationEvidenceManifestV1::from_canonical_bytes",
+    "stages": [
+      {
+        "name": "schema_validation",
+        "required": true
+      },
+      {
+        "name": "semantic_validation",
+        "required": true
+      },
+      {
+        "name": "cross_artifact_join",
+        "required": true,
+        "owner": "adapter_or_verifier",
+        "protocol_decoder_sufficient": false,
+        "requirements": [
+          "policy_role_set_matches_refs_present_in_task_plan_invocation",
+          "resolve_and_verify_invocation_artifact_bytes",
+          "resolve_and_verify_source_artifact_bytes",
+          "resolve_and_verify_policy_artifact_bytes",
+          "resolve_and_verify_capability_manifest_bytes",
+          "resolve_and_verify_engine_receipt_bytes"
+        ]
+      }
+    ],
     "utf8_bounds": {
       "keyword": "x-maxUtf8Bytes",
       "unit": "utf8_bytes",
@@ -27,7 +52,7 @@
     "capability_bindings"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "type": "integer", "const": 1 },
     "invocation_ref": { "$ref": "#/$defs/digest" },
     "engine_receipt": { "$ref": "#/$defs/engineReceipt" },
     "source_bindings": {
@@ -61,7 +86,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 256,
-      "pattern": "^(?=.*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
+      "pattern": "^(?=[\\s\\S]*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
       "x-maxUtf8Bytes": 256,
       "description": "JSON Schema maxLength counts Unicode code points; an independent verifier MUST additionally enforce the shared 256-byte UTF-8 bound."
     },
@@ -69,7 +94,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 1024,
-      "pattern": "^(?=.*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
+      "pattern": "^(?=[\\s\\S]*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
       "x-maxUtf8Bytes": 1024,
       "description": "JSON Schema maxLength counts Unicode code points; an independent verifier MUST additionally enforce the shared 1024-byte UTF-8 ProtocolReference bound."
     },

@@ -93,7 +93,11 @@ fn validate_manifest_reference(
     reference: &ProtocolReference,
     field: &str,
 ) -> Result<(), ValidationError> {
-    if reference.as_str().contains('\u{feff}') {
+    reject_manifest_feff(reference.as_str(), field)
+}
+
+fn reject_manifest_feff(value: &str, field: &str) -> Result<(), ValidationError> {
+    if value.contains('\u{feff}') {
         return Err(ValidationError::new(format!(
             "{field} must not contain U+FEFF"
         )));
@@ -253,6 +257,7 @@ fn validate_capability_bindings(
     let mut keys = BTreeSet::new();
     let mut digests = BTreeSet::new();
     for binding in bindings {
+        reject_manifest_feff(binding.capability_id.as_str(), "capability_id")?;
         validate_bounded_opaque_identifier(
             binding.capability_id.as_str(),
             "InvocationCapabilityBindingV1 capability_id",
@@ -563,6 +568,13 @@ mod tests {
     }
 
     #[test]
+    fn manifest_capability_ids_reject_feff() {
+        let mut manifest = valid_manifest();
+        manifest.capability_bindings[0].capability_id = capability("capability:\u{feff}");
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn canonical_decoder_rejects_whitespace_key_order_and_duplicates() {
         let canonical = valid_manifest().canonical_bytes().expect("canonicalizes");
         let pretty =
@@ -624,12 +636,12 @@ mod tests {
     }
 
     #[test]
-    fn schema_declares_mandatory_two_stage_conformance() {
+    fn schema_declares_mandatory_three_stage_conformance() {
         let schema: Value = serde_json::from_slice(include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest-v1.schema.json"
         ))
         .expect("manifest schema should be valid JSON");
-        assert_eq!(schema["x-conformance"]["mode"], "two_stage");
+        assert_eq!(schema["x-conformance"]["mode"], "three_stage");
         assert_eq!(schema["x-conformance"]["schema_validation_required"], true);
         assert_eq!(
             schema["x-conformance"]["semantic_validation_required"],
@@ -642,6 +654,27 @@ mod tests {
         assert_eq!(
             schema["x-conformance"]["utf8_bounds"]["schema_enforcement"],
             "annotation_only"
+        );
+        assert_eq!(
+            schema["x-conformance"]["cross_artifact_join_required"],
+            true
+        );
+        assert_eq!(
+            schema["x-conformance"]["stages"][2]["name"],
+            "cross_artifact_join"
+        );
+        assert_eq!(schema["x-conformance"]["stages"][2]["required"], true);
+        assert_eq!(
+            schema["x-conformance"]["stages"][2]["protocol_decoder_sufficient"],
+            false
+        );
+        let requirements = schema["x-conformance"]["stages"][2]["requirements"]
+            .as_array()
+            .expect("cross-artifact requirements should be an array");
+        assert!(
+            requirements
+                .iter()
+                .any(|requirement| { requirement == "resolve_and_verify_policy_artifact_bytes" })
         );
     }
 
@@ -673,6 +706,34 @@ mod tests {
         let multibyte = multibyte.strip_suffix(b"\n").unwrap_or(multibyte);
         InvocationEvidenceManifestV1::from_canonical_bytes(multibyte)
             .expect("short multibyte reference fixture should decode");
+
+        for (name, expected) in [
+            ("valid-u2028-reference.json", "source:\u{2028}value"),
+            ("valid-u2029-reference.json", "policy:\u{2029}decision"),
+        ] {
+            let bytes: &[u8] = match name {
+                "valid-u2028-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-u2028-reference.json"
+                ),
+                "valid-u2029-reference.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-u2029-reference.json"
+                ),
+                _ => unreachable!(),
+            };
+            let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+            let manifest = InvocationEvidenceManifestV1::from_canonical_bytes(bytes)
+                .expect("U+2028/U+2029 reference fixture should decode");
+            assert!(
+                manifest
+                    .source_bindings
+                    .iter()
+                    .any(|binding| binding.source_ref.as_str() == expected)
+                    || manifest
+                        .policy_bindings
+                        .iter()
+                        .any(|binding| binding.policy_ref.as_str() == expected)
+            );
+        }
 
         let exact_reference = include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-reference-1024.json"
@@ -719,6 +780,8 @@ mod tests {
             "invalid-feff-source-reference.json",
             "invalid-feff-policy-reference.json",
             "invalid-feff-receipt-reference.json",
+            "invalid-feff-capability-id.json",
+            "invalid-schema-version-float.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-unknown-field.json" => include_bytes!(
@@ -771,6 +834,12 @@ mod tests {
                 ),
                 "invalid-feff-receipt-reference.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-feff-receipt-reference.json"
+                ),
+                "invalid-feff-capability-id.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-feff-capability-id.json"
+                ),
+                "invalid-schema-version-float.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-schema-version-float.json"
                 ),
                 _ => unreachable!(),
             };

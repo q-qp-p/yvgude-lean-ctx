@@ -18,12 +18,21 @@ Opaque identifiers and references use the shared bounded protocol primitives.
 Schema `maxLength` is a Unicode code-point prefilter; an independent verifier
 MUST additionally enforce the exact shared UTF-8 byte bounds (256 bytes for
 opaque IDs and 1,024 bytes for protocol references). Generic JSON Schema alone
-is insufficient: conformance requires both schema validation and the semantic
-validator `InvocationEvidenceManifestV1::from_canonical_bytes`. The
-machine-readable `x-conformance` metadata declares this two-stage requirement
-and that `x-maxUtf8Bytes` is only a schema annotation whose semantic check is
-mandatory. References that are whitespace-only or contain C0/C1 controls,
-including U+0085, or contain U+FEFF are invalid.
+is insufficient: exact conformance requires three mandatory stages: schema
+validation, semantic validation by
+`InvocationEvidenceManifestV1::from_canonical_bytes`, and
+`cross_artifact_join`. The machine-readable `x-conformance` metadata declares
+the three stages and that `x-maxUtf8Bytes` is only a schema annotation whose
+semantic check is mandatory. References that are whitespace-only or contain
+C0/C1 controls, including U+0085, or contain U+FEFF are invalid; bounded
+capability IDs containing U+FEFF are also invalid.
+
+The `cross_artifact_join` stage belongs to the adapter/verifier, not this
+protocol decoder. It MUST require policy roles iff the corresponding refs are
+present in TaskEnvelope/Plan/Invocation, and resolve exact invocation, source,
+policy, capability-manifest, Engine-receipt, and other referenced artifact
+bytes and verify each digest. The decoder alone cannot satisfy this stage;
+executable adversarial join cases land with adapter integration.
 
 `invocation_ref` is the canonical digest of the exact Engine invocation record.
 `engine_receipt.receipt_digest` identifies the complete Engine receipt bytes,
@@ -58,6 +67,10 @@ Canonical JSON means:
 4. arrays retain declared order; strings use JSON UTF-8 escaping rules;
 5. exact raw bytes, including key order, whitespace, escapes, and UTF-8, are
    the accepted representation.
+
+Schema `type: integer` may treat JSON `1.0` as numerically equivalent to `1`
+at stage one. The canonical semantic stage rejects all floating-point JSON
+numbers, so a `schema_version` encoded as `1.0` is invalid.
 
 `InvocationEvidenceManifestV1::from_canonical_bytes` rejects duplicate keys,
 trailing data, alternate whitespace, alternate key order, alternate string
