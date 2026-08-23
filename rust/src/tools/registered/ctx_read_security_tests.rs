@@ -1,5 +1,6 @@
 //! Security-boundary tests for the explicit Engine v1 read path.
 
+#[cfg(unix)]
 use super::*;
 
 #[cfg(unix)]
