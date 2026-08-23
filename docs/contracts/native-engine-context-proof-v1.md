@@ -42,10 +42,12 @@ engine-interface/v1/recovery/<sha256>.json
 
 - Directories are private on Unix. Every relative directory component is
   rejected when it is a symlink/reparse point or resolves outside the canonical
-  data root. New content-addressed artifacts are opened with exclusive-create
-  and no-follow semantics; the opened file handle is bound back to that root
-  before bytes are written and is synchronized before success. Unix artifacts
-  use mode `0600`.
+  data root. New content-addressed artifacts are written to an exclusive,
+  no-follow temporary leaf in the validated final directory. Only a fully
+  written, permission-hardened and synchronized temporary artifact may be
+  published under its digest by an atomic no-replace operation; an existing
+  digest path is never overwritten. Any failure before publication leaves the
+  final digest path absent and retryable. Unix artifacts use mode `0600`.
 - Existing artifact paths must be regular, non-symlink files whose contents
   match their address.
 - P1 rejects pre-existing symlink/reparse escape and never writes payload bytes

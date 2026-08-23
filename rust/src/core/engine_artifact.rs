@@ -3,9 +3,50 @@
 use std::io::{Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use sha2::{Digest, Sha256};
 
 use crate::core::data_dir;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FAIL_BEFORE_PUBLISH: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn inject_test_pre_publish_failure() {
+    TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.set(true));
+}
+
+fn test_pre_publish_failure() -> bool {
+    #[cfg(test)]
+    {
+        TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.replace(false))
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+struct TempArtifact {
+    file: Option<std::fs::File>,
+    path: PathBuf,
+    published: bool,
+}
+
+impl Drop for TempArtifact {
+    fn drop(&mut self) {
+        // Closing before unlinking is required on Windows. A failed operation
+        // may leave only this private, same-directory temporary leaf behind.
+        self.file.take();
+        if !self.published {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 pub(super) fn persist_content(
     directory: &str,
@@ -27,29 +68,20 @@ pub(super) fn persist_content(
         .map_err(|error| format!("resolve Engine data directory: {error}"))?;
     let directory = prepare_directory(&root, directory)?;
     let path = directory.join(format!("{digest}.{extension}"));
+    let mut temp = create_temp_artifact(&path, &root)
+        .map_err(|_| "engine_artifact_temp_create_failed".to_owned())?;
+    write_temp_artifact(&mut temp, bytes)?;
 
-    match create_artifact(&path, &root) {
-        Ok(mut artifact) => {
-            if let Some(permissions) = artifact_permissions() {
-                artifact
-                    .set_permissions(permissions)
-                    .map_err(|error| format!("harden Engine artifact permissions: {error}"))?;
-            }
-            artifact
-                .write_all(bytes)
-                .map_err(|error| format!("write Engine artifact: {error}"))?;
-            artifact
-                .sync_all()
-                .map_err(|error| format!("sync Engine artifact: {error}"))?;
-            artifact
-                .rewind()
-                .map_err(|error| format!("rewind Engine artifact: {error}"))?;
-            Ok(artifact)
-        }
+    if test_pre_publish_failure() {
+        return Err("engine_artifact_test_pre_publish_failure".to_owned());
+    }
+
+    match publish_temp_artifact(&mut temp, &path) {
+        Ok(()) => open_published_artifact(&path, &root, digest),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             verify_existing_artifact(&path, &root, digest)
         }
-        Err(error) => Err(format!("create Engine artifact exclusively: {error}")),
+        Err(_) => Err("engine_artifact_publish_failed".to_owned()),
     }
 }
 
@@ -110,12 +142,147 @@ fn validate_directory_metadata(metadata: &std::fs::Metadata) -> Result<(), Strin
     Ok(())
 }
 
-fn create_artifact(path: &Path, root: &Path) -> Result<std::fs::File, std::io::Error> {
+fn create_temp_artifact(path: &Path, root: &Path) -> Result<TempArtifact, std::io::Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("Engine artifact path has no parent"))?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("Engine artifact path has no filename"))?
+        .to_string_lossy();
+
+    // The bounded suffix loop handles concurrent writers and a temp left by a
+    // process crash without putting a random name into any persisted record.
+    for suffix in 0..128u16 {
+        let temp_name = if suffix == 0 {
+            format!(".{filename}.tmp")
+        } else {
+            format!(".{filename}.tmp.{suffix}")
+        };
+        let temp_path = parent.join(temp_name);
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        apply_nofollow_flags(&mut options);
+        let file = match options.open(&temp_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = verify_open_artifact(&file, &temp_path, root) {
+            drop(file);
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error);
+        }
+        return Ok(TempArtifact {
+            file: Some(file),
+            path: temp_path,
+            published: false,
+        });
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "Engine artifact temporary namespace is occupied",
+    ))
+}
+
+fn write_temp_artifact(temp: &mut TempArtifact, bytes: &[u8]) -> Result<(), String> {
+    let artifact = temp
+        .file
+        .as_mut()
+        .ok_or_else(|| "engine_artifact_temp_closed".to_owned())?;
+    if let Some(permissions) = artifact_permissions() {
+        artifact
+            .set_permissions(permissions)
+            .map_err(|_| "engine_artifact_temp_permissions_failed".to_owned())?;
+    }
+    artifact
+        .write_all(bytes)
+        .map_err(|_| "engine_artifact_temp_write_failed".to_owned())?;
+    artifact
+        .sync_all()
+        .map_err(|_| "engine_artifact_temp_sync_failed".to_owned())?;
+    Ok(())
+}
+
+fn publish_temp_artifact(temp: &mut TempArtifact, path: &Path) -> Result<(), std::io::Error> {
+    // The file is fully written and synchronized before it becomes visible at
+    // its content address. Closing also makes the publication portable.
+    temp.file.take();
+
+    #[cfg(windows)]
+    windows_publish_no_replace(&temp.path, path)?;
+
+    #[cfg(not(windows))]
+    {
+        // hard_link is an atomic create-without-replacement primitive: unlike
+        // rename, it cannot replace an existing addressed artifact.
+        std::fs::hard_link(&temp.path, path)?;
+        #[cfg(unix)]
+        sync_directory(path.parent());
+        std::fs::remove_file(&temp.path)?;
+    }
+
+    temp.published = true;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_publish_no_replace(temp: &Path, path: &Path) -> Result<(), std::io::Error> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+
+    fn wide(path: &Path) -> Vec<u16> {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    let temp = wide(temp);
+    let path = wide(path);
+    // Omitting MOVEFILE_REPLACE_EXISTING makes an existing final path a
+    // deterministic AlreadyExists failure; the move stays same-volume because
+    // the temp was created in the final directory.
+    let ok = unsafe { MoveFileExW(temp.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(parent: Option<&Path>) {
+    if let Some(parent) = parent
+        && let Ok(directory) = std::fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+}
+
+fn open_published_artifact(
+    path: &Path,
+    root: &Path,
+    digest: &str,
+) -> Result<std::fs::File, String> {
     let mut options = std::fs::OpenOptions::new();
-    options.read(true).write(true).create_new(true);
+    options.read(true);
     apply_nofollow_flags(&mut options);
-    let artifact = options.open(path)?;
-    verify_open_artifact(&artifact, path, root)?;
+    let mut artifact = options
+        .open(path)
+        .map_err(|_| "engine_artifact_publish_verification_failed".to_owned())?;
+    verify_open_artifact(&artifact, path, root)
+        .map_err(|_| "engine_artifact_publish_verification_failed".to_owned())?;
+    let mut bytes = Vec::new();
+    artifact
+        .read_to_end(&mut bytes)
+        .map_err(|_| "engine_artifact_publish_verification_failed".to_owned())?;
+    if hex_sha256(&bytes) != digest {
+        return Err("engine_artifact_publish_verification_failed".to_owned());
+    }
+    artifact
+        .rewind()
+        .map_err(|_| "engine_artifact_publish_verification_failed".to_owned())?;
     Ok(artifact)
 }
 

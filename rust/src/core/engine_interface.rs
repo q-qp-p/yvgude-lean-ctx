@@ -940,6 +940,47 @@ mod tests {
     }
 
     #[test]
+    fn failed_engine_artifact_publish_leaves_final_absent_and_retryable() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let bytes = b"failure-atomic artifact fixture";
+        let digest = digest(bytes);
+        let output_dir = data_dir::lean_ctx_data_dir()
+            .expect("isolated data dir")
+            .join(OUTPUT_DIRECTORY);
+        let final_path = output_dir.join(format!("{}.txt", digest.hex()));
+
+        artifact_store::inject_test_pre_publish_failure();
+        assert_eq!(
+            persist_output(digest.hex(), bytes).expect_err("injected publish failure"),
+            "engine_artifact_test_pre_publish_failure"
+        );
+        assert!(
+            !final_path.exists(),
+            "failed publish must not expose final path"
+        );
+        assert_eq!(
+            std::fs::read_dir(&output_dir)
+                .expect("output directory")
+                .count(),
+            0,
+            "failed publish must clean its temporary leaf"
+        );
+
+        persist_output(digest.hex(), bytes).expect("retry publishes complete artifact");
+        assert_eq!(
+            std::fs::read(&final_path).expect("published artifact"),
+            bytes
+        );
+        assert_eq!(
+            std::fs::read_dir(&output_dir)
+                .expect("output directory")
+                .count(),
+            1,
+            "successful retry leaves only the addressed artifact"
+        );
+    }
+
+    #[test]
     fn ctx_read_identity_is_bound_to_raw_snapshot_bytes() {
         let root = tempfile::tempdir().expect("native adapter root");
         let path = root.path().join("fixture.md");
