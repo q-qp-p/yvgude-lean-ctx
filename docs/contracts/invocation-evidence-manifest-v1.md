@@ -7,6 +7,8 @@ Media type: `application/vnd.leanctx.invocation-evidence-manifest+json`
 `InvocationEvidenceManifestV1` is the strict digest-only join for one admitted
 Engine invocation. It does not replace `ReceiptDocumentV1`, add a ledger field,
 or embed source, policy, capability, invocation, or receipt payload bytes.
+Existing manifests remain readable; exact-proof admission additionally requires
+the signed `InvocationContextBindingV1` sidecar described below.
 
 ## Wire shape
 
@@ -33,6 +35,12 @@ present in TaskEnvelope/Plan/Invocation, and resolve exact invocation, source,
 policy, capability-manifest, Engine-receipt, and other referenced artifact
 bytes and verify each digest. The decoder alone cannot satisfy this stage;
 executable adversarial join cases land with adapter integration.
+
+The `invocation_admission` exception is mandatory: its binding digest resolves
+the signed canonical `InvocationContextBindingV1` bytes, and that binding's
+embedded `policy_digest` resolves the exact signed admission-policy bytes.
+`policy_ref` remains the invocation's policy locator; the binding digest is not
+itself policy content and must not be treated as a policy byte digest.
 
 `invocation_ref` is the canonical digest of the exact Engine invocation record.
 `engine_receipt.receipt_digest` identifies the complete Engine receipt bytes,
