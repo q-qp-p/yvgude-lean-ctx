@@ -384,7 +384,10 @@ mod tests {
         assert_eq!(warmed.len(), 1);
         assert_eq!(
             warmed[0].path,
-            good.canonicalize().unwrap().to_string_lossy().into_owned()
+            crate::core::pathutil::safe_canonicalize(&good)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
         );
     }
 
@@ -419,8 +422,7 @@ mod tests {
         assert_eq!(warmed.len(), 1);
         assert_eq!(
             warmed[0].path,
-            outside_file
-                .canonicalize()
+            crate::core::pathutil::safe_canonicalize(&outside_file)
                 .unwrap()
                 .to_string_lossy()
                 .into_owned()
