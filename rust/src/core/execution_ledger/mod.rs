@@ -336,7 +336,10 @@ mod tests {
             })
             .unwrap();
         assert!(store.verify_chain().unwrap());
-        let projected = store.canonical_receipt_for_task("task-1").unwrap();
+        let projected = store
+            .canonical_receipt_for_task_verified("task-1")
+            .unwrap()
+            .unwrap();
         assert_eq!(projected.invocation_id, "invocation-1");
         assert_eq!(projected.chain_id, "chain-1");
         assert_eq!(projected.sequence_number, 1);
@@ -582,7 +585,10 @@ mod tests {
                 .is_err()
         );
 
-        let canonical = store.canonical_receipt_for_task("task-1").unwrap();
+        let canonical = store
+            .canonical_receipt_for_task_verified("task-1")
+            .unwrap()
+            .unwrap();
         assert_eq!(canonical.receipt_id, canonical_id);
         assert!(store.legacy_receipt_for_task("task-1").is_none());
     }

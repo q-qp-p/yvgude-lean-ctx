@@ -417,7 +417,10 @@ mod tests {
         assert_eq!(published, repeated);
         assert_eq!(ledger.load_verified().unwrap().len(), 5);
         assert!(ledger.verify_chain().unwrap());
-        let projected = ledger.canonical_receipt_for_task("task-1").unwrap();
+        let projected = ledger
+            .canonical_receipt_for_task_verified("task-1")
+            .unwrap()
+            .unwrap();
         assert_eq!(projected.receipt_id, published.receipt_id);
         let receipt =
             ReceiptDocumentV1::from_canonical_bytes(&std::fs::read(&published.path).unwrap())
