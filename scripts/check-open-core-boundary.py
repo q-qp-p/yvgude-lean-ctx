@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -308,6 +309,7 @@ FROZEN_SURFACES = ("auto_routing", "control_plane", "fleet_control", "rollout", 
 MANIFEST_BYTES = 256 * 1024
 RELEASE_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+)*$")
 RUST_USE = re.compile(r"(?ms)^[ \t]*(?:(?:pub(?:\([^)]*\))?[ \t]+)?use\s+[^;]+;)")
+RUST_RAW_STRING = re.compile(r'(?:br|cr|r)(#+)?"')
 RUST_PUBLIC_ITEM = re.compile(
     r"^pub\s+(?:(?:async|unsafe)\s+)?(struct|enum|trait|fn|type|const|static|mod)\s+"
     r"([A-Za-z_][A-Za-z0-9_]*)\b"
@@ -418,6 +420,7 @@ def _validate_manifest(value: object) -> dict:
         "review_release",
         "removal_not_before_release",
         "module_path",
+        "module_sha256",
         "module_roots",
         "root_reexports",
         "exported_symbols",
@@ -433,6 +436,13 @@ def _validate_manifest(value: object) -> dict:
         expected_module = "rust/crates/lean-ctx-protocol/src/%s.rs" % surface_name
         if module_path != expected_module:
             raise ManifestError("surfaces.%s.module_path is not the protocol module" % surface_name)
+        module_sha256 = _string(
+            surface["module_sha256"], "surfaces.%s.module_sha256" % surface_name
+        )
+        if not re.fullmatch(r"[0-9a-f]{64}", module_sha256):
+            raise ManifestError(
+                "surfaces.%s.module_sha256 must be lowercase SHA-256" % surface_name
+            )
         for collection_name, allow_empty in (("module_roots", False), ("root_reexports", False), ("approved_consumers", True)):
             collection = surface[collection_name]
             if not isinstance(collection, list) or (not collection and not allow_empty):
@@ -536,8 +546,112 @@ def _normalize_statement(statement: str) -> str:
     return " ".join(statement.strip().split())
 
 
+def _mask_rust_non_code(source: str) -> str:
+    """Mask comments and literals while preserving source offsets/newlines."""
+
+    masked = list(source)
+    length = len(source)
+
+    def blank(start: int, end: int) -> None:
+        for index in range(start, end):
+            if source[index] not in "\r\n":
+                masked[index] = " "
+
+    def quoted_end(start: int, quote: str) -> int:
+        index = start + 1
+        while index < length:
+            if source[index] == "\\":
+                index += 2
+            elif source[index] == quote:
+                return index + 1
+            else:
+                index += 1
+        return length
+
+    index = 0
+    while index < length:
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            end = length if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            end = index + 2
+            depth = 1
+            while end < length and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            blank(index, end)
+            index = end
+            continue
+
+        raw = RUST_RAW_STRING.match(source, index)
+        if raw:
+            terminator = '"%s' % (raw.group(1) or "")
+            end = source.find(terminator, raw.end())
+            end = length if end < 0 else end + len(terminator)
+            blank(index, end)
+            index = end
+            continue
+
+        if source[index] == '"' or source[index : index + 2] in {"b\"", "c\""}:
+            start = index
+            quote = index if source[index] == '"' else index + 1
+            end = quoted_end(quote, '"')
+            blank(start, end)
+            index = end
+            continue
+
+        if source[index] == "'":
+            end = index + 1
+            if end < length and source[end] == "\\":
+                end += 2
+            elif end < length:
+                end += 1
+            if end < length and source[end] == "'":
+                blank(index, end + 1)
+                index = end + 1
+                continue
+
+        index += 1
+    return "".join(masked)
+
+
+def _rust_views(source: str) -> Tuple[List[Tuple[int, str]], str]:
+    """Parse imports and executable code from one lexical masking pass."""
+
+    masked = _mask_rust_non_code(source)
+    matches = list(RUST_USE.finditer(masked))
+    statements = [
+        (
+            source.count("\n", 0, match.start()) + 1,
+            _normalize_statement(source[match.start() : match.end()]),
+        )
+        for match in matches
+    ]
+    code = list(masked)
+    for match in matches:
+        for index in range(match.start(), match.end()):
+            if code[index] not in "\r\n":
+                code[index] = " "
+    return statements, "".join(code)
+
+
 def _use_statements(source: str) -> List[Tuple[int, str]]:
-    return [(source.count("\n", 0, match.start()) + 1, _normalize_statement(match.group(0))) for match in RUST_USE.finditer(source)]
+    return _rust_views(source)[0]
+
+
+def _code_without_use_statements(source: str) -> str:
+    """Return code with comments, literals, and use declarations removed."""
+
+    return _rust_views(source)[1]
 
 
 def _surface_reexport(statement: str, surface: str) -> bool:
@@ -551,24 +665,148 @@ def _surface_reexport(statement: str, surface: str) -> bool:
     )
 
 
-def _surface_import(statement: str, surface: str) -> bool:
+def _top_level_use_items(value: str) -> List[str]:
+    """Split a braced use list without descending into nested groups."""
+
+    items = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(value):
+        if character in "{[(":
+            depth += 1
+        elif character in "}])":
+            depth = max(0, depth - 1)
+        elif character == "," and depth == 0:
+            items.append(value[start:index].strip())
+            start = index + 1
+    items.append(value[start:].strip())
+    return [item for item in items if item]
+
+
+def _surface_import(
+    statement: str,
+    surface: str,
+    root_symbols: Sequence[str] = (),
+    same_protocol_crate: bool = False,
+) -> bool:
     if "use " not in statement:
         return False
-    target = statement.split("use ", 1)[1].removesuffix(";").strip()
-    return bool(re.search(r"(?:^|[^A-Za-z0-9_])lean_ctx_protocol::%s(?:::|$)" % re.escape(surface), target))
+    target = _mask_rust_non_code(statement.split("use ", 1)[1].removesuffix(";").strip())
+    alias = r"(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)"
+    if re.fullmatch(r"(?:::)?lean_ctx_protocol" + alias, target):
+        return True
+    if same_protocol_crate and re.fullmatch(r"crate" + alias, target):
+        return True
+    surface_path = re.escape(surface)
+    if re.search(
+        r"(?:^|[^A-Za-z0-9_])(?:crate|self|super|lean_ctx_protocol)::\s*"
+        r"(?:\{\s*)?%s(?:::|(?=[\s,};]|$))" % surface_path,
+        target,
+    ):
+        return True
+    if re.match(r"%s(?:::|(?=[\s,};]|$))" % surface_path, target):
+        return True
+    qualified = re.match(
+        r"(?:::)?(?:crate|self|super|lean_ctx_protocol)::(.+)$",
+        target,
+    )
+    if qualified and qualified.group(1).lstrip().startswith("{"):
+        remainder = qualified.group(1).strip()
+        if remainder.endswith("}"):
+            for item in _top_level_use_items(remainder[1:-1]):
+                if re.match(r"%s(?:::|(?=[\s,};]|$))" % surface_path, item):
+                    return True
+
+    root = re.match(r"(?:::)?(?:crate|lean_ctx_protocol)::(.+)$", target)
+    if not root or not root_symbols:
+        return False
+    remainder = root.group(1).strip()
+    if remainder in {"*", "{*}"}:
+        return True
+    if remainder.startswith("{") and remainder.endswith("}"):
+        for item in _top_level_use_items(remainder[1:-1]):
+            if any(re.match(r"%s(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?$" % re.escape(symbol), item) for symbol in root_symbols):
+                return True
+    else:
+        first = re.match(r"[A-Za-z_][A-Za-z0-9_]*", remainder)
+        if first and first.group(0) in root_symbols:
+            return True
+    return False
 
 
-def _shape_mapping(root: Path, files: Sequence[Path], surface: str, kind: str) -> dict:
+def _root_reexport_symbols(surface: str, spec: dict) -> List[str]:
+    """Return symbols reachable from the protocol crate root for a surface."""
+
+    root_path = "rust/crates/lean-ctx-protocol/src/lib.rs"
+    symbols = sorted(item["name"] for item in spec["exported_symbols"])
+    selected = set()
+    for item in spec["root_reexports"]:
+        if item["path"] != root_path:
+            continue
+        for statement in item["statements"]:
+            target = statement[len("pub use ") :].removesuffix(";").strip()
+            if target in {surface + "::*", "lean_ctx_protocol::" + surface + "::*"}:
+                return symbols
+            if target.startswith(surface + "::{") or target.startswith("lean_ctx_protocol::" + surface + "::{"):
+                selected.update(
+                    symbol
+                    for symbol in symbols
+                    if re.search(r"(?:^|[,{\s])%s(?:\s|[,}])" % re.escape(symbol), target)
+                )
+    return sorted(selected)
+
+
+def _surface_references(
+    source: str,
+    surface: str,
+    root_symbols: Sequence[str],
+    code: Optional[str] = None,
+) -> List[Tuple[int, str]]:
+    """Find qualified frozen paths outside import declarations."""
+
+    components = r"[A-Za-z_][A-Za-z0-9_]*"
+    module_path = re.escape(surface) + r"(?:::%s)*" % components
+    alternatives = [
+        r"(?:crate|self|super|lean_ctx_protocol)::%s" % module_path,
+        r"extern\s+crate\s+lean_ctx_protocol(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?",
+    ]
+    if root_symbols:
+        alternatives.append(
+            r"(?:crate|lean_ctx_protocol)::(?:%s)"
+            % "|".join(re.escape(symbol) for symbol in root_symbols)
+        )
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9_:])(?:%s)(?![A-Za-z0-9_])" % "|".join(alternatives)
+    )
+    if code is None:
+        code = _code_without_use_statements(source)
+    return [
+        (source.count("\n", 0, match.start()) + 1, match.group(0))
+        for match in pattern.finditer(code)
+    ]
+
+
+def _shape_mapping(
+    root: Path,
+    files: Sequence[Path],
+    surface: str,
+    kind: str,
+    use_cache: Optional[dict] = None,
+    source_cache: Optional[dict] = None,
+) -> dict:
     mapping = {}
     for path in files:
-        source = _read_source(path)
+        source = source_cache.get(path) if source_cache is not None else None
+        if source is None:
+            source = _read_source(path)
         if kind == "module_roots":
             statements = [
                 _normalize_statement(match.group(0))
                 for match in re.finditer(r"(?m)^[ \t]*pub\s+mod\s+%s\s*;" % re.escape(surface), source)
             ]
         else:
-            statements = [statement for _, statement in _use_statements(source) if _surface_reexport(statement, surface)]
+            use_statements = use_cache[path] if use_cache is not None else _use_statements(source)
+            statements = [statement for _, statement in use_statements if _surface_reexport(statement, surface)]
         if statements:
             mapping[_relative(root, path)] = sorted(statements)
     return mapping
@@ -583,11 +821,18 @@ def _expected_mapping(root: Path, entries: Sequence[dict], field: str, label: st
     return mapping
 
 
-def _shape_findings(root: Path, files: Sequence[Path], surface: str, spec: dict) -> List[str]:
+def _shape_findings(
+    root: Path,
+    files: Sequence[Path],
+    surface: str,
+    spec: dict,
+    use_cache: Optional[dict] = None,
+    source_cache: Optional[dict] = None,
+) -> List[str]:
     findings = []
     for kind, field in (("module_roots", "declarations"), ("root_reexports", "statements")):
         expected = _expected_mapping(root, spec[kind], field, "%s.%s" % (surface, kind))
-        actual = _shape_mapping(root, files, surface, kind)
+        actual = _shape_mapping(root, files, surface, kind, use_cache, source_cache)
         if actual != expected:
             findings.append(
                 "[shape] %s %s drift: expected %s; found %s"
@@ -595,8 +840,17 @@ def _shape_findings(root: Path, files: Sequence[Path], surface: str, spec: dict)
             )
     module_path = _safe_relative(spec["module_path"], "%s.module_path" % surface)
     module = _root_path(root, module_path, "%s module" % surface)
+    module_source = source_cache.get(module) if source_cache is not None else None
+    if module_source is None:
+        module_source = _read_source(module)
+    actual_digest = hashlib.sha256(module_source.encode("utf-8")).hexdigest()
+    if actual_digest != spec["module_sha256"]:
+        findings.append(
+            "[shape] %s module digest drift: expected %s; found %s"
+            % (surface, spec["module_sha256"], actual_digest)
+        )
     actual_symbols = []
-    for line in _read_source(module).splitlines():
+    for line in module_source.splitlines():
         match = RUST_PUBLIC_ITEM.match(line)
         if match:
             actual_symbols.append({"kind": match.group(1), "name": match.group(2)})
@@ -613,18 +867,50 @@ def _shape_findings(root: Path, files: Sequence[Path], surface: str, spec: dict)
     return findings
 
 
-def _consumer_findings(root: Path, files: Sequence[Path], surface: str, spec: dict) -> List[str]:
+def _consumer_findings(
+    root: Path,
+    files: Sequence[Path],
+    surface: str,
+    spec: dict,
+    source_cache: Optional[dict] = None,
+    use_cache: Optional[dict] = None,
+    code_cache: Optional[dict] = None,
+) -> List[str]:
     approved = {}
     for item in spec["approved_consumers"]:
         path = _safe_relative(item["path"], "%s.approved_consumer.path" % surface)
         _root_path(root, path, "%s approved consumer" % surface)
         approved[path] = {_normalize_statement(statement) for statement in item["statements"]}
+    module_path = _safe_relative(spec["module_path"], "%s.module_path" % surface)
+    root_symbols = _root_reexport_symbols(surface, spec)
     actual = {}
-    for path in files:
-        for line, statement in _use_statements(_read_source(path)):
-            if _surface_import(statement, surface):
-                actual.setdefault(_relative(root, path), []).append((line, statement))
     findings = []
+    for path in files:
+        relative = _relative(root, path)
+        if not (relative.startswith("rust/src/") or relative.startswith("rust/crates/lean-ctx-")):
+            continue
+        if relative == module_path:
+            continue
+        source = source_cache[path] if source_cache is not None else _read_source(path)
+        statements = use_cache[path] if use_cache is not None else _use_statements(source)
+        for line, statement in statements:
+            if _surface_reexport(statement, surface):
+                if statement in approved.get(relative, set()):
+                    actual.setdefault(relative, []).append((line, statement))
+                continue
+            if _surface_import(
+                statement,
+                surface,
+                root_symbols,
+                relative.startswith("rust/crates/lean-ctx-protocol/"),
+            ):
+                actual.setdefault(relative, []).append((line, statement))
+        code = code_cache[path] if code_cache is not None else None
+        for line, reference in _surface_references(source, surface, root_symbols, code):
+            findings.append(
+                "[new-consumer] %s %s:%d references frozen surface: %s"
+                % (surface, relative, line, reference)
+            )
     for path in sorted(actual):
         allowed = approved.get(path, set())
         for line, statement in sorted(actual[path], key=lambda item: (item[0], item[1])):
@@ -642,10 +928,15 @@ def _consumer_findings(root: Path, files: Sequence[Path], surface: str, spec: di
     return findings
 
 
-def _private_import_findings(root: Path, files: Sequence[Path]) -> List[str]:
+def _private_import_findings(
+    root: Path,
+    files: Sequence[Path],
+    use_cache: Optional[dict] = None,
+) -> List[str]:
     findings = []
     for path in files:
-        for line, statement in _use_statements(_read_source(path)):
+        statements = use_cache[path] if use_cache is not None else _use_statements(_read_source(path))
+        for line, statement in statements:
             target = statement.split("use ", 1)[1].removesuffix(";").strip()
             if PRIVATE_IMPORT.search(target):
                 findings.append(
@@ -653,6 +944,30 @@ def _private_import_findings(root: Path, files: Sequence[Path]) -> List[str]:
                     % (_relative(root, path), line, target)
                 )
     return findings
+
+
+def _needs_consumer_scan(source: str, manifest: dict) -> bool:
+    """Skip lexical masking when source cannot mention a frozen/private path."""
+
+    symbols = {
+        item["name"]
+        for surface in manifest["surfaces"].values()
+        for item in surface["exported_symbols"]
+    }
+    if any(symbol in source for symbol in symbols):
+        return True
+    lowered = source.lower()
+    needles = FROZEN_SURFACES + (
+        "use crate",
+        "use lean_ctx_protocol",
+        "use ::lean_ctx_protocol",
+        "enterprise",
+        "private",
+        "proprietary",
+        "commercial",
+        "strategic_data",
+    )
+    return any(needle in lowered for needle in needles)
 
 
 def _manifest_path(root: Path, manifest_path: Optional[Path]) -> Path:
@@ -675,15 +990,38 @@ def check_repo(root: Path = ROOT, manifest_path: Optional[Path] = None) -> List[
     try:
         policy = _manifest_path(root, manifest_path)
         manifest = load_manifest(policy)
-        files = _rust_files(root)
+        files = [
+            path
+            for path in _rust_files(root)
+            if _relative(root, path).startswith("rust/src/")
+            or _relative(root, path).startswith("rust/crates/lean-ctx-")
+        ]
         if not files:
             raise ManifestError("no Rust source files found")
+        source_cache = {}
+        use_cache = {}
+        code_cache = {}
+        for path in files:
+            relative = _relative(root, path)
+            source = _read_source(path)
+            source_cache[path] = source
+            if _needs_consumer_scan(source, manifest):
+                statements, code = _rust_views(source)
+            else:
+                statements, code = [], ""
+            use_cache[path] = statements
+            if relative.startswith("rust/src/") or relative.startswith("rust/crates/lean-ctx-"):
+                code_cache[path] = code
         findings = []
         for surface in FROZEN_SURFACES:
             spec = manifest["surfaces"][surface]
-            findings.extend(_shape_findings(root, files, surface, spec))
-            findings.extend(_consumer_findings(root, files, surface, spec))
-        findings.extend(_private_import_findings(root, files))
+            findings.extend(
+                _shape_findings(root, files, surface, spec, use_cache, source_cache)
+            )
+            findings.extend(
+                _consumer_findings(root, files, surface, spec, source_cache, use_cache, code_cache)
+            )
+        findings.extend(_private_import_findings(root, files, use_cache))
         if root == ROOT:
             findings.extend(check_classifications(rust_modules()))
             findings.extend(check_strategic_data())

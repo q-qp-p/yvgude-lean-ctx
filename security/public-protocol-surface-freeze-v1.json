@@ -16,6 +16,7 @@
       "review_release": "v1",
       "removal_not_before_release": "v2",
       "module_path": "rust/crates/lean-ctx-protocol/src/auto_routing.rs",
+      "module_sha256": "80f7f0629478c94d99fdbf2bc2e68871e1a328ea4e87c89727be361ecfc84a0c",
       "module_roots": [
         {
           "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
@@ -45,6 +46,12 @@
       ],
       "approved_consumers": [
         {
+          "path": "rust/crates/lean-ctx-protocol/src/eligibility.rs",
+          "statements": [
+            "use crate::{RiskClass, auto_routing::SchedulerGate, common::ValidationError};"
+          ]
+        },
+        {
           "path": "rust/src/proxy/auto_routing.rs",
           "statements": [
             "pub use lean_ctx_protocol::auto_routing::{ AutoRoutingConfig, AutoRoutingEvidence, AutoRoutingRequest, RoutingDecision, RoutingMode, RoutingReceipt, SchedulerGate, };"
@@ -60,6 +67,7 @@
       "review_release": "v1",
       "removal_not_before_release": "v2",
       "module_path": "rust/crates/lean-ctx-protocol/src/control_plane.rs",
+      "module_sha256": "bec68f5d55e9a3b07fbbba269ed4b36db0d89f252013b9009d60e73a98119ea3",
       "module_roots": [
         {
           "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
@@ -78,7 +86,14 @@
         {"kind": "struct", "name": "LocalControlPlane"},
         {"kind": "trait", "name": "ControlPlaneContract"}
       ],
-      "approved_consumers": []
+      "approved_consumers": [
+        {
+          "path": "rust/crates/lean-ctx-protocol/src/outcome_engine.rs",
+          "statements": [
+            "use crate::{AcceptanceState, ControlPlaneDecision, OutcomeSignalsV1, TaskId, TaskProfileV1};"
+          ]
+        }
+      ]
     },
     "fleet_control": {
       "owner": "lean-ctx OSS protocol maintainers",
@@ -88,6 +103,7 @@
       "review_release": "v1",
       "removal_not_before_release": "v2",
       "module_path": "rust/crates/lean-ctx-protocol/src/fleet_control.rs",
+      "module_sha256": "90719046039578362a9915b852e16d1c1990731192136324b7a3dc0cea1e66a1",
       "module_roots": [
         {
           "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
@@ -116,6 +132,7 @@
       "review_release": "v1",
       "removal_not_before_release": "v2",
       "module_path": "rust/crates/lean-ctx-protocol/src/rollout.rs",
+      "module_sha256": "1bd1fc2a36f3b170c90dd6e808d2f07321b255d9d6f649d412f8b874aa956ed7",
       "module_roots": [
         {
           "path": "rust/crates/lean-ctx-protocol/src/lib.rs",
@@ -157,6 +174,7 @@
       "review_release": "v1",
       "removal_not_before_release": "v2",
       "module_path": "rust/crates/lean-ctx-protocol/src/value_share.rs",
+      "module_sha256": "4f421d2ff72afdfa5e5da0cf53515c7953c716caf7441cbbaf63c0a0c0433a8e",
       "module_roots": [
         {
           "path": "rust/crates/lean-ctx-protocol/src/lib.rs",

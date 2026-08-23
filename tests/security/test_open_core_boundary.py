@@ -24,7 +24,9 @@ class OpenCoreBoundaryTests(unittest.TestCase):
             "rust/crates/lean-ctx-protocol/src/lib.rs",
             "rust/crates/lean-ctx-protocol/src/auto_routing.rs",
             "rust/crates/lean-ctx-protocol/src/control_plane.rs",
+            "rust/crates/lean-ctx-protocol/src/eligibility.rs",
             "rust/crates/lean-ctx-protocol/src/fleet_control.rs",
+            "rust/crates/lean-ctx-protocol/src/outcome_engine.rs",
             "rust/crates/lean-ctx-protocol/src/rollout.rs",
             "rust/crates/lean-ctx-protocol/src/value_share.rs",
             "rust/src/proxy/mod.rs",
@@ -72,6 +74,12 @@ class OpenCoreBoundaryTests(unittest.TestCase):
         self.write_manifest(manifest)
         self.assertTrue(any("[manifest]" in finding for finding in GATE.check_repo(self.repo)))
 
+    def test_manifest_rejects_invalid_module_digest(self):
+        manifest = self.read_manifest()
+        manifest["surfaces"]["rollout"]["module_sha256"] = "not-a-digest"
+        self.write_manifest(manifest)
+        self.assertTrue(any("[manifest]" in finding for finding in GATE.check_repo(self.repo)))
+
     def test_public_module_root_drift_is_rejected(self):
         path = self.repo / "rust/src/proxy/mod.rs"
         path.write_text(path.read_text(encoding="utf-8") + "\npub mod value_share;\n", encoding="utf-8")
@@ -91,6 +99,17 @@ class OpenCoreBoundaryTests(unittest.TestCase):
         findings = GATE.check_repo(self.repo)
         self.assertTrue(any("control_plane exported symbols drift" in finding for finding in findings))
 
+    def test_existing_public_wire_shape_drift_is_rejected(self):
+        path = self.repo / "rust/crates/lean-ctx-protocol/src/control_plane.rs"
+        source = path.read_text(encoding="utf-8").replace(
+            "    pub available_capabilities: Vec<CapabilityManifestV1>,\n",
+            "    pub available_capabilities: Vec<CapabilityManifestV1>,\n"
+            "    pub unreviewed_field: bool,\n",
+        )
+        path.write_text(source, encoding="utf-8")
+        findings = GATE.check_repo(self.repo)
+        self.assertTrue(any("control_plane module digest drift" in finding for finding in findings))
+
     def test_new_consumer_is_rejected(self):
         consumer = self.repo / "rust/src/unreviewed_consumer.rs"
         consumer.write_text(
@@ -100,6 +119,96 @@ class OpenCoreBoundaryTests(unittest.TestCase):
         findings = GATE.check_repo(self.repo)
         self.assertTrue(any("[new-consumer] control_plane" in finding for finding in findings))
         self.assertFalse(any("[private-import]" in finding for finding in findings))
+
+    def assert_new_consumer(self, filename, source, surface):
+        consumer = self.repo / "rust/src" / filename
+        consumer.write_text(source, encoding="utf-8")
+        findings = GATE.check_repo(self.repo)
+        self.assertTrue(any("[new-consumer] %s" % surface in finding for finding in findings), findings)
+
+    def test_same_crate_root_symbol_import_is_rejected(self):
+        self.assert_new_consumer(
+            "root_symbol_consumer.rs",
+            "use crate::{ControlPlaneRequest};\n",
+            "control_plane",
+        )
+
+    def test_same_crate_module_symbol_import_is_rejected(self):
+        self.assert_new_consumer(
+            "module_symbol_consumer.rs",
+            "use crate::control_plane::ControlPlaneRequest;\n",
+            "control_plane",
+        )
+
+    def test_fully_qualified_root_symbol_reference_is_rejected(self):
+        self.assert_new_consumer(
+            "qualified_consumer.rs",
+            "fn consume(value: crate::ControlPlaneRequest) { let _ = value; }\n",
+            "control_plane",
+        )
+
+    def test_external_fully_qualified_root_symbol_reference_is_rejected(self):
+        self.assert_new_consumer(
+            "external_qualified_consumer.rs",
+            "fn consume(value: lean_ctx_protocol::ControlPlaneRequest) { let _ = value; }\n",
+            "control_plane",
+        )
+
+    def test_external_root_symbol_import_is_rejected(self):
+        self.assert_new_consumer(
+            "external_root_consumer.rs",
+            "use lean_ctx_protocol::ControlPlaneRequest;\n",
+            "control_plane",
+        )
+
+    def test_relevant_glob_imports_are_rejected(self):
+        consumer = self.repo / "rust/src/glob_consumer.rs"
+        consumer.write_text(
+            "use crate::*;\nuse crate::control_plane::*;\n"
+            "use lean_ctx_protocol::control_plane::*;\n",
+            encoding="utf-8",
+        )
+        findings = GATE.check_repo(self.repo)
+        for surface in ("control_plane", "fleet_control", "value_share"):
+            self.assertTrue(any("[new-consumer] %s" % surface in finding for finding in findings), findings)
+
+    def test_external_crate_alias_is_rejected(self):
+        consumer = self.repo / "rust/src/alias_consumer.rs"
+        consumer.write_text("use lean_ctx_protocol as protocol;\n", encoding="utf-8")
+        findings = GATE.check_repo(self.repo)
+        for surface in GATE.FROZEN_SURFACES:
+            self.assertTrue(any("[new-consumer] %s" % surface in finding for finding in findings), findings)
+
+    def test_same_crate_alias_and_extern_crate_are_rejected(self):
+        consumer = self.repo / "rust/crates/lean-ctx-protocol/src/alias_consumer.rs"
+        consumer.write_text(
+            "use crate as protocol;\nextern crate lean_ctx_protocol as external;\n",
+            encoding="utf-8",
+        )
+        findings = GATE.check_repo(self.repo)
+        for surface in GATE.FROZEN_SURFACES:
+            self.assertTrue(any("[new-consumer] %s" % surface in finding for finding in findings), findings)
+
+    def test_comments_and_literals_are_not_consumers(self):
+        consumer = self.repo / "rust/src/non_consumer_text.rs"
+        consumer.write_text(
+            "// crate::ControlPlaneRequest\n"
+            "const TEXT: &str = \"lean_ctx_protocol::ControlPlaneRequest\";\n"
+            "const RAW: &str = r#\"use crate::control_plane::ControlPlaneRequest;\"#;\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(GATE.check_repo(self.repo), [])
+
+    def test_surface_module_references_are_not_consumers(self):
+        module = self.repo / "rust/crates/lean-ctx-protocol/src/control_plane.rs"
+        module.write_text(
+            module.read_text(encoding="utf-8")
+            + "\nfn local_check(value: crate::ControlPlaneRequest) { let _ = value; }\n",
+            encoding="utf-8",
+        )
+        findings = GATE.check_repo(self.repo)
+        self.assertFalse(any("[new-consumer] control_plane" in finding for finding in findings))
+        self.assertTrue(any("control_plane module digest drift" in finding for finding in findings))
 
     def test_private_cloud_import_remains_distinct(self):
         consumer = self.repo / "rust/src/private_consumer.rs"
