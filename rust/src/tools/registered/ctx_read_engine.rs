@@ -363,7 +363,7 @@ pub(super) fn record_policy_rejection(
     path: &str,
     policy_admission: EnginePolicyAdmissionV1,
 ) -> Result<String, String> {
-    let engine = NativeContextEngine::with_root(project_root);
+    let engine = NativeContextEngine::with_root(project_root)?;
     let (_, observation) = engine.execute_ctx_read_rejection(path, policy_admission)?;
     if observation.status != EngineObservationStatusV1::Rejected {
         return Err("native Engine policy rejection returned a non-rejected status".to_owned());
@@ -382,7 +382,7 @@ fn record_aggressive_invocation(
     input: &str,
     policy_admission: EnginePolicyAdmissionV1,
 ) -> Result<(), String> {
-    let engine = NativeContextEngine::with_root(project_root);
+    let engine = NativeContextEngine::with_root(project_root)?;
     let (_, observation) =
         engine.execute_ctx_read_rooted_snapshot(path, input, policy_admission)?;
     let receipt_link = observation
