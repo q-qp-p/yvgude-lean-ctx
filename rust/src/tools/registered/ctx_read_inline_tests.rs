@@ -164,6 +164,220 @@ async fn mcp_ctx_read_serves_cross_agent_delivery_stub_before_disk_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_aggressive_read_records_deterministic_engine_receipt() {
+    use crate::core::cache::SessionCache;
+    use crate::core::session::SessionState;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("engine-real-path.rs");
+    let source = "fn stable_engine_path() {\n    let context = 42;\n}\n".repeat(40);
+    std::fs::write(&file, &source).unwrap();
+    let path = file.to_string_lossy().to_string();
+    let ctx = ToolContext {
+        project_root: dir.path().to_string_lossy().to_string(),
+        resolved_paths: std::collections::HashMap::from([("path".to_string(), path.clone())]),
+        cache: Some(Arc::new(RwLock::new(SessionCache::new()))),
+        session: Some(Arc::new(RwLock::new(SessionState::new()))),
+        ..ToolContext::default()
+    };
+    let legacy_args = json!({ "path": path, "mode": "aggressive", "fresh": true })
+        .as_object()
+        .unwrap()
+        .clone();
+    let legacy = tokio::task::block_in_place(|| CtxReadTool.handle(&legacy_args, &ctx))
+        .expect("omitted Engine interface preserves legacy aggressive read");
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().unwrap();
+    assert!(!data_dir.join("engine-interface/v1/receipts").exists());
+
+    let args = json!({
+        "path": path,
+        "mode": "aggressive",
+        "engine_interface": "v1"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let output = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx))
+        .expect("real ctx_read aggressive path succeeds");
+    assert_eq!(output.mode.as_deref(), Some("aggressive"));
+    assert!(output.text.contains("stable_engine_path"));
+    assert_eq!(output.text, legacy.text);
+    let repeated = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx))
+        .expect("repeated real ctx_read aggressive path succeeds");
+    assert_eq!(repeated.text, output.text);
+
+    let receipt_dir = data_dir.join("engine-interface/v1/receipts");
+    let receipts: Vec<_> = std::fs::read_dir(receipt_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        receipts.len(),
+        1,
+        "identical real reads must reuse one deterministic receipt"
+    );
+    let receipt_bytes = std::fs::read(&receipts[0]).unwrap();
+    let receipt: serde_json::Value = serde_json::from_slice(&receipt_bytes).unwrap();
+    assert_eq!(receipt["observation"]["status"], "succeeded");
+    assert!(
+        receipt["invocation"]["policy_admission"]["policy_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("policy:ctx-read-context-gate-v1:sha256:")
+    );
+    assert_eq!(
+        receipt["invocation"]["policy_admission"]["decision"],
+        "admitted"
+    );
+    assert!(
+        receipt["invocation"]["input_ref"]
+            .as_str()
+            .unwrap()
+            .starts_with("input:ctx-read-snapshot-sha256:")
+    );
+    assert!(
+        receipt["invocation"]["source_refs"][1]
+            .as_str()
+            .unwrap()
+            .starts_with("source:canonical-path-sha256:")
+    );
+    assert!(
+        receipt["observation"]["measurements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|measurement| measurement["name"] != "latency_ms")
+    );
+    assert!(!String::from_utf8_lossy(&receipt_bytes).contains("stable_engine_path"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_aggressive_read_surfaces_engine_receipt_failure_without_hiding_content() {
+    use crate::core::cache::SessionCache;
+    use crate::core::session::SessionState;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().unwrap();
+    let engine_dir = data_dir.join("engine-interface/v1");
+    std::fs::create_dir_all(&engine_dir).unwrap();
+    std::fs::write(engine_dir.join("receipts"), "blocks receipt directory").unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("engine-recovery.rs");
+    let source = "fn legacy_content_survives() {}\n".repeat(40);
+    std::fs::write(&file, &source).unwrap();
+    let path = file.to_string_lossy().to_string();
+    let ctx = ToolContext {
+        project_root: dir.path().to_string_lossy().to_string(),
+        resolved_paths: std::collections::HashMap::from([("path".to_string(), path.clone())]),
+        cache: Some(Arc::new(RwLock::new(SessionCache::new()))),
+        session: Some(Arc::new(RwLock::new(SessionState::new()))),
+        ..ToolContext::default()
+    };
+    let args = json!({
+        "path": path,
+        "mode": "aggressive",
+        "fresh": true,
+        "engine_interface": "v1"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let output = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx))
+        .expect("legacy ctx_read remains available with an explicit Engine warning");
+
+    assert!(
+        output
+            .text
+            .starts_with("[ENGINE RECEIPT WARNING] code=engine_record_unavailable")
+    );
+    assert!(output.text.contains("recovery_ref=recovery:sha256:"));
+    assert!(output.text.contains("legacy_content_survives"));
+
+    let recovery_dir = engine_dir.join("recovery");
+    let recovery: Vec<_> = std::fs::read_dir(&recovery_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(recovery.len(), 1);
+    let recovery_bytes = std::fs::read(&recovery[0]).unwrap();
+    assert!(!String::from_utf8_lossy(&recovery_bytes).contains("legacy_content_survives"));
+
+    std::fs::remove_file(engine_dir.join("receipts")).unwrap();
+    std::fs::create_dir(engine_dir.join("receipts")).unwrap();
+    let retried = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx))
+        .expect("ctx_read retries Engine recording after storage recovery");
+    assert!(!retried.text.starts_with("[ENGINE RECEIPT WARNING]"));
+    assert!(retried.text.contains("legacy_content_survives"));
+}
+
+#[test]
+fn engine_interface_boundary_rejects_invalid_versions_and_batch_use() {
+    let ctx = ToolContext::default();
+    for invalid in [
+        Value::Null,
+        Value::Bool(true),
+        Value::String(String::new()),
+        Value::String("v2".to_owned()),
+        json!(1),
+    ] {
+        let args = json!({ "engine_interface": invalid })
+            .as_object()
+            .unwrap()
+            .clone();
+        let Err(error) = CtxReadTool.handle(&args, &ctx) else {
+            panic!("invalid Engine interface version must fail");
+        };
+        assert_eq!(
+            error.message,
+            "engine_interface must be the string \"v1\" when provided"
+        );
+    }
+
+    for paths in [json!([]), json!(["/tmp/one", "/tmp/two"]), json!("bad")] {
+        let args = json!({
+            "paths": paths,
+            "mode": "aggressive",
+            "engine_interface": "v1"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let Err(error) = CtxReadTool.handle(&args, &ctx) else {
+            panic!("Engine v1 paths parameter must fail");
+        };
+        assert_eq!(
+            error.message,
+            "engine_interface=\"v1\" supports only single-path ctx_read"
+        );
+    }
+
+    for args in [
+        json!({ "engine_interface": "v1" }),
+        json!({ "mode": "full", "engine_interface": "v1" }),
+        json!({ "mode": "aggressive", "raw": false, "engine_interface": "v1" }),
+        json!({ "mode": "aggressive", "limit": 10, "engine_interface": "v1" }),
+        json!({
+            "mode": "aggressive",
+            "aggressiveness": 0.7,
+            "engine_interface": "v1"
+        }),
+    ] {
+        let Err(error) = CtxReadTool.handle(args.as_object().unwrap(), &ctx) else {
+            panic!("conflicting Engine v1 request shape must fail");
+        };
+        assert!(error.message.contains("engine_interface=\"v1\""));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_ctx_read_records_new_cross_agent_delivery() {
     use crate::core::cache::SessionCache;
     use crate::core::ocla::OclaRegistry;
@@ -523,16 +737,25 @@ fn offset_limit_overrides_explicit_map_to_lines() {
 /// otherwise agents (and the generated docs/manifest) can't discover the
 /// aliases and the divergence that caused this bug returns.
 #[test]
-fn schema_advertises_line_window_aliases() {
+fn schema_advertises_line_window_aliases_and_engine_opt_in() {
     let tool = CtxReadTool.tool_def();
     let props = tool
         .input_schema
         .get("properties")
         .and_then(|p| p.as_object())
         .expect("ctx_read schema has a properties object");
-    for key in ["path", "mode", "start_line", "offset", "limit", "fresh"] {
+    for key in [
+        "path",
+        "mode",
+        "start_line",
+        "offset",
+        "limit",
+        "fresh",
+        "engine_interface",
+    ] {
         assert!(props.contains_key(key), "ctx_read schema missing '{key}'");
     }
+    assert_eq!(props["engine_interface"]["enum"], json!(["v1"]));
 }
 
 // -- Regression: GitHub Issue #262 --

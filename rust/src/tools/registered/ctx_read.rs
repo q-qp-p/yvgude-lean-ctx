@@ -54,7 +54,8 @@ impl McpTool for CtxReadTool {
                     "limit": { "type": "integer", "description": "Max lines" },
                     "fresh": { "type": "boolean", "description": "Bypass cache" },
                     "aggressiveness": { "type": "number", "description": "0.0–1.0 density (entropy/task)" },
-                    "protect": { "type": "array", "items": { "type": "string" }, "description": "Symbols kept verbatim" }
+                    "protect": { "type": "array", "items": { "type": "string" }, "description": "Symbols kept verbatim" },
+                    "engine_interface": engine::interface_schema()
                 },
                 "required": []
             }),
@@ -66,6 +67,8 @@ impl McpTool for CtxReadTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
     ) -> Result<ToolOutput, ErrorData> {
+        let engine_interface_v1 = engine::interface_v1_requested(args)?;
+        engine::validate_v1_request_shape(args, engine_interface_v1)?;
         // #509: ctx_read absorbs multi-file batch reads (supersedes ctx_multi_read).
         // A non-empty `paths` array routes to the one shared batch implementation.
         if args
@@ -101,7 +104,7 @@ impl McpTool for CtxReadTool {
         };
 
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.handle_inner(args, ctx, &path)
+            self.handle_inner(args, ctx, &path, engine_interface_v1)
         })) {
             Ok(result) => result,
             Err(_) => Err(ErrorData::internal_error(
@@ -149,6 +152,7 @@ impl CtxReadTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
         path: &str,
+        engine_interface_v1: bool,
     ) -> Result<ToolOutput, ErrorData> {
         let session_lock = ctx
             .session
@@ -226,7 +230,7 @@ impl CtxReadTool {
         let mut fresh = get_bool(args, "fresh").unwrap_or(false);
         // #513: a raw/verbatim request always reads from disk — the whole point
         // is exact current bytes, never a cached stub or delta.
-        if arg_raw {
+        if arg_raw || engine_interface_v1 {
             fresh = true;
         }
         let cache_policy = crate::server::compaction_sync::effective_cache_policy();
@@ -274,12 +278,13 @@ impl CtxReadTool {
             pressure_action,
             resolved_agent_id.as_deref(),
         );
-        if gate_result.budget_blocked {
-            let msg = gate_result
-                .budget_warning
-                .unwrap_or_else(|| "Agent token budget exceeded".to_string());
-            return Err(ErrorData::invalid_params(msg, None));
-        }
+        let engine_policy_admission = engine::admission_or_reject(
+            engine_interface_v1,
+            &gate_result,
+            &mode,
+            &ctx.project_root,
+            path,
+        )?;
         let budget_warning = gate_result.budget_warning.clone();
         // #513: an explicit raw/verbatim request is never silently downgraded by
         // the budget gate — the caller asked for exact bytes.
@@ -308,6 +313,7 @@ impl CtxReadTool {
             } else {
                 auto_degrade_read_mode(&mode)
             };
+        engine::require_aggressive(engine_interface_v1, &mode)?;
 
         // Delta-aware explicit re-reads (opt-in: config `delta_explicit`, env
         // LCTX_DELTA_EXPLICIT). Re-requesting full/lines:N-M content for a file
@@ -380,6 +386,7 @@ impl CtxReadTool {
         // channel overhead for the ~90% of calls that are cache hits.
         let read_timeout = std::time::Duration::from_secs(30);
         let cancelled = Arc::new(AtomicBool::new(false));
+        let engine_snapshot = engine::SourceSnapshot::default();
         // Hash once for cross-agent delivery (avoids re-reading on record).
         let delivery_metadata = crate::core::config::Config::load()
             .ocla
@@ -443,6 +450,7 @@ impl CtxReadTool {
                 let protect_owned = protect.clone();
                 let path_owned = path.to_string();
                 let cancel_flag = cancelled.clone();
+                let snapshot_worker = engine_snapshot.clone();
                 let (tx, rx) = std::sync::mpsc::sync_channel(1);
                 std::thread::spawn(move || {
                     let file_lock = per_file_lock(&path_owned);
@@ -838,6 +846,8 @@ impl CtxReadTool {
                         unreachable!()
                     };
 
+                    snapshot_worker.capture(engine_interface_v1, &resolved_mode, &compute_content);
+
                     if cancel_flag.load(Ordering::Relaxed) {
                         return;
                     }
@@ -1006,6 +1016,8 @@ impl CtxReadTool {
             return Err(ErrorData::invalid_params(output, None));
         }
 
+        let engine_warning =
+            engine_snapshot.record_if_enabled(&ctx.project_root, path, engine_policy_admission);
         let output_tokens = crate::core::tokens::count_tokens(&output);
         let saved = original.saturating_sub(output_tokens);
 
@@ -1278,7 +1290,7 @@ impl CtxReadTool {
                 .unwrap_or_default();
             crate::core::rule_discovery::rules_suffix_for_read(path, &ctx.project_root, &client_id)
         };
-        let mut warnings = Vec::new();
+        let mut warnings: Vec<&str> = engine_warning.as_deref().into_iter().collect();
         if let Some(ref w) = budget_warning {
             warnings.push(w.as_str());
         }
@@ -1352,6 +1364,8 @@ impl CtxReadTool {
     }
 }
 
+#[path = "ctx_read_engine.rs"]
+mod engine;
 #[path = "ctx_read_window.rs"]
 mod window;
 #[allow(unused_imports)]

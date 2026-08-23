@@ -14,7 +14,7 @@
 WS-1: CODEBASE CLEANUP          ██████████  Cleanup done; P0 implementation complete; CI rehearsal and admin policy apply remain
 WS-2: SDK V1 + EVIDENCE         ██████████  Phase-A substrate complete; public SDK remains Preview
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     ██████████  Substrate complete; P1 runtime caller remains open
+WS-4: OCLA + COMPOSABLE (B)     ██████████  P1 runtime Engine caller and evidence boundary complete
 WS-5: PARTNERSHIP (C)           —— DEFERRED (no near-term partner execution)
 WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; P2 evidence gate remains open
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
@@ -37,15 +37,15 @@ This file schedules approved work; it does not supersede those authorities.
 | Roadmap phase | Current state | Next exit |
 | --- | --- | --- |
 | **P0 — delivery/security** | Code complete: exact-tag, OCLA conformance, signed manifest, evidence, rehearsal, delivery/security/history suites, and the audited history delta now gate `CI Green`; release/publishing remains transitively blocked. The branch-protection declaration requires `CI Green` plus the independent `Security Scan`. | Run the clean regular-CI rehearsal on `main`, then apply and verify the declared GitHub branch-protection rule with repository-admin authority. |
-| **P1 — Engine runtime spine** | Pending: Engine interface and native adapter proofs exist, but no canonical `ctx_read`/daemon caller invokes `NativeContextEngine`. | One bounded compression caller with policy/identity/digest/receipt linkage and a real-path fixture. |
+| **P1 — Engine runtime spine** | Code and local evidence complete: explicit single-path `ctx_read` `engine_interface="v1"` dispatches aggressive compression through `NativeContextEngine`; omission remains legacy-compatible. Actual gate admission, raw/redacted input identity, canonical source, deterministic output/receipt, durable recovery and retry are covered by real-path fixtures. | Feed this invocation and receipt into the P2 canonical identity chain; promotion still obeys the independent P0 operational gate. |
 | **P2 — canonical evidence** | Partial: receipt, ledger and verifier substrates exist but have no single producer-to-ledger-to-independent-verifier chain. | Canonical Task → Plan → Invocation → Receipt → Outcome projection and replay/tamper verification. |
 | **P3 — Python Preview** | Blocked on P1/P2: the wrapper is fixture-backed; Rust session/Kit/receipt routes are absent. | Live-runtime parity or an explicitly narrowed facade with migration tests. |
 | **P4 — production SDK repo** | Not entered: all four repository/license/release/security approvals remain pending. | Approved decision record plus P3 evidence, then separate SDK repo and five-primitive contract. |
 | **P5–P7 — Workspace, package, handoff** | Research queue: target architecture only. | Start only after P4; never promote legacy stores/artifacts as the new truth. |
 | **P8–P9 — Cloud/optimization** | Private and blocked. | Separate private repository only after local proof, trusted evidence and designated owners. |
 
-**Execution order:** P0 operational CI/branch-protection verification → P1 runtime Engine caller →
-P2 canonical evidence → P3 live Python Preview parity → P4 SDK repository.
+**Execution order:** P0 operational CI/branch-protection verification → P1 runtime Engine caller
+(local exit met) → P2 canonical evidence → P3 live Python Preview parity → P4 SDK repository.
 No later workstream may bypass an earlier exit.
 
 ---
