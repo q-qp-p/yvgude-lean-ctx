@@ -14,23 +14,28 @@ use crate::core::engine_interface::NativeContextEngine;
 use crate::server::context_gate::PreDispatchResult;
 
 #[derive(Clone, Default)]
-pub(super) struct SourceSnapshot(Arc<Mutex<Option<String>>>);
+pub(super) struct SourceSnapshot(Arc<Mutex<Option<CapturedSource>>>);
+
+struct CapturedSource {
+    input: String,
+    canonical_path: String,
+}
 
 impl SourceSnapshot {
-    pub(super) fn capture(&self, enabled: bool, mode: &str, input: &str) {
-        if enabled && mode == "aggressive" {
-            let mut snapshot = self
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *snapshot = Some(input.to_owned());
-        }
+    fn capture_rooted(&self, source: crate::tools::ctx_read::RootedRead) {
+        let mut snapshot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *snapshot = Some(CapturedSource {
+            input: source.content,
+            canonical_path: source.canonical_path,
+        });
     }
 
     pub(super) fn record(
         self,
         project_root: &str,
-        path: &str,
         policy_admission: EnginePolicyAdmissionV1,
     ) -> Result<(), String> {
         let snapshot = self
@@ -38,21 +43,35 @@ impl SourceSnapshot {
             .lock()
             .map_err(|_| "Engine source snapshot lock poisoned".to_owned())?
             .take();
-        record_aggressive_snapshot(snapshot, project_root, path, policy_admission)
+        record_aggressive_snapshot(snapshot, project_root, policy_admission)
     }
 
     pub(super) fn record_if_enabled(
         self,
         project_root: &str,
-        path: &str,
         policy_admission: Option<EnginePolicyAdmissionV1>,
     ) -> Option<String> {
         policy_admission.and_then(|admission| {
-            self.record(project_root, path, admission)
+            self.record(project_root, admission)
                 .err()
                 .map(|error| stable_warning(&error))
         })
     }
+}
+
+pub(super) fn read_source(
+    enabled: bool,
+    path: &str,
+    project_root: &str,
+    snapshot: &SourceSnapshot,
+) -> Result<String, std::io::Error> {
+    if !enabled {
+        return crate::tools::ctx_read::read_file_lossy(path);
+    }
+    let source = crate::tools::ctx_read::read_file_lossy_rooted(path, project_root)?;
+    let content = source.content.clone();
+    snapshot.capture_rooted(source);
+    Ok(content)
 }
 
 pub(super) fn interface_schema() -> Value {
@@ -111,11 +130,66 @@ pub(super) fn validate_v1_request_shape(
     Ok(())
 }
 
-pub(super) fn require_aggressive(enabled: bool, mode: &str) -> Result<(), ErrorData> {
+pub(super) fn require_aggressive(
+    enabled: bool,
+    mode: &str,
+    project_root: &str,
+    path: &str,
+    policy_admission: &mut Option<EnginePolicyAdmissionV1>,
+) -> Result<(), ErrorData> {
     if enabled && mode != "aggressive" {
-        return Err(ErrorData::invalid_params(
-            "engine_interface=\"v1\" requires effective mode=\"aggressive\"",
-            None,
+        return Err(reject_after_admission(
+            project_root,
+            path,
+            policy_admission,
+            "effective_mode_not_aggressive",
+            mode,
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn reject_non_text_extension(
+    enabled: bool,
+    project_root: &str,
+    path: &str,
+    policy_admission: &mut Option<EnginePolicyAdmissionV1>,
+) -> Result<(), ErrorData> {
+    if enabled && crate::core::binary_detect::is_llm_viewable_image(path) {
+        return Err(reject_after_admission(
+            project_root,
+            path,
+            policy_admission,
+            "unsupported_input_image",
+            "image",
+        ));
+    }
+    if enabled && crate::core::binary_detect::has_binary_extension(path) {
+        return Err(reject_after_admission(
+            project_root,
+            path,
+            policy_admission,
+            "unsupported_input_binary",
+            "binary_extension",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn reject_read_failure_if_enabled(
+    enabled: bool,
+    resolved_mode: &str,
+    project_root: &str,
+    path: &str,
+    policy_admission: &mut Option<EnginePolicyAdmissionV1>,
+) -> Result<(), ErrorData> {
+    if enabled && resolved_mode == "error" {
+        return Err(reject_after_admission(
+            project_root,
+            path,
+            policy_admission,
+            "source_read_failed",
+            resolved_mode,
         ));
     }
     Ok(())
@@ -130,6 +204,14 @@ struct GateAdmissionIdentityV1<'a> {
     pressure_downgraded: bool,
     budget_blocked: bool,
     triage_filter_level: u8,
+}
+
+#[derive(Serialize)]
+struct PostAdmissionRejectionIdentityV1<'a> {
+    schema_version: u32,
+    admitted_policy_ref: &'a str,
+    reason_code: &'a str,
+    detail: &'a str,
 }
 
 /// Convert the actual pre-dispatch decision into the Engine admission record.
@@ -196,6 +278,48 @@ pub(super) fn admission_or_reject(
     Ok(Some(admission))
 }
 
+fn reject_after_admission(
+    project_root: &str,
+    path: &str,
+    policy_admission: &mut Option<EnginePolicyAdmissionV1>,
+    reason_code: &'static str,
+    detail: &str,
+) -> ErrorData {
+    let Some(admitted) = policy_admission.take() else {
+        return ErrorData::internal_error(
+            "Engine v1 post-admission rejection has no admission identity",
+            None,
+        );
+    };
+    let identity = PostAdmissionRejectionIdentityV1 {
+        schema_version: 1,
+        admitted_policy_ref: admitted.policy_ref.as_str(),
+        reason_code,
+        detail,
+    };
+    let digest = crate::core::agent_identity::hex_encode(&Sha256::digest(
+        crate::core::canonical::canonical_serialize(&identity),
+    ));
+    let rejected = EnginePolicyAdmissionV1 {
+        policy_ref: match ProtocolReference::new(format!(
+            "policy:ctx-read-runtime-rejection-v1:sha256:{digest}"
+        )) {
+            Ok(reference) => reference,
+            Err(error) => return ErrorData::internal_error(error.to_string(), None),
+        },
+        decision: EnginePolicyDecisionV1::Rejected,
+    };
+    match record_policy_rejection(project_root, path, rejected) {
+        Ok(receipt_ref) => ErrorData::invalid_params(
+            format!(
+                "engine_interface=\"v1\" rejected after admission; reason={reason_code}; receipt_ref={receipt_ref}"
+            ),
+            None,
+        ),
+        Err(error) => ErrorData::internal_error(stable_warning(&error), None),
+    }
+}
+
 /// Keep user-visible fallback deterministic and free of OS/path error text.
 pub(super) fn stable_warning(error: &str) -> String {
     let mut warning = "[ENGINE RECEIPT WARNING] code=engine_record_unavailable".to_owned();
@@ -220,14 +344,18 @@ pub(super) fn stable_warning(error: &str) -> String {
 
 /// Record the exact input snapshot captured by the cold read worker.
 /// Omitted Engine calls may hit legacy cache; explicit v1 calls force fresh.
-pub(super) fn record_aggressive_snapshot(
-    snapshot: Option<String>,
+fn record_aggressive_snapshot(
+    snapshot: Option<CapturedSource>,
     project_root: &str,
-    path: &str,
     policy_admission: EnginePolicyAdmissionV1,
 ) -> Result<(), String> {
-    let input = snapshot.ok_or_else(|| "Engine v1 source snapshot unavailable".to_owned())?;
-    record_aggressive_invocation(project_root, path, &input, policy_admission)
+    let source = snapshot.ok_or_else(|| "Engine v1 source snapshot unavailable".to_owned())?;
+    record_aggressive_invocation(
+        project_root,
+        &source.canonical_path,
+        &source.input,
+        policy_admission,
+    )
 }
 
 pub(super) fn record_policy_rejection(
@@ -255,7 +383,8 @@ fn record_aggressive_invocation(
     policy_admission: EnginePolicyAdmissionV1,
 ) -> Result<(), String> {
     let engine = NativeContextEngine::with_root(project_root);
-    let (_, observation) = engine.execute_ctx_read_snapshot(path, input, policy_admission)?;
+    let (_, observation) =
+        engine.execute_ctx_read_rooted_snapshot(path, input, policy_admission)?;
     let receipt_link = observation
         .receipt_link
         .ok_or_else(|| "native Engine terminal observation omitted its receipt link".to_owned())?;
@@ -349,8 +478,7 @@ mod tests {
     #[test]
     fn enabled_recording_never_silently_accepts_a_missing_snapshot() {
         let admission = admission_from_gate(&gate(false, None), "aggressive").unwrap();
-        let error =
-            record_aggressive_snapshot(None, "/tmp", "/tmp/missing", admission).unwrap_err();
+        let error = record_aggressive_snapshot(None, "/tmp", admission).unwrap_err();
         assert_eq!(error, "Engine v1 source snapshot unavailable");
     }
 
@@ -369,13 +497,42 @@ mod tests {
 
     #[test]
     fn engine_v1_rejects_non_aggressive_effective_mode() {
-        require_aggressive(true, "aggressive").unwrap();
-        let error = require_aggressive(true, "full").unwrap_err();
-        assert_eq!(
-            error.message,
-            "engine_interface=\"v1\" requires effective mode=\"aggressive\""
+        let _data_dir = crate::core::data_dir::isolated_data_dir();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mode.rs");
+        std::fs::write(&file, "fn mode_fixture() {}").unwrap();
+        let mut admitted = Some(admission_from_gate(&gate(false, None), "aggressive").unwrap());
+        require_aggressive(
+            true,
+            "aggressive",
+            &dir.path().to_string_lossy(),
+            &file.to_string_lossy(),
+            &mut admitted,
+        )
+        .unwrap();
+        let error = require_aggressive(
+            true,
+            "full",
+            &dir.path().to_string_lossy(),
+            &file.to_string_lossy(),
+            &mut admitted,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("reason=effective_mode_not_aggressive")
         );
-        require_aggressive(false, "full").unwrap();
+        assert!(error.message.contains("receipt_ref=receipt:sha256:"));
+        let mut legacy = None;
+        require_aggressive(
+            false,
+            "full",
+            &dir.path().to_string_lossy(),
+            &file.to_string_lossy(),
+            &mut legacy,
+        )
+        .unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -383,18 +540,18 @@ mod tests {
         let _data_dir = crate::core::data_dir::isolated_data_dir();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("snapshot.rs");
-        let cached = "fn cache_snapshot_marker() {}\n".repeat(40);
-        std::fs::write(&file, "fn changed_disk_marker() {}\n").unwrap();
+        let source = "fn cache_snapshot_marker() {}\n".repeat(40);
+        std::fs::write(&file, &source).unwrap();
         let path = file.to_string_lossy().into_owned();
         let admission = admission_from_gate(&gate(false, None), "aggressive").unwrap();
+        let snapshot = SourceSnapshot::default();
 
-        record_aggressive_snapshot(
-            Some(cached),
-            &dir.path().to_string_lossy(),
-            &path,
-            admission,
-        )
-        .unwrap();
+        let captured = read_source(true, &path, &dir.path().to_string_lossy(), &snapshot).unwrap();
+        assert_eq!(captured, source);
+        std::fs::write(&file, "fn changed_disk_marker() {}\n").unwrap();
+        snapshot
+            .record(&dir.path().to_string_lossy(), admission)
+            .unwrap();
 
         let output_dir = crate::core::data_dir::lean_ctx_data_dir()
             .unwrap()

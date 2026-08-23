@@ -2,6 +2,34 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+fn engine_test_context(root: &std::path::Path, path: &std::path::Path) -> ToolContext {
+    ToolContext {
+        project_root: root.to_string_lossy().into_owned(),
+        resolved_paths: std::collections::HashMap::from([(
+            "path".to_owned(),
+            path.to_string_lossy().into_owned(),
+        )]),
+        cache: Some(std::sync::Arc::new(tokio::sync::RwLock::new(
+            crate::core::cache::SessionCache::new(),
+        ))),
+        session: Some(std::sync::Arc::new(tokio::sync::RwLock::new(
+            crate::core::session::SessionState::new(),
+        ))),
+        ..ToolContext::default()
+    }
+}
+
+fn engine_receipt_path(data_dir: &std::path::Path, message: &str) -> std::path::PathBuf {
+    let digest = message
+        .split_once("receipt_ref=receipt:sha256:")
+        .map(|(_, digest)| digest.trim_end_matches([';', ',', ' ']))
+        .expect("Engine rejection must expose a receipt SHA-256");
+    assert_eq!(digest.len(), 64);
+    assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    data_dir
+        .join("engine-interface/v1/receipts")
+        .join(format!("{digest}.json"))
+}
 #[test]
 fn raw_alias_forces_raw_mode_over_explicit_mode() {
     // #513: raw=true is the verbatim escape hatch and must win over any
@@ -341,6 +369,18 @@ fn engine_interface_boundary_rejects_invalid_versions_and_batch_use() {
         );
     }
 
+    let invalid_before_batch = json!({
+        "paths": ["/tmp/one"],
+        "engine_interface": "v2"
+    });
+    let Err(error) = CtxReadTool.handle(invalid_before_batch.as_object().unwrap(), &ctx) else {
+        panic!("invalid Engine interface must fail before batch dispatch");
+    };
+    assert_eq!(
+        error.message,
+        "engine_interface must be the string \"v1\" when provided"
+    );
+
     for paths in [json!([]), json!(["/tmp/one", "/tmp/two"]), json!("bad")] {
         let args = json!({
             "paths": paths,
@@ -375,6 +415,186 @@ fn engine_interface_boundary_rejects_invalid_versions_and_batch_use() {
         };
         assert!(error.message.contains("engine_interface=\"v1\""));
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn omitted_engine_interface_preserves_legacy_image_and_binary_paths() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    let image = dir.path().join("legacy-image.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nlegacy-image-payload").unwrap();
+    let image_ctx = engine_test_context(dir.path(), &image);
+    let image_args = json!({
+        "path": image.to_string_lossy(),
+        "mode": "aggressive",
+        "fresh": true
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let image_output = tokio::task::block_in_place(|| CtxReadTool.handle(&image_args, &image_ctx))
+        .expect("omitted Engine interface must preserve image passthrough");
+    assert_eq!(image_output.content_blocks.as_ref().map(Vec::len), Some(2));
+    let direct_image = read_image_file(&image.to_string_lossy())
+        .expect("legacy image helper must remain authoritative");
+    assert_eq!(image_output.text, direct_image.text);
+    assert_eq!(image_output.path, direct_image.path);
+    assert_eq!(image_output.mode, direct_image.mode);
+    assert_eq!(
+        serde_json::to_value(&image_output.content_blocks).unwrap(),
+        serde_json::to_value(&direct_image.content_blocks).unwrap()
+    );
+
+    let binary = dir.path().join("legacy-binary.bin");
+    std::fs::write(&binary, b"\0legacy-binary-payload").unwrap();
+    let binary_ctx = engine_test_context(dir.path(), &binary);
+    let binary_args = json!({
+        "path": binary.to_string_lossy(),
+        "mode": "aggressive",
+        "fresh": true
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let Err(error) = tokio::task::block_in_place(|| CtxReadTool.handle(&binary_args, &binary_ctx))
+    else {
+        panic!("omitted Engine interface must preserve binary rejection");
+    };
+    assert_eq!(
+        error.message,
+        crate::core::binary_detect::binary_file_message(&binary.to_string_lossy())
+    );
+    assert!(!data_dir.join("engine-interface").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engine_v1_rejects_image_and_binary_with_payload_free_receipts() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let fixtures = [
+        (
+            dir.path().join("secret-image.png"),
+            b"\x89PNG\r\n\x1a\nIMAGE_SECRET_PAYLOAD".as_slice(),
+            "unsupported_input_image",
+        ),
+        (
+            dir.path().join("secret-binary.bin"),
+            b"\0BINARY_SECRET_PAYLOAD".as_slice(),
+            "unsupported_input_binary",
+        ),
+        (
+            dir.path().join("secret-nul.txt"),
+            b"\0NUL_SECRET_PAYLOAD".as_slice(),
+            "source_read_failed",
+        ),
+    ];
+
+    for (path, payload, reason) in &fixtures {
+        std::fs::write(path, payload).unwrap();
+        let ctx = engine_test_context(dir.path(), path);
+        let args = json!({
+            "path": path.to_string_lossy(),
+            "mode": "aggressive",
+            "engine_interface": "v1"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let Err(first) = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx)) else {
+            panic!("Engine v1 must reject non-text input");
+        };
+        assert!(first.message.contains(&format!("reason={reason}")));
+        let first_path = engine_receipt_path(&data_dir, &first.message);
+        let first_bytes = std::fs::read(&first_path).unwrap();
+
+        let Err(repeated) = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx)) else {
+            panic!("identical Engine v1 rejection must be deterministic");
+        };
+        assert_eq!(first.message, repeated.message);
+        assert_eq!(
+            first_path,
+            engine_receipt_path(&data_dir, &repeated.message)
+        );
+        assert_eq!(first_bytes, std::fs::read(&first_path).unwrap());
+    }
+
+    let receipt_dir = data_dir.join("engine-interface/v1/receipts");
+    let receipts: Vec<_> = std::fs::read_dir(&receipt_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(receipts.len(), 3);
+    for receipt_path in receipts {
+        let bytes = std::fs::read(receipt_path).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(!text.contains("IMAGE_SECRET_PAYLOAD"));
+        assert!(!text.contains("BINARY_SECRET_PAYLOAD"));
+        assert!(!text.contains("NUL_SECRET_PAYLOAD"));
+        assert!(!text.contains(&dir.path().to_string_lossy().to_string()));
+        let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(receipt["observation"]["status"], "rejected");
+        assert_eq!(
+            receipt["invocation"]["policy_admission"]["decision"],
+            "rejected"
+        );
+        assert!(receipt["observation"]["output_ref"].is_null());
+        assert!(
+            receipt["observation"]["measurements"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        );
+    }
+    assert!(!data_dir.join("engine-interface/v1/outputs").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engine_v1_rejects_worker_late_protected_path_mode_change() {
+    let _data_dir = crate::core::data_dir::isolated_data_dir();
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().unwrap();
+    std::fs::write(
+        data_dir.join("config.toml"),
+        "[proxy]\ncompress_protect = [\"*.protected\"]\n",
+    )
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("late-mode.protected");
+    std::fs::write(&source, "LATE_MODE_SECRET_PAYLOAD\n".repeat(40)).unwrap();
+    let ctx = engine_test_context(dir.path(), &source);
+    let args = json!({
+        "path": source.to_string_lossy(),
+        "mode": "aggressive",
+        "engine_interface": "v1"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    let Err(first) = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx)) else {
+        panic!("Engine v1 must reject a worker-late effective mode change");
+    };
+    assert!(
+        first
+            .message
+            .contains("reason=effective_mode_not_aggressive")
+    );
+    let receipt_path = engine_receipt_path(&data_dir, &first.message);
+    let first_bytes = std::fs::read(&receipt_path).unwrap();
+
+    let Err(repeated) = tokio::task::block_in_place(|| CtxReadTool.handle(&args, &ctx)) else {
+        panic!("worker-late effective mode rejection must be deterministic");
+    };
+    assert_eq!(first.message, repeated.message);
+    assert_eq!(first_bytes, std::fs::read(&receipt_path).unwrap());
+    assert!(
+        !String::from_utf8(first_bytes)
+            .unwrap()
+            .contains("LATE_MODE_SECRET_PAYLOAD")
+    );
+    assert!(!data_dir.join("engine-interface/v1/outputs").exists());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -40,15 +40,26 @@ engine-interface/v1/receipts/<sha256>.json
 engine-interface/v1/recovery/<sha256>.json
 ```
 
-- Directories are private on Unix; artifacts are atomically written with mode
-  `0600`.
+- Directories are private on Unix. Every relative directory component is
+  rejected when it is a symlink/reparse point or resolves outside the canonical
+  data root. New content-addressed artifacts are opened with exclusive-create
+  and no-follow semantics; the opened file handle is bound back to that root
+  before bytes are written and is synchronized before success. Unix artifacts
+  use mode `0600`.
 - Existing artifact paths must be regular, non-symlink files whose contents
   match their address.
+- P1 rejects pre-existing symlink/reparse escape and never writes payload bytes
+  outside the resolved data root. Malicious same-user relocation after artifact
+  handle validation is outside this boundary; that excluded race can leave an
+  empty external leaf, but cannot produce an external payload write.
 - Receipt JSON is canonical and contains references, digests, status and
   measurements only. It intentionally excludes raw source and output bytes.
 - The production source reference binds the canonical resolved path by SHA-256;
   the input reference binds the raw worker snapshot, while `input_digest` binds
   the redacted bytes actually consumed by the Engine.
+- A rejected invocation that cannot safely resolve its source instead binds a
+  SHA-256 identity of the requested absolute path under the distinct
+  `source:requested-path-sha256` namespace; raw path bytes are never persisted.
 - If receipt persistence fails, a separate canonical recovery artifact records
   the invocation and terminal observation without source or output payload.
 
@@ -69,9 +80,13 @@ remain untouched when Engine v1 is omitted. Explicit Engine v1 forces a fresh
 bounded worker snapshot; identical calls reuse the same content-addressed
 output and receipt identities rather than silently accepting a legacy cache hit.
 
-The production source is revalidated against the Engine root before dispatch.
-Materialized compression runs in a dedicated worker behind a real 30-second
-host deadline; timed-out computation cannot persist an Engine output or receipt.
+The production worker opens the source through the Engine root one component at
+a time without following links. The Engine receives that descriptor-backed raw
+snapshot and canonical identity; it does not resolve or read the caller path a
+second time. Materialized compression runs in a dedicated worker behind a real
+30-second host deadline. A timed-out worker cannot persist an artifact and late
+completion cannot publish output. The receiving Engine records the terminal
+`failed` / `resource_limit` observation and receipt itself.
 Invocation identity includes Engine ID/version, capability ID/version in
 addition to source, input, policy, mode and deadline identities.
 
@@ -90,7 +105,8 @@ Operational traces also record successful receipt references.
 | Condition | Engine record | Recovery |
 | --- | --- | --- |
 | Pre-admission rejected | `rejected` / `policy_rejected` | none |
-| Jailed source cannot be read | `failed` / `source_unavailable` | supplied input reference |
+| Production source admission cannot complete safely | `rejected` / `policy_rejected` | requested-path hash only |
+| Standalone native source cannot be read | `failed` / `source_unavailable` | supplied input reference |
 | Read bytes differ from supplied identity | `failed` / `source_integrity_mismatch` | supplied input reference |
 | Native input/output/timeout limit | `failed` / `resource_limit` | host decides |
 | Native request shape invalid | `failed` / `internal` | host decides |
@@ -107,7 +123,8 @@ deterministic version-scoped receipt identity across repeated calls, real gate
 admission,
 single-snapshot production dispatch, raw/redacted identity separation, durable
 and visible receipt-write failure plus successful retry, rooted-source refusal,
-hard host deadline, permission re-hardening, no adapter invocation on rejection,
+artifact-directory symlink containment, hard host deadline with no late output,
+permission re-hardening, no adapter invocation on rejection,
 structured source recovery, source-integrity mismatch, redaction non-disclosure,
 tamper/symlink refusal and the versioned rejected-receipt golden fixture at
 `engine-interface/v1/rejected-receipt.json`. Run:
@@ -117,6 +134,11 @@ cd rust
 cargo test --lib core::engine_interface::tests
 cargo test --lib tools::registered::ctx_read::engine::tests
 cargo test --lib mcp_aggressive_read_
+cargo test --lib engine_v1_rejects_
+cargo test --lib engine_v1_rooted_read_failure_never_falls_back_to_outside_content
+cargo test --lib omitted_engine_interface_preserves_legacy_image_and_binary_paths
+cargo test --lib tools::ctx_read::file_io::tests
+cargo test --lib tools::registered::ctx_read::image::tests
 ```
 
 Volatile latency remains runtime telemetry and is deliberately absent from the

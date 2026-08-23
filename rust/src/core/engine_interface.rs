@@ -15,8 +15,8 @@ use lean_ctx_protocol::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::core::atomic_fs;
 use crate::core::canonical;
+#[cfg(test)]
 use crate::core::data_dir;
 use crate::core::ocla::adapters::native_context::{
     NativeContextAdapter, NativeContextInvocationFailure,
@@ -29,6 +29,9 @@ const CAPABILITY_VERSION: &str = "1.0.0";
 const RECEIPT_DIRECTORY: &str = "engine-interface/v1/receipts";
 const OUTPUT_DIRECTORY: &str = "engine-interface/v1/outputs";
 const RECOVERY_DIRECTORY: &str = "engine-interface/v1/recovery";
+
+#[path = "engine_artifact.rs"]
+mod artifact_store;
 
 /// Inputs intentionally retained inside the local Engine proof boundary.
 ///
@@ -55,6 +58,54 @@ impl NativeContextEngineRequest {
         timeout_ms: u64,
         policy_admission: EnginePolicyAdmissionV1,
     ) -> Result<(Self, String), String> {
+        let canonical_path = std::fs::canonicalize(path)
+            .map_err(|error| format!("resolve ctx_read Engine source: {error}"))?;
+        Self::ctx_read_snapshot_canonical(&canonical_path, raw_input, timeout_ms, policy_admission)
+    }
+
+    fn ctx_read_snapshot_canonical(
+        canonical_path: &Path,
+        raw_input: &str,
+        timeout_ms: u64,
+        policy_admission: EnginePolicyAdmissionV1,
+    ) -> Result<(Self, String), String> {
+        if !canonical_path.is_absolute() {
+            return Err("ctx_read Engine canonical source must be absolute".to_owned());
+        }
+        Self::ctx_read_identified(
+            canonical_path.to_string_lossy().into_owned(),
+            "source:canonical-path-sha256",
+            raw_input,
+            timeout_ms,
+            policy_admission,
+        )
+    }
+
+    fn ctx_read_rejection(
+        requested_path: &str,
+        timeout_ms: u64,
+        policy_admission: EnginePolicyAdmissionV1,
+    ) -> Result<Self, String> {
+        if !Path::new(requested_path).is_absolute() {
+            return Err("ctx_read Engine requested source must be absolute".to_owned());
+        }
+        Self::ctx_read_identified(
+            requested_path.to_owned(),
+            "source:requested-path-sha256",
+            "",
+            timeout_ms,
+            policy_admission,
+        )
+        .map(|(request, _)| request)
+    }
+
+    fn ctx_read_identified(
+        path_identity: String,
+        source_prefix: &str,
+        raw_input: &str,
+        timeout_ms: u64,
+        policy_admission: EnginePolicyAdmissionV1,
+    ) -> Result<(Self, String), String> {
         let input = crate::core::redaction::redact_text_if_enabled(raw_input);
         let raw_input_digest = sha256_digest(raw_input.as_bytes())?;
         let input_digest = sha256_digest(input.as_bytes())?;
@@ -63,15 +114,9 @@ impl NativeContextEngineRequest {
             raw_input_digest.hex()
         ))
         .map_err(|error| error.to_string())?;
-        let canonical_path = std::fs::canonicalize(path)
-            .map_err(|error| format!("resolve ctx_read Engine source: {error}"))?;
-        let canonical_path = canonical_path.to_string_lossy().into_owned();
-        let path_digest = sha256_digest(canonical_path.as_bytes())?;
-        let source_ref = ProtocolReference::new(format!(
-            "source:canonical-path-sha256:{}",
-            path_digest.hex()
-        ))
-        .map_err(|error| error.to_string())?;
+        let path_digest = sha256_digest(path_identity.as_bytes())?;
+        let source_ref = ProtocolReference::new(format!("{source_prefix}:{}", path_digest.hex()))
+            .map_err(|error| error.to_string())?;
         let invocation_seed = canonical::canonical_serialize(&CtxReadInvocationIdentityV1 {
             engine_id: ENGINE_ID,
             engine_version: env!("CARGO_PKG_VERSION"),
@@ -96,7 +141,7 @@ impl NativeContextEngineRequest {
             input_digest,
             source_refs: vec![input_ref, source_ref],
             policy_admission,
-            paths: vec![canonical_path],
+            paths: vec![path_identity],
             mode: "aggressive".to_owned(),
             budget_tokens: None,
             timeout_ms,
@@ -146,6 +191,8 @@ struct EngineRecoveryArtifactV1 {
 impl NativeContextEngine {
     #[must_use]
     pub(crate) fn with_root(root: impl AsRef<Path>) -> Self {
+        let root = crate::core::pathutil::canonicalize_secure(root.as_ref())
+            .unwrap_or_else(|_| root.as_ref().to_path_buf());
         Self {
             adapter: NativeContextAdapter::with_root(root),
         }
@@ -195,9 +242,26 @@ impl NativeContextEngine {
     ) -> Result<(EngineInvocationV1, EngineObservationV1), String> {
         let rooted_path = crate::core::pathjail::jail_path(Path::new(path), self.adapter.root())
             .map_err(|_| "ctx_read Engine source is outside its rooted boundary".to_owned())?;
-        let rooted_path = rooted_path.to_string_lossy().into_owned();
-        let (request, input) = NativeContextEngineRequest::ctx_read_snapshot(
-            &rooted_path,
+        self.execute_ctx_read_rooted_snapshot(
+            &rooted_path.to_string_lossy(),
+            raw_input,
+            policy_admission,
+        )
+    }
+
+    pub(crate) fn execute_ctx_read_rooted_snapshot(
+        &self,
+        rooted_path: &str,
+        raw_input: &str,
+        policy_admission: EnginePolicyAdmissionV1,
+    ) -> Result<(EngineInvocationV1, EngineObservationV1), String> {
+        let root = self.adapter.root();
+        let rooted_path = Path::new(rooted_path);
+        if !rooted_path.is_absolute() || !rooted_path.starts_with(root) {
+            return Err("ctx_read Engine source is outside its rooted boundary".to_owned());
+        }
+        let (request, input) = NativeContextEngineRequest::ctx_read_snapshot_canonical(
+            rooted_path,
             raw_input,
             30_000,
             policy_admission,
@@ -213,14 +277,8 @@ impl NativeContextEngine {
         if policy_admission.decision != EnginePolicyDecisionV1::Rejected {
             return Err("ctx_read rejection requires a rejected policy admission".to_owned());
         }
-        let rooted_path = crate::core::pathjail::jail_path(Path::new(path), self.adapter.root())
-            .map_err(|_| "ctx_read Engine source is outside its rooted boundary".to_owned())?;
-        let (request, _) = NativeContextEngineRequest::ctx_read_snapshot(
-            &rooted_path.to_string_lossy(),
-            "",
-            30_000,
-            policy_admission,
-        )?;
+        let request =
+            NativeContextEngineRequest::ctx_read_rejection(path, 30_000, policy_admission)?;
         self.execute(request)
     }
 
@@ -511,38 +569,7 @@ fn persist_content(
     extension: &str,
     bytes: &[u8],
 ) -> Result<(), String> {
-    let data_dir = data_dir::lean_ctx_data_dir()?;
-    let directory = data_dir.join(directory);
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("create Engine artifact directory: {error}"))?;
-    data_dir::ensure_dir_permissions(&directory);
-    let path = directory.join(format!("{digest}.{extension}"));
-    if path.exists() {
-        verify_existing_artifact(&path, digest)?;
-        if let Some(permissions) = artifact_permissions() {
-            std::fs::set_permissions(&path, permissions)
-                .map_err(|error| format!("harden Engine artifact permissions: {error}"))?;
-        }
-        return Ok(());
-    }
-
-    let permissions = artifact_permissions();
-    atomic_fs::write_bytes_with_fallback(&path, bytes, permissions.as_ref())?;
-    verify_existing_artifact(&path, digest)
-}
-
-fn verify_existing_artifact(path: &Path, digest: &str) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("read Engine artifact metadata: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("Engine artifact path must be a regular non-symlink file".to_owned());
-    }
-    let bytes = std::fs::read(path).map_err(|error| format!("read Engine artifact: {error}"))?;
-    let actual = sha256_digest(&bytes)?;
-    if actual.hex() != digest {
-        return Err("Engine artifact digest does not match its content-addressed path".to_owned());
-    }
-    Ok(())
+    artifact_store::persist_content(directory, digest, extension, bytes).map(|_| ())
 }
 
 fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest, String> {
@@ -551,18 +578,6 @@ fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest, String> {
         crate::core::agent_identity::hex_encode(&Sha256::digest(bytes))
     ))
     .map_err(|error| error.to_string())
-}
-
-fn artifact_permissions() -> Option<std::fs::Permissions> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        Some(std::fs::Permissions::from_mode(0o600))
-    }
-    #[cfg(not(unix))]
-    {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -802,7 +817,13 @@ mod tests {
         let root = tempfile::tempdir().expect("native adapter root");
         let source = root.path().join("fixture.md");
         std::fs::write(&source, "deadline fixture").expect("fixture write");
-        let engine = NativeContextEngine::with_root(root.path());
+        let control = std::sync::Arc::new(
+            crate::core::ocla::adapters::native_context::MaterializedTestControl::new(),
+        );
+        let engine = NativeContextEngine {
+            adapter: NativeContextAdapter::with_root(root.path())
+                .with_materialized_test_control(control.clone()),
+        };
         let admission = EnginePolicyAdmissionV1 {
             policy_ref: ProtocolReference::new("policy:ctx-read-context-gate-v1:fixture")
                 .expect("policy ref"),
@@ -811,19 +832,29 @@ mod tests {
         let (request, input) = NativeContextEngineRequest::ctx_read_snapshot(
             &source.to_string_lossy(),
             "deadline fixture",
-            0,
+            25,
             admission,
         )
         .expect("bounded request");
 
+        let started = std::time::Instant::now();
         let (_, observation) = engine
             .execute_materialized(request, &input)
             .expect("deadline failure receipt");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert_eq!(observation.status, EngineObservationStatusV1::Failed);
         assert_eq!(
-            observation.failure.expect("deadline failure").code,
+            observation.failure.as_ref().expect("deadline failure").code,
             EngineFailureCodeV1::ResourceLimit
         );
+        assert!(observation.receipt_link.is_some());
+        let output_dir = data_dir::lean_ctx_data_dir()
+            .expect("isolated data dir")
+            .join(OUTPUT_DIRECTORY);
+        assert!(!output_dir.exists());
+        control.release.wait();
+        control.completed.wait();
+        assert!(!output_dir.exists());
     }
 
     #[cfg(unix)]
@@ -879,7 +910,32 @@ mod tests {
         assert!(
             persist_output(digest.hex(), bytes)
                 .unwrap_err()
-                .contains("regular non-symlink")
+                .contains("engine_artifact_leaf_untrusted")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_engine_artifact_directory_is_rejected_before_any_write() {
+        use std::os::unix::fs::symlink;
+
+        let _data_dir = data_dir::isolated_data_dir();
+        let data_dir = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let engine_dir = data_dir.join("engine-interface/v1");
+        std::fs::create_dir_all(&engine_dir).expect("Engine directory");
+        let outside = tempfile::tempdir().expect("outside directory");
+        symlink(outside.path(), engine_dir.join("outputs")).expect("artifact directory symlink");
+        let bytes = b"must remain inside the Engine data root";
+        let digest = digest(bytes);
+
+        let error = persist_output(digest.hex(), bytes).expect_err("symlinked directory rejected");
+
+        assert!(error.contains("engine_artifact_boundary_rejected"));
+        assert_eq!(
+            std::fs::read_dir(outside.path())
+                .expect("outside directory")
+                .count(),
+            0
         );
     }
 

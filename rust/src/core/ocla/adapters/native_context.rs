@@ -39,6 +39,24 @@ fn manifest() -> &'static CapabilityManifestV1 {
 /// Local adapter that combines existing file reads and compression primitives.
 pub struct NativeContextAdapter {
     root: PathBuf,
+    #[cfg(test)]
+    materialized_test_control: Option<std::sync::Arc<MaterializedTestControl>>,
+}
+
+#[cfg(test)]
+pub(crate) struct MaterializedTestControl {
+    pub(crate) release: std::sync::Barrier,
+    pub(crate) completed: std::sync::Barrier,
+}
+
+#[cfg(test)]
+impl MaterializedTestControl {
+    pub(crate) fn new() -> Self {
+        Self {
+            release: std::sync::Barrier::new(2),
+            completed: std::sync::Barrier::new(2),
+        }
+    }
 }
 
 /// Payload-free result used by the internal Engine proof path.
@@ -88,6 +106,8 @@ impl NativeContextAdapter {
     pub fn new() -> Self {
         Self {
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            #[cfg(test)]
+            materialized_test_control: None,
         }
     }
 
@@ -95,7 +115,18 @@ impl NativeContextAdapter {
     pub fn with_root(root: impl AsRef<Path>) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
+            #[cfg(test)]
+            materialized_test_control: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_materialized_test_control(
+        mut self,
+        control: std::sync::Arc<MaterializedTestControl>,
+    ) -> Self {
+        self.materialized_test_control = Some(control);
+        self
     }
 
     #[must_use]
@@ -270,11 +301,25 @@ impl NativeContextAdapter {
         }
         let timeout = std::time::Duration::from_millis(invocation.timeout_ms);
         let adapter = Self::with_root(&self.root);
+        #[cfg(test)]
+        let adapter = {
+            let mut adapter = adapter;
+            adapter.materialized_test_control = self.materialized_test_control.clone();
+            adapter
+        };
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("native-context-engine".to_owned())
             .spawn(move || {
+                #[cfg(test)]
+                if let Some(control) = adapter.materialized_test_control.as_ref() {
+                    control.release.wait();
+                }
                 let result = adapter.invoke_materialized_with_output_identity(&invocation, &input);
+                #[cfg(test)]
+                if let Some(control) = adapter.materialized_test_control.as_ref() {
+                    control.completed.wait();
+                }
                 let _ = tx.send(result);
             })
             .map_err(|error| {
