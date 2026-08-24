@@ -496,7 +496,7 @@ impl InvocationAdmissionTrustStoreV1 {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::engine::general_purpose::STANDARD;
     use ed25519_dalek::{Signer, SigningKey};
     use lean_ctx_protocol::{
         CapabilityId, EngineInvocationIdV1, InvocationContextBindingV1, ProtocolReference,

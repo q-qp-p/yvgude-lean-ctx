@@ -589,6 +589,9 @@ mod unix {
             probe.ok_or_else(|| ARTIFACT_PUBLISH_UNSUPPORTED.to_owned())?;
 
         #[cfg(target_os = "linux")]
+        // SAFETY: directory_fd is a live descriptor for the held final directory,
+        // and probe_name is a NUL-terminated name valid for this call. Both
+        // directory operands refer to that held descriptor.
         let result = unsafe {
             libc::renameat2(
                 directory_fd,
@@ -681,6 +684,9 @@ mod unix {
         }
 
         #[cfg(target_os = "linux")]
+        // SAFETY: directory_fd is a live descriptor for the held final directory,
+        // and both names are NUL-terminated and valid for this call. The
+        // rename is descriptor-relative and RENAME_NOREPLACE preserves collisions.
         let published = unsafe {
             libc::renameat2(
                 directory_fd,
