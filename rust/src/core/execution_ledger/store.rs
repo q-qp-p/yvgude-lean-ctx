@@ -2,27 +2,46 @@
 //! The append journal proves local crash continuity; signed canonical receipts,
 //! not this unkeyed sidecar, provide adversarial authenticity.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+#[cfg(any(unix, test))]
+use std::fs::File;
+#[cfg(test)]
+use std::fs::OpenOptions;
+#[cfg(any(unix, test))]
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
 use fs2::FileExt;
+#[cfg(any(unix, test))]
 use serde::de::Error as _;
+#[cfg(any(unix, test))]
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
+#[cfg(any(unix, test))]
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, test))]
 use serde_json::{Number, Value};
+#[cfg(any(unix, test))]
 use sha2::{Digest, Sha256};
 
 use super::event::ExecutionEvent;
+#[cfg(any(unix, test))]
 use super::verify::{GENESIS, hash_event, verify_events};
 use super::{ExecutionLedgerError, Result};
 
+#[cfg(any(unix, test))]
 const LEDGER_RECORD_SCHEMA: &str = "lean-ctx.execution-ledger-record.v1";
+#[cfg(any(unix, test))]
 const LEDGER_RECORD_KIND: &str = "execution_event";
+#[cfg(any(unix, test))]
 const APPEND_JOURNAL_SCHEMA: &str = "lean-ctx.execution-ledger-append-journal.v1";
+#[cfg(any(unix, test))]
 const MAX_LEDGER_RECORD_BYTES: usize = 1024 * 1024;
+#[cfg(any(unix, test))]
 const MAX_APPEND_JOURNAL_BYTES: usize = MAX_LEDGER_RECORD_BYTES * 2 + 1024;
 
+#[cfg(any(unix, test))]
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LedgerRecordV1 {
@@ -32,6 +51,7 @@ struct LedgerRecordV1 {
     entry_hash: String,
 }
 
+#[cfg(any(unix, test))]
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AppendJournalV1 {
@@ -42,32 +62,197 @@ struct AppendJournalV1 {
     record_sha256: String,
 }
 
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectoryIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+#[cfg(not(unix))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectoryIdentity;
+
 /// Default execution-ledger location: `<data_dir>/execution/ledger.jsonl`.
 pub fn default_path() -> Option<PathBuf> {
     let data_dir = crate::core::data_dir::lean_ctx_data_dir().ok()?;
-    let directory = data_dir.join("execution");
-    fs::create_dir_all(&directory).ok()?;
-    Some(directory.join("ledger.jsonl"))
+    Some(data_dir.join("execution").join("ledger.jsonl"))
 }
 
 /// A process-independent handle to an execution ledger file.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct ExecutionLedgerStore {
     path: PathBuf,
+    trusted_root: PathBuf,
+    relative_path: PathBuf,
+    trusted_root_identity: Option<DirectoryIdentity>,
+    trusted_parent_identity: Arc<Mutex<Option<DirectoryIdentity>>>,
 }
+
+impl Clone for ExecutionLedgerStore {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            trusted_root: self.trusted_root.clone(),
+            relative_path: self.relative_path.clone(),
+            trusted_root_identity: self.trusted_root_identity,
+            trusted_parent_identity: Arc::clone(&self.trusted_parent_identity),
+        }
+    }
+}
+
+impl PartialEq for ExecutionLedgerStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.trusted_root == other.trusted_root
+            && self.relative_path == other.relative_path
+            && self.trusted_root_identity == other.trusted_root_identity
+    }
+}
+
+impl Eq for ExecutionLedgerStore {}
 
 impl ExecutionLedgerStore {
     /// Creates a store backed by `path`.
+    ///
+    /// This compatibility constructor treats the lexical parent of `path` as
+    /// the trusted root.  Every operation still opens each component from a
+    /// descriptor with no-follow semantics; callers that receive an external
+    /// path should prefer [`Self::new_verified`], which makes the root and
+    /// relative path explicit and rejects traversal components up front.
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        let requested = path.into();
+        let path = if requested.is_absolute() {
+            requested
+        } else {
+            std::env::current_dir()
+                .map(|directory| directory.join(&requested))
+                .unwrap_or(requested)
+        };
+        let trusted_root = path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let relative_path = path
+            .file_name()
+            .map_or_else(|| PathBuf::from(""), PathBuf::from);
+        let trusted_root_identity = capture_directory_identity(&trusted_root).ok();
+        Self {
+            path,
+            trusted_root,
+            relative_path,
+            trusted_root_identity,
+            trusted_parent_identity: Arc::new(Mutex::new(trusted_root_identity)),
+        }
+    }
+
+    /// Creates a store rooted at `trusted_root` and addressed by `relative`.
+    ///
+    /// The root is never traversed through a symlink and `relative` may not be
+    /// absolute or contain `..`; opened descriptors are checked again after
+    /// acquisition so a concurrent rename cannot redirect a read.
+    pub fn new_verified(
+        trusted_root: impl Into<PathBuf>,
+        relative: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        let trusted_root = trusted_root.into();
+        let relative_path = relative.into();
+        validate_root_path(&trusted_root)?;
+        validate_relative_path(&relative_path)?;
+        if !trusted_root.is_absolute() {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger trusted root must be absolute".to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let trusted_root = normalize_absolute_root_path(&trusted_root)?;
+            let trusted_root_directory = unix_open_root(&trusted_root)?;
+            let trusted_root_identity = directory_identity(&trusted_root_directory)?;
+            let trusted_parent_identity =
+                capture_relative_parent_identity(&trusted_root, &relative_path)?;
+            Ok(Self {
+                path: trusted_root.join(&relative_path),
+                trusted_root,
+                relative_path,
+                trusted_root_identity: Some(trusted_root_identity),
+                trusted_parent_identity: Arc::new(Mutex::new(trusted_parent_identity)),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (trusted_root, relative_path);
+            Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger descriptor-relative access is unsupported on this platform"
+                    .to_owned(),
+            ))
+        }
     }
 
     /// Creates a store at the configured default location.
     pub fn from_default() -> Result<Self> {
-        default_path().map(Self::new).ok_or_else(|| {
+        let data_dir = crate::core::data_dir::lean_ctx_data_dir().map_err(|_| {
             ExecutionLedgerError::InvalidRecord("data directory unavailable".to_owned())
+        })?;
+        ensure_default_data_root(&data_dir)?;
+        Self::new_verified(data_dir, Path::new("execution/ledger.jsonl"))
+    }
+
+    #[cfg(unix)]
+    fn open_operation(&self, create_parent: bool) -> Result<Operation> {
+        let expected_parent = *self.trusted_parent_identity.lock().map_err(|_| {
+            ExecutionLedgerError::InvalidRecord(
+                "execution ledger identity lock poisoned".to_owned(),
+            )
+        })?;
+        unix_open_operation(
+            &self.trusted_root,
+            &self.relative_path,
+            self.trusted_root_identity,
+            expected_parent,
+            create_parent,
+        )
+        .and_then(|operation| {
+            let identity = directory_identity(&operation.parent)?;
+            let mut expected = self.trusted_parent_identity.lock().map_err(|_| {
+                ExecutionLedgerError::InvalidRecord(
+                    "execution ledger identity lock poisoned".to_owned(),
+                )
+            })?;
+            if let Some(previous) = *expected {
+                if previous != identity {
+                    return Err(ExecutionLedgerError::InvalidRecord(
+                        "execution ledger parent changed while opening".to_owned(),
+                    ));
+                }
+            } else {
+                *expected = Some(identity);
+            }
+            Ok(operation)
         })
+    }
+
+    #[cfg(unix)]
+    fn open_operation_for_read(&self) -> Result<Option<Operation>> {
+        if self.trusted_root_identity.is_some() {
+            // Validate the constructor-captured identity before attempting any
+            // descriptor acquisition; a replaced root is never treated as empty.
+            validate_directory_identity(&self.trusted_root, &unix_open_root(&self.trusted_root)?)?;
+        }
+        let parent_pinned = *self.trusted_parent_identity.lock().map_err(|_| {
+            ExecutionLedgerError::InvalidRecord(
+                "execution ledger identity lock poisoned".to_owned(),
+            )
+        })?;
+        match self.open_operation(false) {
+            Ok(operation) => Ok(Some(operation)),
+            Err(ExecutionLedgerError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound && parent_pinned.is_none() =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Returns the backing path.
@@ -82,138 +267,233 @@ impl ExecutionLedgerStore {
     }
 
     /// Appends one event and reports whether durable state changed.
-    pub(crate) fn append_if_new(&self, mut event: ExecutionEvent) -> Result<bool> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
+    pub(crate) fn append_if_new(&self, event: ExecutionEvent) -> Result<bool> {
+        #[cfg(not(unix))]
+        {
+            let _ = event;
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger descriptor-relative access is unsupported on this platform"
+                    .to_owned(),
+            ));
         }
+        #[cfg(unix)]
+        {
+            let mut event = event;
+            let operation = self.open_operation(true)?;
+            let mut file = open_ledger_for_append_operation(&operation)?;
+            file.lock_exclusive()?;
 
-        let mut file = open_ledger_for_append(&self.path)?;
-        file.lock_exclusive()?;
+            let result = (|| {
+                validate_operation_file(
+                    &operation,
+                    &self.relative_path,
+                    &file,
+                    "execution ledger",
+                    true,
+                )?;
+                recover_pending_append_operation(&mut file, &operation)?;
+                let events = read_events_from_file(&file)?;
+                if !verify_events(&events)? {
+                    return Err(ExecutionLedgerError::InvalidChain(
+                        "cannot append to an invalid chain".to_owned(),
+                    ));
+                }
+                if let Some(identity) = event.idempotency_key()
+                    && let Some(existing) = events
+                        .iter()
+                        .find(|existing| existing.idempotency_key() == Some(identity))
+                {
+                    return if existing.payload_json()? == event.payload_json()? {
+                        Ok(false)
+                    } else {
+                        Err(ExecutionLedgerError::InvalidRecord(
+                            "event identity already exists with different payload".to_owned(),
+                        ))
+                    };
+                }
 
-        let result = (|| {
-            recover_pending_append(&mut file, &self.path)?;
-            let events = read_events_from_file(&file)?;
-            if !verify_events(&events)? {
-                return Err(ExecutionLedgerError::InvalidChain(
-                    "cannot append to an invalid chain".to_owned(),
-                ));
-            }
-            if let Some(identity) = event.idempotency_key()
-                && let Some(existing) = events
-                    .iter()
-                    .find(|existing| existing.idempotency_key() == Some(identity))
-            {
-                return if existing.payload_json()? == event.payload_json()? {
-                    Ok(false)
-                } else {
-                    Err(ExecutionLedgerError::InvalidRecord(
-                        "event identity already exists with different payload".to_owned(),
-                    ))
+                let previous_hash = match events.last() {
+                    Some(previous) => hash_event(previous)?,
+                    None => GENESIS.to_owned(),
                 };
-            }
-
-            let previous_hash = match events.last() {
-                Some(previous) => hash_event(previous)?,
-                None => GENESIS.to_owned(),
-            };
-            let sequence_number = events
-                .last()
-                .map_or(1, ExecutionEvent::sequence_number)
-                .checked_add(u64::from(!events.is_empty()))
-                .ok_or_else(|| {
-                    ExecutionLedgerError::InvalidRecord(
-                        "execution ledger sequence number overflow".to_owned(),
-                    )
+                let sequence_number = events
+                    .last()
+                    .map_or(1, ExecutionEvent::sequence_number)
+                    .checked_add(u64::from(!events.is_empty()))
+                    .ok_or_else(|| {
+                        ExecutionLedgerError::InvalidRecord(
+                            "execution ledger sequence number overflow".to_owned(),
+                        )
+                    })?;
+                event.set_chain_fields(sequence_number, previous_hash);
+                let entry_hash = hash_event(&event)?;
+                event.set_entry_hash(entry_hash.clone());
+                let mut candidate = events;
+                candidate.push(event);
+                if !verify_events(&candidate)? {
+                    return Err(ExecutionLedgerError::InvalidChain(
+                        "event violates execution lifecycle".to_owned(),
+                    ));
+                }
+                let event = candidate.pop().expect("candidate contains appended event");
+                let line = serde_json::to_string(&LedgerRecordV1 {
+                    schema: LEDGER_RECORD_SCHEMA.to_owned(),
+                    kind: LEDGER_RECORD_KIND.to_owned(),
+                    event,
+                    entry_hash,
                 })?;
-            event.set_chain_fields(sequence_number, previous_hash);
-            let entry_hash = hash_event(&event)?;
-            event.set_entry_hash(entry_hash.clone());
-            let mut candidate = events;
-            candidate.push(event);
-            if !verify_events(&candidate)? {
-                return Err(ExecutionLedgerError::InvalidChain(
-                    "event violates execution lifecycle".to_owned(),
-                ));
-            }
-            let event = candidate.pop().expect("candidate contains appended event");
-            let line = serde_json::to_string(&LedgerRecordV1 {
-                schema: LEDGER_RECORD_SCHEMA.to_owned(),
-                kind: LEDGER_RECORD_KIND.to_owned(),
-                event,
-                entry_hash,
-            })?;
-            let (previous_len, previous_sha256) = file_len_and_sha256(&file)?;
-            write_append_journal(&self.path, previous_len, &previous_sha256, &line)?;
-            file.seek(SeekFrom::End(0))?;
-            writeln!(file, "{line}")?;
-            file.flush()?;
-            file.sync_data()?;
-            sync_parent_directory(&self.path)?;
-            clear_append_journal(&self.path)?;
-            Ok(true)
-        })();
+                let (previous_len, previous_sha256) = file_len_and_sha256(&file)?;
+                #[cfg(unix)]
+                write_append_journal_operation(&operation, previous_len, &previous_sha256, &line)?;
+                file.seek(SeekFrom::End(0))?;
+                writeln!(file, "{line}")?;
+                file.flush()?;
+                file.sync_data()?;
+                #[cfg(unix)]
+                operation.sync_parent()?;
+                #[cfg(unix)]
+                validate_operation_file(
+                    &operation,
+                    &self.relative_path,
+                    &file,
+                    "execution ledger",
+                    true,
+                )?;
+                #[cfg(unix)]
+                clear_append_journal_operation(&operation)?;
+                #[cfg(unix)]
+                validate_operation_file(
+                    &operation,
+                    &self.relative_path,
+                    &file,
+                    "execution ledger",
+                    true,
+                )?;
+                Ok(true)
+            })();
 
-        let _ = FileExt::unlock(&file);
-        result
+            let _ = FileExt::unlock(&file);
+            result
+        }
     }
 
     /// Verifies the complete on-disk chain under a shared file lock.
     pub fn verify_chain(&self) -> Result<bool> {
-        ensure_no_pending_append(&self.path)?;
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-            Err(error) => return Err(error.into()),
-        };
-        file.lock_shared()?;
-        let result = match ensure_no_pending_append(&self.path)
-            .and_then(|()| read_events_from_file(&file))
+        #[cfg(not(unix))]
         {
-            Ok(events) => verify_events(&events),
-            Err(ExecutionLedgerError::InvalidChain(_)) => Ok(false),
-            Err(error) => Err(error),
-        };
-        let _ = FileExt::unlock(&file);
-        result
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger descriptor-relative access is unsupported on this platform"
+                    .to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let Some(operation) = self.open_operation_for_read()? else {
+                return Ok(true);
+            };
+            ensure_no_pending_append_operation(&operation)?;
+            let Some(file) = open_regular_nofollow_operation(&operation, &self.relative_path)?
+            else {
+                return Ok(true);
+            };
+            file.lock_shared()?;
+            let result = match ensure_no_pending_append_operation(&operation)
+                .and_then(|()| read_events_from_file(&file))
+            {
+                Ok(events) => validate_operation_file(
+                    &operation,
+                    &self.relative_path,
+                    &file,
+                    "execution ledger",
+                    true,
+                )
+                .and_then(|()| verify_events(&events)),
+                Err(ExecutionLedgerError::InvalidChain(_)) => Ok(false),
+                Err(error) => Err(error),
+            };
+            let _ = FileExt::unlock(&file);
+            result
+        }
     }
 
     /// Loads all well-formed events in file order.
     pub fn load(&self) -> Result<Vec<ExecutionEvent>> {
-        ensure_no_pending_append(&self.path)?;
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error.into()),
-        };
-        file.lock_shared()?;
-        let result =
-            ensure_no_pending_append(&self.path).and_then(|()| read_events_from_file(&file));
-        let _ = FileExt::unlock(&file);
-        result
+        #[cfg(not(unix))]
+        {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger descriptor-relative access is unsupported on this platform"
+                    .to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let Some(operation) = self.open_operation_for_read()? else {
+                return Ok(Vec::new());
+            };
+            ensure_no_pending_append_operation(&operation)?;
+            let Some(file) = open_regular_nofollow_operation(&operation, &self.relative_path)?
+            else {
+                return Ok(Vec::new());
+            };
+            file.lock_shared()?;
+            let result = ensure_no_pending_append_operation(&operation)
+                .and_then(|()| read_events_from_file(&file))
+                .and_then(|events| {
+                    validate_operation_file(
+                        &operation,
+                        &self.relative_path,
+                        &file,
+                        "execution ledger",
+                        true,
+                    )?;
+                    Ok(events)
+                });
+            let _ = FileExt::unlock(&file);
+            result
+        }
     }
 
     /// Loads one snapshot only when its record digests, chain, and lifecycle verify.
     pub fn load_verified(&self) -> Result<Vec<ExecutionEvent>> {
-        ensure_no_pending_append(&self.path)?;
-        let file = match File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error.into()),
-        };
-        file.lock_shared()?;
-        let result = ensure_no_pending_append(&self.path)
-            .and_then(|()| read_events_from_file(&file))
-            .and_then(|events| {
-                if verify_events(&events)? {
-                    Ok(events)
-                } else {
-                    Err(ExecutionLedgerError::InvalidChain(
-                        "execution ledger chain or lifecycle is invalid".to_owned(),
-                    ))
-                }
-            });
-        let _ = FileExt::unlock(&file);
-        result
+        #[cfg(not(unix))]
+        {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger descriptor-relative access is unsupported on this platform"
+                    .to_owned(),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let Some(operation) = self.open_operation_for_read()? else {
+                return Ok(Vec::new());
+            };
+            ensure_no_pending_append_operation(&operation)?;
+            let Some(file) = open_regular_nofollow_operation(&operation, &self.relative_path)?
+            else {
+                return Ok(Vec::new());
+            };
+            file.lock_shared()?;
+            let result = ensure_no_pending_append_operation(&operation)
+                .and_then(|()| read_events_from_file(&file))
+                .and_then(|events| {
+                    validate_operation_file(
+                        &operation,
+                        &self.relative_path,
+                        &file,
+                        "execution ledger",
+                        true,
+                    )?;
+                    if verify_events(&events)? {
+                        Ok(events)
+                    } else {
+                        Err(ExecutionLedgerError::InvalidChain(
+                            "execution ledger chain or lifecycle is invalid".to_owned(),
+                        ))
+                    }
+                });
+            let _ = FileExt::unlock(&file);
+            result
+        }
     }
 
     /// Returns verified events associated with `task_id`, propagating unavailable state.
@@ -246,59 +526,698 @@ impl ExecutionLedgerStore {
     }
 }
 
-fn open_ledger_for_append(path: &Path) -> Result<File> {
-    loop {
-        let mut existing = OpenOptions::new();
-        existing.read(true).append(true);
-        apply_nofollow(&mut existing);
-        match existing.open(path) {
-            Ok(file) if file.metadata()?.is_file() => return Ok(file),
-            Ok(_) => {
+fn validate_root_path(root: &Path) -> Result<()> {
+    if root.as_os_str().is_empty()
+        || root
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn normalize_absolute_root_path(root: &Path) -> Result<PathBuf> {
+    if !root.is_absolute() {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root must be absolute".to_owned(),
+        ));
+    }
+    let mut components = root.components();
+    let mut normalized = PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
+    let first = components.next();
+    let first_name = first.and_then(|component| match component {
+        std::path::Component::RootDir => components.next(),
+        _ => None,
+    });
+    if let Some(std::path::Component::Normal(name)) = first_name
+        && (name == "var" || name == "tmp")
+    {
+        let alias = Path::new("/").join(name);
+        if let Ok(target) = fs::read_link(alias) {
+            if target.is_absolute() {
+                normalized = target;
+            } else {
+                normalized.push(target);
+            }
+        } else {
+            normalized.push(name);
+        }
+    } else if let Some(std::path::Component::Normal(name)) = first_name {
+        normalized.push(name);
+    }
+    for component in components {
+        match component {
+            std::path::Component::Normal(name) => normalized.push(name),
+            std::path::Component::CurDir | std::path::Component::RootDir => {}
+            std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
                 return Err(ExecutionLedgerError::InvalidRecord(
-                    "execution ledger path is not a regular file".to_owned(),
+                    "execution ledger trusted root is invalid".to_owned(),
                 ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
         }
+    }
+    Ok(normalized)
+}
 
-        ensure_no_pending_append(path)?;
-        let mut create = OpenOptions::new();
-        create.read(true).append(true).create_new(true);
-        apply_nofollow(&mut create);
-        match create.open(path) {
-            Ok(file) => {
-                sync_parent_directory(path)?;
-                return Ok(file);
+fn validate_relative_path(relative: &Path) -> Result<()> {
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+        || !relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger relative path is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(unix, test))]
+fn relative_sibling(relative: &Path, suffix: &str) -> Result<PathBuf> {
+    let file_name = relative.file_name().ok_or_else(|| {
+        ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
+    })?;
+    let mut name = file_name.to_os_string();
+    name.push(suffix);
+    let mut sibling = relative.to_path_buf();
+    sibling.set_file_name(name);
+    validate_relative_path(&sibling)?;
+    Ok(sibling)
+}
+
+#[cfg(unix)]
+struct Operation {
+    root: File,
+    parent: File,
+    root_path: PathBuf,
+    parent_path: PathBuf,
+    parent_relative: PathBuf,
+    relative: PathBuf,
+}
+
+#[cfg(unix)]
+impl Operation {
+    fn leaf_name(&self, relative: &Path) -> Result<std::ffi::CString> {
+        if relative.parent().unwrap_or_else(|| Path::new("")) != self.parent_relative {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger operation escaped its parent".to_owned(),
+            ));
+        }
+        let name = relative.file_name().ok_or_else(|| {
+            ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
+        })?;
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::CString::new(name.as_bytes()).map_err(|_| {
+            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
+        })
+    }
+
+    fn validate_paths(&self) -> Result<()> {
+        validate_directory_identity(&self.root_path, &self.root)?;
+        validate_directory_identity(&self.parent_path, &self.parent)?;
+        Ok(())
+    }
+
+    fn sync_parent(&self) -> Result<()> {
+        self.parent.sync_all()?;
+        self.validate_paths()
+    }
+}
+
+#[cfg(unix)]
+fn directory_identity(file: &File) -> Result<DirectoryIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    if !metadata.is_dir() {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root is not a directory".to_owned(),
+        ));
+    }
+    Ok(DirectoryIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+fn capture_directory_identity(path: &Path) -> Result<DirectoryIdentity> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root is not a directory".to_owned(),
+        ));
+    }
+    Ok(DirectoryIdentity)
+}
+
+#[cfg(unix)]
+fn capture_directory_identity(path: &Path) -> Result<DirectoryIdentity> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root is not a directory".to_owned(),
+        ));
+    }
+    use std::os::unix::fs::MetadataExt;
+    Ok(DirectoryIdentity {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+    })
+}
+
+#[cfg(unix)]
+fn validate_directory_identity(path: &Path, directory: &File) -> Result<()> {
+    let expected = directory_identity(directory)?;
+    let actual = capture_directory_identity(path)?;
+    if actual != expected {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted directory changed while opening".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn capture_relative_parent_identity(
+    root: &Path,
+    relative: &Path,
+) -> Result<Option<DirectoryIdentity>> {
+    let root_directory = unix_open_root(root)?;
+    match unix_open_parent_from_root(&root_directory, relative, false) {
+        Ok(parent) => Ok(Some(directory_identity(&parent)?)),
+        Err(ExecutionLedgerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn ensure_default_data_root(path: &Path) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger data root must be absolute".to_owned(),
+        ));
+    }
+    let (absolute, components) = unix_trusted_root_components(path)?;
+    let mut directory = unix_open_start(absolute)?;
+    for component in components {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+        let name = CString::new(component.as_bytes()).map_err(|_| {
+            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
+        })?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        // SAFETY: directory is live and name is NUL-terminated.
+        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.into());
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
+            // SAFETY: directory is live and name is NUL-terminated.
+            let result = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
+            if result < 0 {
+                let mkdir_error = std::io::Error::last_os_error();
+                if mkdir_error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(mkdir_error.into());
+                }
+            } else {
+                directory.sync_all()?;
+            }
+            // SAFETY: directory is live and name is NUL-terminated.
+            fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        }
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: fd is a new descriptor owned by the returned File.
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    directory.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_default_data_root(path: &Path) -> Result<()> {
+    let _ = path;
+    Err(ExecutionLedgerError::InvalidRecord(
+        "execution ledger descriptor-relative access is unsupported on this platform".to_owned(),
+    ))
+}
+
+#[cfg(test)]
+fn path_parts(path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let root = path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let relative = path.file_name().map(PathBuf::from).ok_or_else(|| {
+        ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
+    })?;
+    validate_root_path(&root)?;
+    validate_relative_path(&relative)?;
+    Ok((root, relative))
+}
+
+#[cfg(unix)]
+fn unix_open_start(absolute: bool) -> Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::FromRawFd;
+
+    let start = if absolute {
+        b"/".as_slice()
+    } else {
+        b".".as_slice()
+    };
+    let start = CString::new(start).expect("static path has no NUL");
+    // SAFETY: start is a NUL-terminated static path.
+    let fd = unsafe {
+        libc::open(
+            start.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd is a new descriptor owned by the returned File.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn unix_open_root(root: &Path) -> Result<File> {
+    let (absolute, components) = unix_trusted_root_components(root)?;
+    let mut directory = unix_open_start(absolute)?;
+    for component in components {
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+        let name = CString::new(component.as_bytes()).map_err(|_| {
+            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
+        })?;
+        // SAFETY: directory is live and name is NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: fd is a new descriptor owned by the returned File.
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn unix_open_parent_from_root(
+    root: &File,
+    relative: &Path,
+    create_directories: bool,
+) -> Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let components = unix_normal_components(relative)?;
+    let directory_components = components
+        .get(..components.len().saturating_sub(1))
+        .unwrap_or_default();
+    let mut directory = root.try_clone()?;
+    for component in directory_components {
+        let name = CString::new(component.as_bytes()).map_err(|_| {
+            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
+        })?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+        // SAFETY: directory is live and name is NUL-terminated.
+        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 && create_directories {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                // SAFETY: directory is live and name is NUL-terminated.
+                let result = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
+                if result < 0 {
+                    let mkdir_error = std::io::Error::last_os_error();
+                    if mkdir_error.kind() != std::io::ErrorKind::AlreadyExists {
+                        return Err(mkdir_error.into());
+                    }
+                } else {
+                    directory.sync_all()?;
+                }
+                // SAFETY: directory is live and name is NUL-terminated.
+                fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+            }
+        }
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: fd is a new descriptor owned by the returned File.
+        directory = unsafe { File::from_raw_fd(fd) };
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn unix_open_operation(
+    root_path: &Path,
+    relative: &Path,
+    expected_root: Option<DirectoryIdentity>,
+    expected_parent: Option<DirectoryIdentity>,
+    create_parent: bool,
+) -> Result<Operation> {
+    validate_root_path(root_path)?;
+    validate_relative_path(relative)?;
+    let root = unix_open_root(root_path)?;
+    let root_identity = directory_identity(&root)?;
+    if expected_root.is_some_and(|expected| expected != root_identity) {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger trusted root changed while opening".to_owned(),
+        ));
+    }
+    let parent = unix_open_parent_from_root(&root, relative, create_parent)?;
+    let parent_identity = directory_identity(&parent)?;
+    if expected_parent.is_some_and(|expected| expected != parent_identity) {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger parent changed while opening".to_owned(),
+        ));
+    }
+    let parent_relative = relative
+        .parent()
+        .map_or_else(PathBuf::new, Path::to_path_buf);
+    let operation = Operation {
+        root,
+        parent,
+        root_path: root_path.to_path_buf(),
+        parent_path: root_path.join(&parent_relative),
+        parent_relative,
+        relative: relative.to_path_buf(),
+    };
+    operation.validate_paths()?;
+    Ok(operation)
+}
+
+#[cfg(unix)]
+fn open_regular_nofollow_operation(operation: &Operation, relative: &Path) -> Result<Option<File>> {
+    let Some(file) = open_nofollow_operation(operation, relative)? else {
+        return Ok(None);
+    };
+    validate_operation_file(operation, relative, &file, "execution ledger", true)?;
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn open_nofollow_operation(operation: &Operation, relative: &Path) -> Result<Option<File>> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let name = operation.leaf_name(relative)?;
+    // SAFETY: parent is live and name is NUL-terminated.
+    let fd = unsafe {
+        libc::openat(
+            operation.parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(error.into());
+    }
+    // SAFETY: fd is a new descriptor owned by the returned File.
+    let file = unsafe { File::from_raw_fd(fd) };
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn open_ledger_for_append_operation(operation: &Operation) -> Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    let name = operation.leaf_name(&operation.relative)?;
+    loop {
+        // SAFETY: parent is live and name is NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                operation.parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_APPEND
+                    | libc::O_CLOEXEC
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK,
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: fd is a new descriptor owned by the returned File.
+            let file = unsafe { File::from_raw_fd(fd) };
+            validate_operation_file(
+                operation,
+                &operation.relative,
+                &file,
+                "execution ledger",
+                true,
+            )?;
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error.into());
+        }
+        ensure_no_pending_append_operation(operation)?;
+        // SAFETY: parent is live and name is NUL-terminated.
+        let fd = unsafe {
+            libc::openat(
+                operation.parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_APPEND
+                    | libc::O_CLOEXEC
+                    | libc::O_NOFOLLOW
+                    | libc::O_NONBLOCK
+                    | libc::O_CREAT
+                    | libc::O_EXCL,
+                0o600,
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: fd is a new descriptor owned by the returned File.
+            let file = unsafe { File::from_raw_fd(fd) };
+            validate_operation_file(
+                operation,
+                &operation.relative,
+                &file,
+                "execution ledger",
+                true,
+            )?;
+            operation.sync_parent()?;
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            continue;
+        }
+        return Err(error.into());
+    }
+}
+
+#[cfg(unix)]
+fn operation_stat(operation: &Operation, relative: &Path) -> Result<libc::stat> {
+    use std::os::fd::AsRawFd;
+    let name = operation.leaf_name(relative)?;
+    // SAFETY: zeroed stat is initialized by fstatat before it is read.
+    let mut metadata = unsafe { std::mem::zeroed::<libc::stat>() };
+    // SAFETY: parent is live, name is NUL-terminated, metadata is writable.
+    let result = unsafe {
+        libc::fstatat(
+            operation.parent.as_raw_fd(),
+            name.as_ptr(),
+            &raw mut metadata,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(metadata)
+}
+
+#[cfg(unix)]
+fn validate_operation_file(
+    operation: &Operation,
+    relative: &Path,
+    file: &File,
+    label: &str,
+    require_single_link: bool,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    operation.validate_paths()?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(ExecutionLedgerError::InvalidRecord(format!(
+            "{label} path is not a regular file"
+        )));
+    }
+    if require_single_link && metadata.nlink() != 1 {
+        return Err(ExecutionLedgerError::InvalidRecord(format!(
+            "{label} has multiple hard links"
+        )));
+    }
+    let path_metadata = operation_stat(operation, relative)?;
+    let mode = path_metadata.st_mode as libc::mode_t;
+    if mode & libc::S_IFMT != libc::S_IFREG
+        || path_metadata.st_dev as u64 != metadata.dev()
+        || path_metadata.st_ino as u64 != metadata.ino()
+        || path_metadata.st_nlink as u64 != metadata.nlink()
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(format!(
+            "{label} changed while opening"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_regular_operation(operation: &Operation, relative: &Path, label: &str) -> Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    operation.validate_paths()?;
+    let name = operation.leaf_name(relative)?;
+    // SAFETY: parent is live and name is NUL-terminated.
+    let fd = unsafe {
+        libc::openat(
+            operation.parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: fd is a new descriptor owned by the returned File.
+    let file = unsafe { File::from_raw_fd(fd) };
+    validate_operation_file(operation, relative, &file, label, true)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn unlink_operation(operation: &Operation, relative: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let name = operation.leaf_name(relative)?;
+    // SAFETY: parent is live and name is NUL-terminated.
+    let result = unsafe { libc::unlinkat(operation.parent.as_raw_fd(), name.as_ptr(), 0) };
+    if result == 0 {
+        operation.validate_paths()
+    } else {
+        Err(std::io::Error::last_os_error().into())
+    }
+}
+
+#[cfg(unix)]
+fn remove_file_operation(operation: &Operation, relative: &Path) -> Result<bool> {
+    let Some(file) = open_nofollow_operation(operation, relative)? else {
+        return Ok(false);
+    };
+    validate_operation_file(operation, relative, &file, "cleanup target", true)?;
+    match unlink_operation(operation, relative) {
+        Ok(()) => Ok(true),
+        Err(ExecutionLedgerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn hard_link_operation(operation: &Operation, source: &Path, destination: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let source_name = operation.leaf_name(source)?;
+    let destination_name = operation.leaf_name(destination)?;
+    let Some(source_file) = open_nofollow_operation(operation, source)? else {
+        return Err(ExecutionLedgerError::Io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        )));
+    };
+    validate_operation_file(
+        operation,
+        source,
+        &source_file,
+        "append journal temporary",
+        true,
+    )?;
+    operation.validate_paths()?;
+    // SAFETY: both names and parent descriptor are valid and live.
+    let result = unsafe {
+        libc::linkat(
+            operation.parent.as_raw_fd(),
+            source_name.as_ptr(),
+            operation.parent.as_raw_fd(),
+            destination_name.as_ptr(),
+            0,
+        )
+    };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    operation.validate_paths()
+}
+
+#[cfg(unix)]
+fn unix_normal_components(path: &Path) -> Result<Vec<std::ffi::OsString>> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(name) => components.push(name.to_owned()),
+            std::path::Component::CurDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {}
+            std::path::Component::ParentDir => {
+                return Err(ExecutionLedgerError::InvalidRecord(
+                    "execution ledger path contains parent traversal".to_owned(),
+                ));
+            }
         }
     }
+    Ok(components)
 }
 
 #[cfg(unix)]
-fn apply_nofollow(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-}
-
-#[cfg(not(unix))]
-fn apply_nofollow(_options: &mut OpenOptions) {}
-
-#[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
+fn unix_trusted_root_components(root: &Path) -> Result<(bool, Vec<std::ffi::OsString>)> {
+    let absolute = root.is_absolute();
+    let mut components = unix_normal_components(root)?;
+    if absolute
+        && let Some(first) = components.first()
+        && (first == "var" || first == "tmp")
+    {
+        // macOS exposes /var and /tmp as stable system aliases. Resolve only
+        // this first component; user-controlled parent symlinks remain denied
+        // by the descriptor-relative O_NOFOLLOW traversal below.
+        let alias = Path::new("/").join(first);
+        if let Ok(target) = fs::read_link(alias) {
+            let mut replacement = unix_normal_components(&target)?;
+            replacement.extend(components.into_iter().skip(1));
+            components = replacement;
+        }
     }
-    Ok(())
+    Ok((absolute, components))
 }
 
-#[cfg(not(unix))]
-fn sync_parent_directory(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
+#[cfg(any(unix, test))]
 fn read_events_from_file(file: &File) -> Result<Vec<ExecutionEvent>> {
     let mut source = file.try_clone()?;
     source.seek(SeekFrom::Start(0))?;
@@ -311,21 +1230,20 @@ fn read_events_from_file(file: &File) -> Result<Vec<ExecutionEvent>> {
     Ok(events)
 }
 
-fn ensure_no_pending_append(path: &Path) -> Result<()> {
-    for pending in [append_journal_path(path), append_journal_temp_path(path)] {
-        match fs::symlink_metadata(pending) {
-            Ok(_) => {
-                return Err(ExecutionLedgerError::InvalidRecord(
-                    "execution ledger has a pending append journal".to_owned(),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+#[cfg(unix)]
+fn ensure_no_pending_append_operation(operation: &Operation) -> Result<()> {
+    for suffix in [".append-journal", ".append-journal.tmp"] {
+        let pending = relative_sibling(&operation.relative, suffix)?;
+        if open_nofollow_operation(operation, &pending)?.is_some() {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "execution ledger has a pending append journal".to_owned(),
+            ));
         }
     }
     Ok(())
 }
 
+#[cfg(any(unix, test))]
 fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEvent>, Vec<u8>)> {
     let mut reader = BufReader::new(source);
     let mut events = Vec::new();
@@ -354,6 +1272,7 @@ fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEven
     }
 }
 
+#[cfg(any(unix, test))]
 fn read_bounded_line(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, bool)>> {
     let mut line = Vec::new();
     loop {
@@ -380,15 +1299,17 @@ fn read_bounded_line(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, bool)
     }
 }
 
-fn recover_pending_append(file: &mut File, path: &Path) -> Result<()> {
-    let Some(journal) = read_append_journal(path)? else {
+#[cfg(unix)]
+fn recover_pending_append_operation(file: &mut File, operation: &Operation) -> Result<()> {
+    let Some(journal) = read_append_journal_operation(operation)? else {
         if !file_is_newline_terminated(file)? {
             return Err(ExecutionLedgerError::InvalidRecord(
                 "unterminated ledger tail has no matching append journal".to_owned(),
             ));
         }
-        if remove_file_if_exists(&append_journal_temp_path(path))? {
-            sync_parent_directory(path)?;
+        let temporary = relative_sibling(&operation.relative, ".append-journal.tmp")?;
+        if remove_file_operation(operation, &temporary)? {
+            operation.sync_parent()?;
         }
         return Ok(());
     };
@@ -418,7 +1339,6 @@ fn recover_pending_append(file: &mut File, path: &Path) -> Result<()> {
             "append journal predecessor chain is invalid".to_owned(),
         ));
     }
-
     previous_events.push(parse_canonical_event(&journal.record)?);
     if !verify_events(&previous_events)? {
         return Err(ExecutionLedgerError::InvalidChain(
@@ -454,15 +1374,23 @@ fn recover_pending_append(file: &mut File, path: &Path) -> Result<()> {
     }
     file.flush()?;
     file.sync_data()?;
-    sync_parent_directory(path)?;
+    operation.sync_parent()?;
+    validate_operation_file(
+        operation,
+        &operation.relative,
+        file,
+        "execution ledger",
+        true,
+    )?;
     if !verify_events(&read_events_from_file(file)?)? {
         return Err(ExecutionLedgerError::InvalidChain(
             "completed prepared append is invalid".to_owned(),
         ));
     }
-    clear_append_journal(path)
+    clear_append_journal_operation(operation)
 }
 
+#[cfg(any(unix, test))]
 fn file_is_newline_terminated(file: &File) -> Result<bool> {
     let len = file.metadata()?.len();
     if len == 0 {
@@ -475,11 +1403,13 @@ fn file_is_newline_terminated(file: &File) -> Result<bool> {
     Ok(last[0] == b'\n')
 }
 
+#[cfg(any(unix, test))]
 fn file_len_and_sha256(file: &File) -> Result<(u64, String)> {
     let len = file.metadata()?.len();
     Ok((len, sha256_prefix(file, len)?))
 }
 
+#[cfg(any(unix, test))]
 fn sha256_prefix(file: &File, len: u64) -> Result<String> {
     let mut reader = file.try_clone()?;
     reader.seek(SeekFrom::Start(0))?;
@@ -504,20 +1434,54 @@ fn sha256_prefix(file: &File, len: u64) -> Result<String> {
     Ok(encode_sha256(digest.finalize()))
 }
 
+#[cfg(test)]
 fn append_journal_path(path: &Path) -> PathBuf {
     let mut journal = path.as_os_str().to_os_string();
     journal.push(".append-journal");
     PathBuf::from(journal)
 }
 
+#[cfg(test)]
 fn append_journal_temp_path(path: &Path) -> PathBuf {
     let mut temporary = path.as_os_str().to_os_string();
     temporary.push(".append-journal.tmp");
     PathBuf::from(temporary)
 }
 
+#[cfg(test)]
 fn write_append_journal(
     path: &Path,
+    previous_len: u64,
+    previous_sha256: &str,
+    record: &str,
+) -> Result<()> {
+    let (root, relative) = path_parts(path)?;
+    #[cfg(unix)]
+    {
+        let root_identity = capture_directory_identity(&root)?;
+        let parent_identity = capture_relative_parent_identity(&root, &relative)?;
+        let operation = unix_open_operation(
+            &root,
+            &relative,
+            Some(root_identity),
+            parent_identity,
+            false,
+        )?;
+        write_append_journal_operation(&operation, previous_len, previous_sha256, record)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (root, relative, previous_len, previous_sha256, record);
+        Err(ExecutionLedgerError::InvalidRecord(
+            "execution ledger descriptor-relative access is unsupported on this platform"
+                .to_owned(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn write_append_journal_operation(
+    operation: &Operation,
     previous_len: u64,
     previous_sha256: &str,
     record: &str,
@@ -540,26 +1504,52 @@ fn write_append_journal(
             "append journal exceeds byte limit".to_owned(),
         ));
     }
-    let temporary = append_journal_temp_path(path);
-    match fs::remove_file(&temporary) {
-        Ok(()) => sync_parent_directory(path)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
+    let temporary = relative_sibling(&operation.relative, ".append-journal.tmp")?;
+    let journal = relative_sibling(&operation.relative, ".append-journal")?;
+    if remove_file_operation(operation, &temporary)? {
+        operation.sync_parent()?;
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    file.write_all(&bytes)?;
-    file.flush()?;
-    file.sync_all()?;
-    let journal = append_journal_path(path);
-    fs::hard_link(&temporary, &journal)?;
-    sync_parent_directory(path)?;
-    fs::remove_file(&temporary)?;
-    sync_parent_directory(path)
+    let mut file = create_regular_operation(operation, &temporary, "append journal temporary")?;
+    let mut published = false;
+    let result = (|| {
+        operation.validate_paths()?;
+        file.write_all(&bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        validate_operation_file(
+            operation,
+            &temporary,
+            &file,
+            "append journal temporary",
+            true,
+        )?;
+        hard_link_operation(operation, &temporary, &journal)?;
+        published = true;
+        operation.sync_parent()?;
+        let journal_file = open_nofollow_operation(operation, &journal)?.ok_or_else(|| {
+            ExecutionLedgerError::InvalidRecord("published append journal disappeared".to_owned())
+        })?;
+        validate_journal_link_pair_operation(
+            operation,
+            &journal,
+            &temporary,
+            &journal_file,
+            &file,
+        )?;
+        unlink_operation(operation, &temporary)?;
+        operation.sync_parent()
+    })();
+    if result.is_err() {
+        if published {
+            let _ = clear_append_journal_operation(operation);
+        } else {
+            let _ = remove_file_operation(operation, &temporary);
+        }
+    }
+    result
 }
 
+#[cfg(any(unix, test))]
 fn read_bounded_file(mut file: File, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let max_len = u64::try_from(max_bytes).map_err(|_| {
         ExecutionLedgerError::InvalidRecord(format!("{label} byte limit exceeds platform"))
@@ -582,12 +1572,80 @@ fn read_bounded_file(mut file: File, max_bytes: usize, label: &str) -> Result<Ve
     Ok(bytes)
 }
 
-fn read_append_journal(path: &Path) -> Result<Option<AppendJournalV1>> {
-    let journal_path = append_journal_path(path);
-    let Some(file) = open_regular_nofollow(&journal_path)? else {
+#[cfg(unix)]
+fn validate_journal_link_pair_operation(
+    operation: &Operation,
+    journal_path: &Path,
+    temporary_path: &Path,
+    journal: &File,
+    temporary: &File,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let journal_metadata = journal.metadata()?;
+    let temporary_metadata = temporary.metadata()?;
+    let same_inode = journal_metadata.dev() == temporary_metadata.dev()
+        && journal_metadata.ino() == temporary_metadata.ino();
+    if !journal_metadata.is_file()
+        || !temporary_metadata.is_file()
+        || journal_metadata.nlink() != 2
+        || temporary_metadata.nlink() != 2
+        || !same_inode
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "append journal link pair identity is invalid".to_owned(),
+        ));
+    }
+    let journal_stat = operation_stat(operation, journal_path)?;
+    let temporary_stat = operation_stat(operation, temporary_path)?;
+    if journal_stat.st_mode as libc::mode_t & libc::S_IFMT != libc::S_IFREG
+        || temporary_stat.st_mode as libc::mode_t & libc::S_IFMT != libc::S_IFREG
+        || journal_stat.st_nlink as u64 != 2
+        || temporary_stat.st_nlink as u64 != 2
+        || journal_stat.st_dev as u64 != journal_metadata.dev()
+        || journal_stat.st_ino as u64 != journal_metadata.ino()
+        || temporary_stat.st_dev as u64 != journal_metadata.dev()
+        || temporary_stat.st_ino as u64 != journal_metadata.ino()
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "append journal link pair changed while reading".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_append_journal_operation(operation: &Operation) -> Result<Option<AppendJournalV1>> {
+    let journal = relative_sibling(&operation.relative, ".append-journal")?;
+    let temporary = relative_sibling(&operation.relative, ".append-journal.tmp")?;
+    let Some(file) = open_nofollow_operation(operation, &journal)? else {
         return Ok(None);
     };
-    let bytes = read_bounded_file(file, MAX_APPEND_JOURNAL_BYTES, "append journal")?;
+    let bytes = read_bounded_file(
+        file.try_clone()?,
+        MAX_APPEND_JOURNAL_BYTES,
+        "append journal",
+    )?;
+    use std::os::unix::fs::MetadataExt;
+    if file.metadata()?.nlink() == 2 {
+        let Some(temp_file) = open_nofollow_operation(operation, &temporary)? else {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "append journal link pair is incomplete".to_owned(),
+            ));
+        };
+        let temp_bytes = read_bounded_file(
+            temp_file.try_clone()?,
+            MAX_APPEND_JOURNAL_BYTES,
+            "append journal temporary",
+        )?;
+        if bytes != temp_bytes {
+            return Err(ExecutionLedgerError::InvalidRecord(
+                "append journal link pair content differs".to_owned(),
+            ));
+        }
+        validate_journal_link_pair_operation(operation, &journal, &temporary, &file, &temp_file)?;
+    } else {
+        validate_operation_file(operation, &journal, &file, "append journal", true)?;
+    }
     let text = std::str::from_utf8(&bytes).map_err(|_| {
         ExecutionLedgerError::InvalidRecord("append journal is not UTF-8".to_owned())
     })?;
@@ -610,47 +1668,44 @@ fn read_append_journal(path: &Path) -> Result<Option<AppendJournalV1>> {
     Ok(Some(journal))
 }
 
-fn clear_append_journal(path: &Path) -> Result<()> {
-    fs::remove_file(append_journal_path(path))?;
-    remove_file_if_exists(&append_journal_temp_path(path))?;
-    sync_parent_directory(path)
+#[cfg(unix)]
+fn clear_append_journal_operation(operation: &Operation) -> Result<()> {
+    let journal = relative_sibling(&operation.relative, ".append-journal")?;
+    let temporary = relative_sibling(&operation.relative, ".append-journal.tmp")?;
+    if let Some(journal_file) = open_nofollow_operation(operation, &journal)? {
+        use std::os::unix::fs::MetadataExt;
+        if journal_file.metadata()?.nlink() == 2 {
+            let temporary_file =
+                open_nofollow_operation(operation, &temporary)?.ok_or_else(|| {
+                    ExecutionLedgerError::InvalidRecord(
+                        "append journal link pair is incomplete".to_owned(),
+                    )
+                })?;
+            validate_journal_link_pair_operation(
+                operation,
+                &journal,
+                &temporary,
+                &journal_file,
+                &temporary_file,
+            )?;
+            unlink_operation(operation, &journal)?;
+            unlink_operation(operation, &temporary)?;
+        } else {
+            remove_file_operation(operation, &journal)?;
+            let _ = remove_file_operation(operation, &temporary)?;
+        }
+    } else {
+        let _ = remove_file_operation(operation, &temporary)?;
+    }
+    operation.sync_parent()
 }
 
-fn remove_file_if_exists(path: &Path) -> Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn open_regular_nofollow(path: &Path) -> Result<Option<File>> {
-    #[cfg(not(unix))]
-    if let Ok(metadata) = fs::symlink_metadata(path)
-        && (metadata.file_type().is_symlink() || !metadata.is_file())
-    {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "append journal is not a regular file".to_owned(),
-        ));
-    }
-
-    let mut options = OpenOptions::new();
-    options.read(true);
-    apply_nofollow(&mut options);
-    match options.open(path) {
-        Ok(file) if file.metadata()?.is_file() => Ok(Some(file)),
-        Ok(_) => Err(ExecutionLedgerError::InvalidRecord(
-            "append journal is not a regular file".to_owned(),
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
-}
-
+#[cfg(any(unix, test))]
 fn sha256(bytes: &[u8]) -> String {
     encode_sha256(Sha256::digest(bytes))
 }
 
+#[cfg(any(unix, test))]
 fn encode_sha256(digest: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(71);
@@ -662,6 +1717,7 @@ fn encode_sha256(digest: impl AsRef<[u8]>) -> String {
     encoded
 }
 
+#[cfg(any(unix, test))]
 enum StrictJson {
     Null,
     Bool(bool),
@@ -671,6 +1727,7 @@ enum StrictJson {
     Object(serde_json::Map<String, Value>),
 }
 
+#[cfg(any(unix, test))]
 impl StrictJson {
     fn into_value(self) -> Value {
         match self {
@@ -684,6 +1741,7 @@ impl StrictJson {
     }
 }
 
+#[cfg(any(unix, test))]
 impl<'de> Deserialize<'de> for StrictJson {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -765,6 +1823,7 @@ impl<'de> Deserialize<'de> for StrictJson {
     }
 }
 
+#[cfg(any(unix, test))]
 fn parse_canonical_event(line: &str) -> Result<ExecutionEvent> {
     let mut deserializer = serde_json::Deserializer::from_str(line);
     let value = StrictJson::deserialize(&mut deserializer)
@@ -1179,6 +2238,40 @@ mod tests {
         assert_eq!(fs::read(append_journal_path(&path)).unwrap(), b"existing");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn crash_after_journal_link_before_temp_unlink_recovers_prepared_state() {
+        use std::fs::hard_link;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+        store.append(task_started()).unwrap();
+        stage_prepared_append(&store, plan_created(), 7);
+        let journal = append_journal_path(&path);
+        let temporary = append_journal_temp_path(&path);
+        hard_link(&journal, &temporary).unwrap();
+
+        assert!(store.load_verified().is_err());
+        assert!(!store.append_if_new(plan_created()).unwrap());
+        assert_eq!(store.load_verified().unwrap().len(), 2);
+        assert!(!journal.exists());
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn journal_error_cleans_unpublished_temporary_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let journal = append_journal_path(&path);
+        let temporary = append_journal_temp_path(&path);
+        fs::write(&journal, b"existing").unwrap();
+
+        assert!(write_append_journal(&path, 0, &sha256(b""), "{}").is_err());
+        assert_eq!(fs::read(&journal).unwrap(), b"existing");
+        assert!(!temporary.exists());
+    }
+
     #[test]
     fn oversized_record_is_rejected_before_journal_or_ledger_write() {
         let directory = tempfile::tempdir().unwrap();
@@ -1254,5 +2347,264 @@ mod tests {
 
         assert!(store.append(plan_created()).is_err());
         assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ledger_symlink_is_rejected_by_every_read_projection() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.jsonl");
+        let path = directory.path().join("ledger.jsonl");
+        let target_store = ExecutionLedgerStore::new(&target);
+        target_store.append(task_started()).unwrap();
+        symlink(&target, &path).unwrap();
+        let store = ExecutionLedgerStore::new(&path);
+
+        assert!(store.load().is_err());
+        assert!(store.load_verified().is_err());
+        assert!(store.verify_chain().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_symlink_is_rejected_before_ledger_open() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target_directory = tempfile::tempdir().unwrap();
+        let target = target_directory.path().join("ledger.jsonl");
+        let target_store = ExecutionLedgerStore::new(&target);
+        target_store.append(task_started()).unwrap();
+        let parent = directory.path().join("execution");
+        symlink(target_directory.path(), &parent).unwrap();
+        let store = ExecutionLedgerStore::new(parent.join("ledger.jsonl"));
+
+        assert!(store.load().is_err());
+        assert!(store.load_verified().is_err());
+        assert!(store.verify_chain().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_alias_is_rejected_after_descriptor_identity_check() {
+        use std::fs::hard_link;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let alias = directory.path().join("ledger-alias.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+        store.append(task_started()).unwrap();
+        hard_link(&path, &alias).unwrap();
+
+        assert!(store.load().is_err());
+        assert!(store.load_verified().is_err());
+        assert!(store.verify_chain().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opened_descriptor_is_not_redirected_by_path_swap() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let moved = directory.path().join("ledger-moved.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+        store.append(task_started()).unwrap();
+        let (_, relative) = path_parts(&path).unwrap();
+        let operation = store.open_operation(false).unwrap();
+        let file = open_regular_nofollow_operation(&operation, &relative)
+            .unwrap()
+            .unwrap();
+
+        fs::rename(&path, &moved).unwrap();
+        assert!(read_events_from_file(&file).is_ok());
+        assert!(
+            validate_operation_file(&operation, &relative, &file, "execution ledger", true)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opened_descriptor_rejects_parent_swap_after_acquisition() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("execution");
+        fs::create_dir(&parent).unwrap();
+        let path = parent.join("ledger.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+        store.append(task_started()).unwrap();
+        let (_, relative) = path_parts(&path).unwrap();
+        let operation = store.open_operation(false).unwrap();
+        let file = open_regular_nofollow_operation(&operation, &relative)
+            .unwrap()
+            .unwrap();
+
+        let moved = directory.path().join("execution-moved");
+        fs::rename(&parent, &moved).unwrap();
+        symlink(&moved, &parent).unwrap();
+        assert!(read_events_from_file(&file).is_ok());
+        assert!(
+            validate_operation_file(&operation, &relative, &file, "execution ledger", true)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlink_created_after_open_is_rejected_before_commit() {
+        use std::fs::hard_link;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let alias = directory.path().join("ledger-race-alias.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+        store.append(task_started()).unwrap();
+        let operation = store.open_operation(false).unwrap();
+        let file = open_regular_nofollow_operation(&operation, Path::new("ledger.jsonl"))
+            .unwrap()
+            .unwrap();
+        hard_link(&path, &alias).unwrap();
+
+        assert!(
+            validate_operation_file(
+                &operation,
+                Path::new("ledger.jsonl"),
+                &file,
+                "execution ledger",
+                true,
+            )
+            .is_err()
+        );
+        assert!(store.append(plan_created()).is_err());
+    }
+
+    #[test]
+    fn verified_constructor_rejects_parent_traversal() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            ExecutionLedgerStore::new_verified(
+                directory.path(),
+                Path::new("nested/../ledger.jsonl")
+            )
+            .is_err()
+        );
+        assert!(
+            ExecutionLedgerStore::new_verified(
+                directory.path(),
+                Path::new("/outside/ledger.jsonl")
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_constructor_rejects_symlink_root() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let real_root = directory.path().join("real-root");
+        let alias_root = directory.path().join("alias-root");
+        fs::create_dir(&real_root).unwrap();
+        symlink(&real_root, &alias_root).unwrap();
+
+        assert!(ExecutionLedgerStore::new_verified(&alias_root, "ledger.jsonl").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_root_replacement_is_rejected_before_append_side_effect() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        let moved = directory.path().join("root-moved");
+        fs::create_dir(&root).unwrap();
+        let store = ExecutionLedgerStore::new_verified(&root, "ledger.jsonl").unwrap();
+
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        assert!(store.append(task_started()).is_err());
+        assert!(!root.join("ledger.jsonl").exists());
+        assert!(!moved.join("ledger.jsonl").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_parent_replacement_is_rejected_before_append_side_effect() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        let parent = root.join("execution");
+        let moved = root.join("execution-moved");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&parent).unwrap();
+        let store = ExecutionLedgerStore::new_verified(&root, "execution/ledger.jsonl").unwrap();
+
+        fs::rename(&parent, &moved).unwrap();
+        fs::create_dir(&parent).unwrap();
+
+        assert!(store.append(task_started()).is_err());
+        assert!(!parent.join("ledger.jsonl").exists());
+        assert!(!moved.join("ledger.jsonl").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn created_parent_identity_is_pinned_for_later_operations() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        let parent = root.join("execution");
+        let moved = root.join("execution-moved");
+        fs::create_dir(&root).unwrap();
+        let store = ExecutionLedgerStore::new_verified(&root, "execution/ledger.jsonl").unwrap();
+
+        store.append(task_started()).unwrap();
+        let before = fs::read(parent.join("ledger.jsonl")).unwrap();
+        fs::rename(&parent, &moved).unwrap();
+        fs::create_dir(&parent).unwrap();
+
+        assert!(store.append(plan_created()).is_err());
+        assert!(!parent.join("ledger.jsonl").exists());
+        assert_eq!(fs::read(moved.join("ledger.jsonl")).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_data_root_creation_is_descriptor_relative_and_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("missing").join("data");
+
+        ensure_default_data_root(&root).unwrap();
+
+        assert!(root.is_dir());
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn legacy_relative_constructor_resolves_current_directory() {
+        let store = ExecutionLedgerStore::new(Path::new("ledger.jsonl"));
+        assert!(store.path().is_absolute());
+        assert_eq!(
+            store.path().file_name(),
+            Some(std::ffi::OsStr::new("ledger.jsonl"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ledger_fails_closed_before_reparse_or_path_side_effect() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ledger.jsonl");
+        let store = ExecutionLedgerStore::new(&path);
+
+        assert!(store.append(task_started()).is_err());
+        assert!(!path.exists());
     }
 }
