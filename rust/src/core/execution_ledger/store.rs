@@ -3,31 +3,35 @@
 //! not this unkeyed sidecar, provide adversarial authenticity.
 
 use std::fs;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use std::fs::File;
 #[cfg(test)]
 use std::fs::OpenOptions;
 #[cfg(any(unix, test))]
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::Write;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use fs2::FileExt;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use serde::de::Error as _;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 #[cfg(any(unix, test))]
 use serde::{Deserialize, Serialize};
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 use serde_json::{Number, Value};
 #[cfg(any(unix, test))]
 use sha2::{Digest, Sha256};
 
 use super::event::ExecutionEvent;
+#[cfg(unix)]
+use super::verify::verify_events;
 #[cfg(any(unix, test))]
-use super::verify::{GENESIS, hash_event, verify_events};
+use super::verify::{GENESIS, hash_event};
 use super::{ExecutionLedgerError, Result};
 
 #[cfg(any(unix, test))]
@@ -605,7 +609,7 @@ fn validate_relative_path(relative: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn relative_sibling(relative: &Path, suffix: &str) -> Result<PathBuf> {
     let file_name = relative.file_name().ok_or_else(|| {
         ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
@@ -1217,7 +1221,7 @@ fn unix_trusted_root_components(root: &Path) -> Result<(bool, Vec<std::ffi::OsSt
     Ok((absolute, components))
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn read_events_from_file(file: &File) -> Result<Vec<ExecutionEvent>> {
     let mut source = file.try_clone()?;
     source.seek(SeekFrom::Start(0))?;
@@ -1243,7 +1247,7 @@ fn ensure_no_pending_append_operation(operation: &Operation) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEvent>, Vec<u8>)> {
     let mut reader = BufReader::new(source);
     let mut events = Vec::new();
@@ -1272,7 +1276,7 @@ fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEven
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn read_bounded_line(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, bool)>> {
     let mut line = Vec::new();
     loop {
@@ -1390,7 +1394,7 @@ fn recover_pending_append_operation(file: &mut File, operation: &Operation) -> R
     clear_append_journal_operation(operation)
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn file_is_newline_terminated(file: &File) -> Result<bool> {
     let len = file.metadata()?.len();
     if len == 0 {
@@ -1403,13 +1407,13 @@ fn file_is_newline_terminated(file: &File) -> Result<bool> {
     Ok(last[0] == b'\n')
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn file_len_and_sha256(file: &File) -> Result<(u64, String)> {
     let len = file.metadata()?.len();
     Ok((len, sha256_prefix(file, len)?))
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn sha256_prefix(file: &File, len: u64) -> Result<String> {
     let mut reader = file.try_clone()?;
     reader.seek(SeekFrom::Start(0))?;
@@ -1549,7 +1553,7 @@ fn write_append_journal_operation(
     result
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn read_bounded_file(mut file: File, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let max_len = u64::try_from(max_bytes).map_err(|_| {
         ExecutionLedgerError::InvalidRecord(format!("{label} byte limit exceeds platform"))
@@ -1717,7 +1721,7 @@ fn encode_sha256(digest: impl AsRef<[u8]>) -> String {
     encoded
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 enum StrictJson {
     Null,
     Bool(bool),
@@ -1727,7 +1731,7 @@ enum StrictJson {
     Object(serde_json::Map<String, Value>),
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 impl StrictJson {
     fn into_value(self) -> Value {
         match self {
@@ -1741,7 +1745,7 @@ impl StrictJson {
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 impl<'de> Deserialize<'de> for StrictJson {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -1823,7 +1827,7 @@ impl<'de> Deserialize<'de> for StrictJson {
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn parse_canonical_event(line: &str) -> Result<ExecutionEvent> {
     let mut deserializer = serde_json::Deserializer::from_str(line);
     let value = StrictJson::deserialize(&mut deserializer)
