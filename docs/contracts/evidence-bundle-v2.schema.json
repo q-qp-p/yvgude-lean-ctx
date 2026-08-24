@@ -649,7 +649,7 @@
         },
         "signature": {
           "type": "string",
-          "pattern": "^[A-Za-z0-9+/]{86}==$"
+          "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$"
         }
       }
     }

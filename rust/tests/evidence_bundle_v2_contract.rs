@@ -155,6 +155,40 @@ fn v2_schema_is_strict_and_fixtures_are_canonical() {
 }
 
 #[test]
+fn schema_rejects_noncanonical_signature_pad_bits() {
+    let schema_path = root().join("docs/contracts/evidence-bundle-v2.schema.json");
+    let schema = read_json(&schema_path);
+    let validator = jsonschema::validator_for(&schema).expect("v2 schema compiles");
+    let valid = read_json(&fixture("valid.json"));
+    assert_valid(&validator, &valid, "canonical valid fixture");
+
+    let signature = string(&valid, "/signing/signature");
+    assert_eq!(signature.len(), 88);
+    assert!(signature.ends_with("=="));
+    assert!(matches!(
+        signature.as_bytes()[signature.len() - 3],
+        b'A' | b'Q' | b'g' | b'w'
+    ));
+
+    let mut noncanonical = valid.clone();
+    let invalid_signature = format!("{}x==", &signature[..signature.len() - 3]);
+    assert_eq!(invalid_signature.len(), signature.len());
+    assert!(invalid_signature.ends_with("x=="));
+    assert!(
+        invalid_signature
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    );
+    *noncanonical
+        .pointer_mut("/signing/signature")
+        .expect("signature pointer") = Value::String(invalid_signature);
+    assert!(
+        validator.iter_errors(&noncanonical).next().is_some(),
+        "same-length Base64 with non-zero pad bits must fail v2 schema"
+    );
+}
+
+#[test]
 fn valid_fixture_enforces_contract_only_match_and_bound_invariants() {
     let value = read_json(&fixture("valid.json"));
     let control = "/matched_arms/control/identity";
