@@ -84,3 +84,21 @@ fn substitution_with_builtin_cmd_passes() {
         "builtin in substitution must pass: {result:?}"
     );
 }
+
+#[test]
+fn substitution_scanner_respects_quoted_parens_and_checks_every_inner_segment() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    let result =
+        check_substitution_in_args(r#"git commit -m "$(echo ')'; evil_binary --attack)""#, true);
+    assert!(
+        result.is_err(),
+        "a quoted ')' must not hide a later non-allowlisted inner command"
+    );
+
+    let nested =
+        check_substitution_in_args(r#"git commit -m "$(echo "$(evil_binary --nested)")""#, true);
+    assert!(
+        nested.is_err(),
+        "nested substitutions must be validated recursively"
+    );
+}

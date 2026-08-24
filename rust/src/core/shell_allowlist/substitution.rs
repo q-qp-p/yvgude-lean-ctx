@@ -1,4 +1,7 @@
-use super::{SHELL_BUILTINS, ShellError, effective_allowlist, extract_base_from_segment};
+use super::{
+    SHELL_BUILTINS, ShellError, effective_allowlist, extract_all_commands,
+    extract_base_from_segment,
+};
 
 /// $(), backticks, <() in arguments: warn by default, **block** when
 /// `shell_strict_mode = true` (GH #391 — the strict knob previously only
@@ -96,13 +99,14 @@ fn extract_substitution_commands(command: &str) -> Vec<String> {
                 if ch == b'$'
                     && i + 1 < len
                     && bytes[i + 1] == b'('
-                    && let Some(inner) = extract_paren_content(bytes, i + 1)
+                    && let Some((inner, end)) = super::compound::balanced_paren_at(command, i + 1)
                 {
                     let trimmed = inner.trim();
                     if !trimmed.is_empty() {
-                        results.push(trimmed.to_string());
+                        results.extend(extract_all_commands(trimmed));
+                        results.extend(extract_substitution_commands(trimmed));
                     }
-                    i += 2 + inner.len() + 1;
+                    i = end;
                     continue;
                 }
                 i += 1;
@@ -110,30 +114,6 @@ fn extract_substitution_commands(command: &str) -> Vec<String> {
         }
     }
     results
-}
-
-/// Extracts content between `(` at `start` and matching `)`, handling nesting.
-fn extract_paren_content(bytes: &[u8], start: usize) -> Option<String> {
-    if start >= bytes.len() || bytes[start] != b'(' {
-        return None;
-    }
-    let mut depth: u32 = 1;
-    let mut i = start + 1;
-    while i < bytes.len() && depth > 0 {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
-        }
-        if depth > 0 {
-            i += 1;
-        }
-    }
-    if depth == 0 {
-        Some(String::from_utf8_lossy(&bytes[start + 1..i]).to_string())
-    } else {
-        None
-    }
 }
 
 /// Check for $(), backticks, <(, >( in arguments wherever the shell would

@@ -4,13 +4,7 @@
 use super::*;
 
 fn expect_wrapped(cmd: &str, binary: &str) -> String {
-    if cfg!(windows) {
-        let escaped = cmd.replace('"', "\\\"");
-        format!("{binary} -c \"{escaped}\"")
-    } else {
-        let shell_escaped = cmd.replace('\'', "'\\''");
-        format!("{binary} -c '{shell_escaped}'")
-    }
+    crate::shell::join_command(&[binary.to_owned(), "-c".to_owned(), cmd.to_owned()])
 }
 
 /// Pins a deterministic shell allowlist while `body` runs, so the `passes_enforced`

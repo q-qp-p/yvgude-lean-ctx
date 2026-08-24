@@ -142,13 +142,7 @@ fn is_compound(cmd: &str) -> bool {
 }
 
 pub(super) fn wrap_single_command(cmd: &str, binary: &str) -> String {
-    if cfg!(windows) {
-        let escaped = cmd.replace('"', "\\\"");
-        format!("{binary} -c \"{escaped}\"")
-    } else {
-        let shell_escaped = cmd.replace('\'', "'\\''");
-        format!("{binary} -c '{shell_escaped}'")
-    }
+    crate::shell::join_command(&[binary.to_owned(), "-c".to_owned(), cmd.to_owned()])
 }
 
 /// Quote-aware check for stdout file redirects (`>`, `>>`).
