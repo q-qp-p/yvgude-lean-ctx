@@ -142,6 +142,7 @@ impl Default for Config {
             shell_hook_disabled: false,
             shadow_mode: true,
             shell_hook_mode: None,
+            prompt_reinject: None,
             hook_mode: None,
             tool_surface: None,
             debug_log: false,

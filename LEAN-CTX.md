@@ -1,6 +1,6 @@
 <!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->
 <!-- lean-ctx-rules -->
-<!-- version: 8 -->
+<!-- version: 9 -->
 
 CRITICAL: ALWAYS use lean-ctx ctx_* tools instead of native equivalents. This is NOT optional.
 

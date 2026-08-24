@@ -457,6 +457,19 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
         ),
     );
     root.insert(
+        "prompt_reinject".into(),
+        key_enum_with_env(
+            &["auto", "on", "off"],
+            "auto",
+            "Per-turn tool-precedence reinjection (#1288): the UserPromptSubmit hook \
+             emits a one-line additionalContext reminder that ctx_* tools are the \
+             mandated path, so it always post-dates session-level harness \
+             instructions preferring native Bash. auto (default): active only while \
+             shadow_mode is on. Costs ~45 tokens per turn when active",
+            "LEAN_CTX_PROMPT_REINJECT",
+        ),
+    );
+    root.insert(
         "read_redirect".into(),
         key_enum_with_env(
             &["auto", "on", "off"],

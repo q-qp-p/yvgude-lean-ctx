@@ -581,7 +581,7 @@ pub fn replace_rules_content() -> String {
         "{start}\n<!-- version: {version} -->\n\n\
 # lean-ctx \u{2014} Replace Mode (native tools denied)\n\n\
 Native Read/Grep/Glob/Bash are denied by policy. Use ONLY ctx_* MCP tools:\n\
-- ctx_read for ALL file reads (cached, 10 modes, re-reads ~13 tokens)\n\
+- ctx_read for ALL file reads (cached, 10 modes, unchanged full/auto re-reads ~13 tokens)\n\
 - ctx_shell for ALL shell commands (95+ compression patterns)\n\
 - ctx_search instead of Grep/rg (compact results)\n\
 - ctx_tree instead of ls/find (compact directory maps)\n\

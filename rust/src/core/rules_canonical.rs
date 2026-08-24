@@ -105,7 +105,10 @@ Never skip: validation, security, error handling.\n\
 /// exploration on hook-covered hosts (Cursor).
 /// Bumping it forces every committed `LEAN-CTX.md` artifact to be regenerated
 /// (see `tests/rules_drift.rs`) and every injected user file to resync.
-pub const RULES_VERSION: usize = 8;
+/// v9 (#1287): the "re-reads ~13 tokens" claim is scoped to unchanged
+/// full/auto re-reads — signatures/map re-reads currently return the full
+/// (cached) payload.
+pub const RULES_VERSION: usize = 9;
 
 /// Banner placed at the top of dedicated rule files (non-shadow only).
 pub const CRITICAL: &str = "CRITICAL: ALWAYS use lean-ctx ctx_* tools instead of native equivalents. \
@@ -249,7 +252,7 @@ provide superior caching, compression, and session memory. Hooks compress native
 Shell/Read/Grep as fallback, but direct ctx_* calls are the primary path.\n\
 ACTUALLY EMIT the ctx_* tool call (ctx_compose first) — describing a tool is not calling it.\n\
 WHY ctx_read > native Read: ctx_read picks the optimal mode (map/signatures/terse) \
-per file, caches for instant re-reads (~13 tokens), and compresses 26-92%. Native \
+per file, caches unchanged full/auto re-reads (~13 tokens), and compresses 26-92%. Native \
 Read through hook redirect is limited to verbatim pass-through (~5% savings).";
 
 /// The tools worth an explicit MCP call on a hook-covered host: capabilities
@@ -257,7 +260,7 @@ Read through hook redirect is limited to verbatim pass-through (~5% savings).";
 /// [`SHADOW_MINIMAL`]'s exclusive-tools line (same rationale, different cause).
 pub const HOOK_COVERED_TOOLS: &str = "\
 MANDATORY MAPPING (always use ctx_* instead of native):\n\
-• Read/cat -> ctx_read(path, mode) — cached, 10 modes, re-reads ~13 tokens\n\
+• Read/cat -> ctx_read(path, mode) — cached, 10 modes, unchanged full/auto re-reads ~13 tokens\n\
 • Grep/search -> ctx_search(pattern, path) — also action=symbol|semantic for definitions/meaning\n\
 • Shell/bash -> ctx_shell(command) — 95+ compression patterns\n\
 • ctx_compose — orient in code FIRST (bundles search + read + symbols) — call before editing/debugging\n\

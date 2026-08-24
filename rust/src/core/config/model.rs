@@ -437,6 +437,14 @@ pub struct Config {
     /// choice survives reinstalls and updates.
     #[serde(default)]
     pub shell_hook_mode: Option<String>,
+    /// Per-turn tool-precedence reinjection (#1288): the UserPromptSubmit hook
+    /// emits a one-line `additionalContext` reminder that ctx_* tools are the
+    /// mandated path, so it always post-dates any session-level harness
+    /// instruction preferring native Bash. `on` | `off` | `auto` (default:
+    /// auto = active only while `shadow_mode` is on). Env override:
+    /// `LEAN_CTX_PROMPT_REINJECT`. Costs ~45 tokens per turn when active.
+    #[serde(default)]
+    pub prompt_reinject: Option<String>,
     /// Global hook mode override. When set, overrides the per-agent auto-detection.
     /// - `replace`: Native Read/Grep/Glob/Shell denied, lean-ctx MCP is the only path
     /// - `hybrid`: MCP + shell hooks for compression (legacy)

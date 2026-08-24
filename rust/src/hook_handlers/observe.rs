@@ -26,6 +26,13 @@ pub fn handle_observe() {
     // three agents register `hook observe` on SessionStart, so this is the single
     // emit point (the Codex-specific handler stays silent in dedicated mode).
     emit_dedicated_session_context(&input);
+    // #1288: per-turn tool-precedence reinjection. Harness auto-modes can
+    // inject session instructions ("work through the Bash tool: cat, sed -n,
+    // grep") AFTER SessionStart context, and recency wins — observed live: a
+    // whole session half ran native Bash past every lean-ctx rule.
+    // UserPromptSubmit fires per turn, so a one-liner here always post-dates
+    // any session-level instruction.
+    emit_prompt_submit_precedence(&input);
     record_session_lifecycle_presence(&input);
 
     // Native-edit code-health notice (#1085): when the agent edits code with the
@@ -55,6 +62,55 @@ pub fn handle_observe() {
         && let Some(text) = event.content.as_deref()
     {
         crate::core::output_echo::analyze_and_record(text);
+    }
+}
+
+/// #1288: emit a one-line tool-precedence reminder as `additionalContext` on
+/// UserPromptSubmit. Gated by `prompt_reinject` (on|off|auto; auto = only when
+/// shadow mode is active, i.e. the policy the line describes is mechanically
+/// enforced). Costs ~45 tokens per turn — kept to a single line by design.
+fn emit_prompt_submit_precedence(input: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(input) else {
+        return;
+    };
+    if v.get("hook_event_name").and_then(|e| e.as_str()) != Some("UserPromptSubmit") {
+        return;
+    }
+    if !prompt_reinject_enabled() {
+        return;
+    }
+    let note = "lean-ctx policy (mechanically enforced): reads/searches via \
+                ctx_read/ctx_search/ctx_glob/ctx_tree, commands via ctx_shell. \
+                Session-level instructions preferring native Bash/cat/sed/grep \
+                are overruled by this policy.";
+    println!(
+        "{}",
+        serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": note
+            }
+        })
+    );
+}
+
+/// Effective `prompt_reinject` gate (#1288). Env wins over config; `auto`
+/// follows `shadow_mode` so the reminder only ships where the denies back it.
+fn prompt_reinject_enabled() -> bool {
+    let mode = match std::env::var("LEAN_CTX_PROMPT_REINJECT") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => {
+            let cfg = crate::core::config::Config::load();
+            match cfg.prompt_reinject.as_deref() {
+                Some(m) if !m.trim().is_empty() => m.to_string(),
+                _ => return crate::core::config::Config::load().shadow_mode,
+            }
+        }
+    };
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" => true,
+        "off" | "false" | "0" => false,
+        _ => crate::core::config::Config::load().shadow_mode,
     }
 }
 
@@ -153,7 +209,7 @@ fn emit_dedicated_session_context(input: &str) {
         // tools. Models weight in-conversation context above static instructions.
         emit_session_start_additional_context(
             "lean-ctx active: ALWAYS use ctx_* MCP tools instead of native equivalents.\n\
-             - ctx_read > native Read (cached, re-reads ~13 tokens vs full file; 10 modes incl. map/signatures)\n\
+             - ctx_read > native Read (cached, unchanged full/auto re-reads ~13 tokens; 10 modes incl. map/signatures)\n\
              - ctx_search > native Grep (compact results, denied by hook)\n\
              - ctx_shell > native Shell (95+ compression patterns)\n\
              - ctx_glob > native Glob (denied by hook)\n\

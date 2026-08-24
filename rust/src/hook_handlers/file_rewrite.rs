@@ -86,6 +86,22 @@ pub(super) fn compute_rewrite() -> String {
                 &cmd,
                 rewrite_skip_reason(&cmd),
             );
+            // #1285: native passthrough was structurally invisible — only
+            // ctx_* calls reach metering.jsonl, so a session leaking reads
+            // through raw Bash showed a clean savings rate. Count every
+            // passthrough (token volumes are unknown pre-exec, so zeros) so
+            // the dashboard's per-tool table shows the leak as a call count.
+            // Synchronous append: hooks are plain CLI processes without a
+            // Tokio reactor, so `append_best_effort` (spawn_blocking) is
+            // unavailable here.
+            if let Ok(store) = crate::core::metering::MeterStore::from_data_dir() {
+                let _ = store.append(&crate::core::metering::MeterEntry::new(
+                    "native_shell_passthrough",
+                    0,
+                    0,
+                    0,
+                ));
+            }
             build_dual_allow_output()
         }
     })
