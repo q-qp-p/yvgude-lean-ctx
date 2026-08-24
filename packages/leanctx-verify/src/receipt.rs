@@ -676,8 +676,8 @@ fn verify_engine_observation(
         return Err("engine observation invocation_id disagrees with receipt lineage".to_string());
     }
 
-    let invocation = artifact_document(inventory, invocation_ref, "engine invocation")?;
-    let invocation = object(&invocation, "engine invocation")?;
+    let invocation_document = artifact_document(inventory, invocation_ref, "engine invocation")?;
+    let invocation = object(&invocation_document, "engine invocation")?;
     let invocation_sources = array(
         field(invocation, "source_refs", "engine invocation")?,
         "engine invocation.source_refs",
@@ -896,7 +896,32 @@ fn verify_engine_observation(
     {
         return Err("engine observation receipt link is not signed evidence".to_string());
     }
-    require_artifact(receipt_digest, inventory, "engine receipt artifact")?;
+    let receipt_document = artifact_document(inventory, receipt_digest, "engine receipt artifact")?;
+    let receipt = object(&receipt_document, "engine receipt artifact")?;
+    check_fields(
+        receipt,
+        "engine receipt artifact",
+        &["schema_version", "invocation", "observation"],
+        &[],
+    )?;
+    require_schema_v1(receipt, "engine receipt artifact")?;
+    if field(receipt, "invocation", "engine receipt artifact")?
+        != &Value::Object(invocation.clone())
+    {
+        return Err("engine receipt invocation disagrees with engine invocation".to_string());
+    }
+    let receipt_observation = object(
+        field(receipt, "observation", "engine receipt artifact")?,
+        "engine receipt observation",
+    )?;
+    if receipt_observation.contains_key("receipt_link") {
+        return Err("engine receipt observation must omit receipt_link".to_string());
+    }
+    let mut expected_observation = observation.clone();
+    expected_observation.remove("receipt_link");
+    if receipt_observation != &expected_observation {
+        return Err("engine receipt observation disagrees with engine observation".to_string());
+    }
     if !is_digest(observation_digest) {
         return Err("engine observation evidence digest is malformed".to_string());
     }
@@ -1556,9 +1581,7 @@ mod tests {
         String,
     ) {
         let (output_digest, output) = artifact("replay_input", b"real engine output".to_vec());
-        let (engine_receipt_digest, engine_receipt) =
-            artifact("measurement", b"canonical engine receipt".to_vec());
-        let invocation = canonical_bytes(&serde_json::json!({
+        let invocation_value = serde_json::json!({
             "schema_version": 1,
             "invocation_id": "invocation-real",
             "engine": {"engine_id": "lean-ctx-local", "engine_version": "3.9.20"},
@@ -1570,8 +1593,31 @@ mod tests {
             "input_digest": output_digest.clone(),
             "source_refs": ["input:fixture", "source:fixture"],
             "policy_admission": {"policy_ref": "policy:fixture", "decision": "admitted"}
-        }));
-        let (invocation_ref, invocation) = artifact("engine_invocation", invocation);
+        });
+        let (invocation_ref, invocation) =
+            artifact("engine_invocation", canonical_bytes(&invocation_value));
+        let observation_without_link = serde_json::json!({
+            "schema_version": 1,
+            "invocation_id": observation_invocation_id,
+            "status": status,
+            "output_ref": format!("output:{}", &output_digest[7..]),
+            "output_digest": output_digest.clone(),
+            "source_lineage": ["input:fixture", "source:fixture"],
+            "measurements": [{
+                "name": "output_tokens",
+                "unit": "token",
+                "classification": "measured",
+                "value": 4
+            }],
+        });
+        let (engine_receipt_digest, engine_receipt) = artifact(
+            "measurement",
+            canonical_bytes(&serde_json::json!({
+                "schema_version": 1,
+                "invocation": invocation_value,
+                "observation": observation_without_link,
+            })),
+        );
         let observation = canonical_bytes(&serde_json::json!({
             "schema_version": 1,
             "invocation_id": observation_invocation_id,
@@ -1610,6 +1656,82 @@ mod tests {
             "invocation-real".to_owned(),
             invocation_ref,
         )
+    }
+
+    fn engine_observation_digest(inventory: &BTreeMap<String, InventoryArtifact>) -> String {
+        inventory
+            .iter()
+            .find_map(|(digest, artifact)| {
+                (artifact.kind == "engine_observation").then_some(digest.clone())
+            })
+            .unwrap()
+    }
+
+    fn engine_receipt_digest(inventory: &BTreeMap<String, InventoryArtifact>) -> String {
+        let observation_digest = engine_observation_digest(inventory);
+        let observation = artifact_document(inventory, &observation_digest, "observation").unwrap();
+        let observation = object(&observation, "observation").unwrap();
+        let link = object(
+            field(observation, "receipt_link", "observation").unwrap(),
+            "link",
+        )
+        .unwrap();
+        string(link, "receipt_digest", "link").unwrap().to_owned()
+    }
+
+    fn replace_engine_receipt_bytes(
+        evidence: &mut BTreeMap<String, String>,
+        inventory: &mut BTreeMap<String, InventoryArtifact>,
+        bytes: Vec<u8>,
+    ) {
+        let observation_digest = engine_observation_digest(inventory);
+        let old_receipt_digest = engine_receipt_digest(inventory);
+        let mut observation =
+            artifact_document(inventory, &observation_digest, "observation").unwrap();
+        let link = observation
+            .as_object_mut()
+            .unwrap()
+            .get_mut("receipt_link")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        let new_receipt_digest = format!("sha256:{}", sha256_hex(&bytes));
+        link.insert(
+            "receipt_ref".to_owned(),
+            Value::String(format!("receipt:{new_receipt_digest}")),
+        );
+        link.insert(
+            "receipt_digest".to_owned(),
+            Value::String(new_receipt_digest.clone()),
+        );
+        let observation_bytes = canonical_bytes(&observation);
+        let new_observation_digest = format!("sha256:{}", sha256_hex(&observation_bytes));
+
+        let mut receipt_artifact = inventory.remove(&old_receipt_digest).unwrap();
+        receipt_artifact.bytes = bytes;
+        inventory.insert(new_receipt_digest.clone(), receipt_artifact);
+
+        let mut observation_artifact = inventory.remove(&observation_digest).unwrap();
+        observation_artifact.bytes = observation_bytes;
+        inventory.insert(new_observation_digest.clone(), observation_artifact);
+
+        let receipt_kind = evidence.remove(&old_receipt_digest).unwrap();
+        evidence.insert(new_receipt_digest, receipt_kind);
+        let observation_kind = evidence.remove(&observation_digest).unwrap();
+        evidence.insert(new_observation_digest, observation_kind);
+    }
+
+    fn replace_engine_receipt_value<F>(
+        evidence: &mut BTreeMap<String, String>,
+        inventory: &mut BTreeMap<String, InventoryArtifact>,
+        mutate: F,
+    ) where
+        F: FnOnce(&mut Value),
+    {
+        let receipt_digest = engine_receipt_digest(inventory);
+        let mut receipt = artifact_document(inventory, &receipt_digest, "engine receipt").unwrap();
+        mutate(&mut receipt);
+        replace_engine_receipt_bytes(evidence, inventory, canonical_bytes(&receipt));
     }
 
     #[test]
@@ -1656,6 +1778,103 @@ mod tests {
             })
             .unwrap();
         evidence.remove(&engine_receipt_digest);
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn engine_receipt_artifact_rejects_noncanonical_bytes() {
+        let (mut evidence, mut inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        let receipt_digest = engine_receipt_digest(&inventory);
+        let mut noncanonical = vec![b' '];
+        noncanonical.extend_from_slice(&inventory[&receipt_digest].bytes);
+        replace_engine_receipt_bytes(&mut evidence, &mut inventory, noncanonical);
+
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn engine_receipt_artifact_rejects_mismatched_invocation() {
+        let (mut evidence, mut inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        replace_engine_receipt_value(&mut evidence, &mut inventory, |receipt| {
+            receipt
+                .as_object_mut()
+                .unwrap()
+                .get_mut("invocation")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    "invocation_id".to_owned(),
+                    Value::String("invocation-other".to_owned()),
+                );
+        });
+
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn engine_receipt_artifact_rejects_mismatched_observation() {
+        let (mut evidence, mut inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        replace_engine_receipt_value(&mut evidence, &mut inventory, |receipt| {
+            receipt
+                .as_object_mut()
+                .unwrap()
+                .get_mut("observation")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .get_mut("measurements")
+                .unwrap()
+                .as_array_mut()
+                .unwrap()[0]
+                .as_object_mut()
+                .unwrap()
+                .insert("value".to_owned(), Value::from(5));
+        });
+
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn engine_receipt_artifact_rejects_self_linked_observation() {
+        let (mut evidence, mut inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        let receipt_digest = engine_receipt_digest(&inventory);
+        replace_engine_receipt_value(&mut evidence, &mut inventory, |receipt| {
+            receipt
+                .as_object_mut()
+                .unwrap()
+                .get_mut("observation")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    "receipt_link".to_owned(),
+                    serde_json::json!({
+                        "schema_version": 1,
+                        "receipt_id": "self-linked",
+                        "receipt_ref": format!("receipt:{receipt_digest}"),
+                        "receipt_digest": receipt_digest,
+                        "invocation_id": "invocation-real"
+                    }),
+                );
+        });
+
         assert!(
             verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
                 .is_err()
