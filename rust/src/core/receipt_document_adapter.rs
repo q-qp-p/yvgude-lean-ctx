@@ -4,13 +4,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use lean_ctx_protocol::{
-    EngineInvocationV1, EngineObservationV1, EngineReceiptLinkV1, ExecutionPlanV1,
-    ProtocolReference, ReceiptCapabilityLinkV1, ReceiptLineageV1, Sha256Digest, TaskEnvelopeV1,
+    EngineReceiptLinkV1, ExecutionPlanV1, ProtocolReference, ReceiptCapabilityLinkV1,
+    ReceiptLineageV1, Sha256Digest, TaskEnvelopeV1,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::core::canonical;
+use crate::core::engine_interface::VerifiedEngineReceiptV1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReceiptDocumentInputsV1 {
@@ -36,14 +37,31 @@ impl std::error::Error for ReceiptDocumentAdapterError {}
 pub(crate) fn join_receipt_document_inputs(
     task: &TaskEnvelopeV1,
     plan: &ExecutionPlanV1,
-    invocation: &EngineInvocationV1,
-    observation: &EngineObservationV1,
+    verified: &VerifiedEngineReceiptV1,
+    receipt_link: &EngineReceiptLinkV1,
 ) -> Result<ReceiptDocumentInputsV1, ReceiptDocumentAdapterError> {
+    let invocation = verified.invocation();
+    let observation = verified.observation();
     task.validate().map_err(protocol_error)?;
     plan.validate().map_err(protocol_error)?;
+    invocation.validate().map_err(protocol_error)?;
+    if observation.receipt_link.is_some() {
+        return fail("verified Engine receipt observation must omit receipt_link");
+    }
     observation
         .validate_for(invocation)
         .map_err(protocol_error)?;
+    receipt_link
+        .validate_for(invocation)
+        .map_err(protocol_error)?;
+    if verified.digest() != &receipt_link.receipt_digest {
+        return fail("Engine receipt link digest disagrees with verified artifact");
+    }
+    if receipt_link.receipt_ref.as_str()
+        != format!("receipt:{}", receipt_link.receipt_digest.as_str())
+    {
+        return fail("Engine receipt ref does not bind its advertised digest");
+    }
     if plan.task_id != task.task_id {
         return fail("execution plan task_id does not match task envelope");
     }
@@ -73,15 +91,6 @@ pub(crate) fn join_receipt_document_inputs(
     if invocation_sources != observation_sources {
         return fail("Engine observation source lineage is not the exact invocation lineage");
     }
-    let receipt_link = observation.receipt_link.as_ref().ok_or_else(|| {
-        ReceiptDocumentAdapterError("Engine observation has no receipt link".into())
-    })?;
-    if receipt_link.receipt_ref.as_str()
-        != format!("receipt:{}", receipt_link.receipt_digest.as_str())
-    {
-        return fail("Engine receipt ref does not bind its advertised digest");
-    }
-
     let invocation_ref = canonical_digest(invocation);
     let lineage = ReceiptLineageV1 {
         task_id: task.task_id.clone(),
@@ -129,21 +138,32 @@ fn fail<T>(message: &str) -> Result<T, ReceiptDocumentAdapterError> {
 mod tests {
     use super::*;
     use lean_ctx_protocol::{
-        ContextStrategy, EngineObservationStatusV1, EngineOperationV1, EnginePolicyAdmissionV1,
-        EnginePolicyDecisionV1, ExecutionPlanV1, PlanId, ProjectId, ReceiptId,
-        ResolvedLocalEngineIdentityV1, RiskClass, SemanticVersion, SessionId, StopCondition,
-        TaskComplexity, TaskEnvelopeV1, TaskId, TraceId,
+        ContextStrategy, EngineInvocationV1, EngineObservationStatusV1, EngineObservationV1,
+        EngineOperationV1, EnginePolicyAdmissionV1, EnginePolicyDecisionV1, ExecutionPlanV1,
+        PlanId, ProjectId, ReceiptId, ResolvedLocalEngineIdentityV1, RiskClass, SemanticVersion,
+        SessionId, StopCondition, TaskComplexity, TaskEnvelopeV1, TaskId, TraceId,
     };
 
     struct Fixture {
+        _data_dir: crate::core::data_dir::IsolatedDataDir,
         task: TaskEnvelopeV1,
         plan: ExecutionPlanV1,
         invocation: EngineInvocationV1,
         observation: EngineObservationV1,
+        verified: VerifiedEngineReceiptV1,
     }
 
     fn digest(hex: char) -> Sha256Digest {
         Sha256Digest::new(format!("sha256:{}", hex.to_string().repeat(64))).unwrap()
+    }
+
+    fn artifact_digest(bytes: &[u8]) -> Sha256Digest {
+        let mut hex = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            use std::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").unwrap();
+        }
+        Sha256Digest::new(format!("sha256:{hex}")).unwrap()
     }
 
     fn reference(value: &str) -> ProtocolReference {
@@ -151,6 +171,7 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
+        let data_dir = crate::core::data_dir::isolated_data_dir();
         let task_id = TaskId::new("task-1").unwrap();
         let trace_id = TraceId::new("trace-1").unwrap();
         let project_id = ProjectId::new("project-1").unwrap();
@@ -162,7 +183,6 @@ mod tests {
         let source_ref = reference("source:1");
         let policy_ref = reference("policy:1");
         let input_digest = digest('a');
-        let receipt_digest = digest('b');
         let task = TaskEnvelopeV1 {
             schema_version: 1,
             task_id: task_id.clone(),
@@ -226,7 +246,7 @@ mod tests {
                 decision: EnginePolicyDecisionV1::Admitted,
             },
         };
-        let observation = EngineObservationV1 {
+        let mut observation_without_link = EngineObservationV1 {
             schema_version: 1,
             invocation_id,
             status: EngineObservationStatusV1::Succeeded,
@@ -235,20 +255,76 @@ mod tests {
             source_lineage: vec![reference("input:1"), source_ref],
             measurements: Vec::new(),
             failure: None,
-            receipt_link: Some(EngineReceiptLinkV1 {
-                schema_version: 1,
-                receipt_id: ReceiptId::new("receipt-1").unwrap(),
-                receipt_ref: reference(&format!("receipt:{}", receipt_digest.as_str())),
-                receipt_digest,
-                invocation_id: invocation.invocation_id.clone(),
-            }),
+            receipt_link: None,
         };
+        let artifact_bytes = crate::core::engine_interface::canonical_engine_receipt_artifact_bytes(
+            &invocation,
+            &observation_without_link,
+        );
+        let receipt_digest = artifact_digest(&artifact_bytes);
+        crate::core::engine_interface::persist_engine_artifact_content(
+            "engine-interface/v1/receipts",
+            receipt_digest.hex(),
+            "json",
+            &artifact_bytes,
+        )
+        .unwrap();
+        let verified = crate::core::engine_interface::read_verified_engine_receipt(
+            &receipt_digest,
+            &invocation,
+            &observation_without_link,
+        )
+        .unwrap();
+        let receipt_link = EngineReceiptLinkV1 {
+            schema_version: 1,
+            receipt_id: ReceiptId::new("receipt-1").unwrap(),
+            receipt_ref: reference(&format!("receipt:{}", receipt_digest.as_str())),
+            receipt_digest,
+            invocation_id: invocation.invocation_id.clone(),
+        };
+        observation_without_link.receipt_link = Some(receipt_link);
+        let observation = observation_without_link;
         Fixture {
+            _data_dir: data_dir,
             task,
             plan,
             invocation,
             observation,
+            verified,
         }
+    }
+
+    fn persist_verified(
+        invocation: &EngineInvocationV1,
+        observation: &EngineObservationV1,
+    ) -> (VerifiedEngineReceiptV1, EngineReceiptLinkV1) {
+        assert!(observation.receipt_link.is_none());
+        let artifact_bytes = crate::core::engine_interface::canonical_engine_receipt_artifact_bytes(
+            invocation,
+            observation,
+        );
+        let digest = artifact_digest(&artifact_bytes);
+        crate::core::engine_interface::persist_engine_artifact_content(
+            "engine-interface/v1/receipts",
+            digest.hex(),
+            "json",
+            &artifact_bytes,
+        )
+        .unwrap();
+        let verified = crate::core::engine_interface::read_verified_engine_receipt(
+            &digest,
+            invocation,
+            observation,
+        )
+        .unwrap();
+        let link = EngineReceiptLinkV1 {
+            schema_version: 1,
+            receipt_id: ReceiptId::new("receipt-test").unwrap(),
+            receipt_ref: reference(&format!("receipt:{}", digest.as_str())),
+            receipt_digest: digest,
+            invocation_id: invocation.invocation_id.clone(),
+        };
+        (verified, link)
     }
 
     fn assert_receipt_ref_rejected(receipt_ref: &str) {
@@ -263,8 +339,8 @@ mod tests {
             join_receipt_document_inputs(
                 &fixture.task,
                 &fixture.plan,
-                &fixture.invocation,
-                &fixture.observation,
+                &fixture.verified,
+                fixture.observation.receipt_link.as_ref().unwrap(),
             )
             .is_err()
         );
@@ -276,8 +352,8 @@ mod tests {
         let inputs = join_receipt_document_inputs(
             &fixture.task,
             &fixture.plan,
-            &fixture.invocation,
-            &fixture.observation,
+            &fixture.verified,
+            fixture.observation.receipt_link.as_ref().unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -309,29 +385,31 @@ mod tests {
 
     #[test]
     fn source_lineage_must_match_the_exact_invocation_source_set() {
-        let mut missing = fixture();
-        missing.observation.source_lineage.pop();
+        let fixture = fixture();
+        let mut missing_observation = fixture.verified.observation().clone();
+        missing_observation.source_lineage.pop();
+        let (missing_verified, missing_link) =
+            persist_verified(&fixture.invocation, &missing_observation);
         assert!(
             join_receipt_document_inputs(
-                &missing.task,
-                &missing.plan,
-                &missing.invocation,
-                &missing.observation,
+                &fixture.task,
+                &fixture.plan,
+                &missing_verified,
+                &missing_link,
             )
             .is_err()
         );
 
-        let mut extra = fixture();
-        extra
-            .observation
-            .source_lineage
-            .push(reference("source:extra"));
+        let mut extra_invocation = fixture.invocation.clone();
+        extra_invocation.source_refs.push(reference("source:extra"));
+        let (extra_verified, extra_link) =
+            persist_verified(&extra_invocation, fixture.verified.observation());
         assert!(
             join_receipt_document_inputs(
-                &extra.task,
-                &extra.plan,
-                &extra.invocation,
-                &extra.observation,
+                &fixture.task,
+                &fixture.plan,
+                &extra_verified,
+                &extra_link,
             )
             .is_err()
         );

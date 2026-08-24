@@ -17,6 +17,7 @@ use super::{
     ExecutionEvent, ExecutionLedgerError, ExecutionLedgerStore, PublishedCanonicalReceipt, Result,
     publish_canonical_receipt,
 };
+use crate::core::engine_interface::read_verified_engine_receipt;
 use crate::core::receipt_document_adapter::join_receipt_document_inputs;
 
 /// Authoritative terminal observations supplied by the host that owns the task outcome.
@@ -64,7 +65,27 @@ pub fn record_canonical_engine_receipt(
     observation
         .validate_for(invocation)
         .map_err(invalid_protocol)?;
-    let inputs = join_receipt_document_inputs(task, plan, invocation, observation)
+    let receipt_link = observation.receipt_link.as_ref().ok_or_else(|| {
+        ExecutionLedgerError::InvalidRecord(
+            "canonical receipt requires an Engine receipt link".to_owned(),
+        )
+    })?;
+    if receipt_link.receipt_ref.as_str()
+        != format!("receipt:{}", receipt_link.receipt_digest.as_str())
+    {
+        return Err(ExecutionLedgerError::InvalidRecord(
+            "Engine receipt ref does not bind its advertised digest".to_owned(),
+        ));
+    }
+    let mut expected_observation = observation.clone();
+    expected_observation.receipt_link = None;
+    let verified = read_verified_engine_receipt(
+        &receipt_link.receipt_digest,
+        invocation,
+        &expected_observation,
+    )
+    .map_err(ExecutionLedgerError::InvalidRecord)?;
+    let inputs = join_receipt_document_inputs(task, plan, &verified, receipt_link)
         .map_err(|error| ExecutionLedgerError::InvalidRecord(error.to_string()))?;
 
     if !record
@@ -394,6 +415,148 @@ mod tests {
             .is_err()
         );
         assert!(ledger.load().unwrap().is_empty());
+
+        let mut wrong_ref = observation.clone();
+        wrong_ref.receipt_link.as_mut().unwrap().receipt_ref =
+            lean_ctx_protocol::ProtocolReference::new("receipt:wrong").unwrap();
+        assert!(
+            record_canonical_engine_receipt(
+                &task,
+                &plan,
+                &invocation,
+                &wrong_ref,
+                record.clone(),
+                &signing_key,
+                &ledger,
+            )
+            .is_err()
+        );
+
+        let missing_digest = Sha256Digest::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+        let mut missing_artifact = observation.clone();
+        missing_artifact.receipt_link.as_mut().unwrap().receipt_ref =
+            lean_ctx_protocol::ProtocolReference::new(format!(
+                "receipt:{}",
+                missing_digest.as_str()
+            ))
+            .unwrap();
+        missing_artifact
+            .receipt_link
+            .as_mut()
+            .unwrap()
+            .receipt_digest = missing_digest;
+        assert!(
+            record_canonical_engine_receipt(
+                &task,
+                &plan,
+                &invocation,
+                &missing_artifact,
+                record.clone(),
+                &signing_key,
+                &ledger,
+            )
+            .is_err()
+        );
+
+        let tampered_digest = Sha256Digest::new(format!("sha256:{}", "d".repeat(64))).unwrap();
+        let tampered_path = _data_dir
+            .path()
+            .join("engine-interface/v1/receipts")
+            .join(format!("{}.json", tampered_digest.hex()));
+        std::fs::create_dir_all(tampered_path.parent().unwrap()).unwrap();
+        std::fs::write(&tampered_path, b"tampered Engine receipt bytes").unwrap();
+        let mut tampered = observation.clone();
+        tampered.receipt_link.as_mut().unwrap().receipt_ref =
+            lean_ctx_protocol::ProtocolReference::new(format!(
+                "receipt:{}",
+                tampered_digest.as_str()
+            ))
+            .unwrap();
+        tampered.receipt_link.as_mut().unwrap().receipt_digest = tampered_digest;
+        assert!(
+            record_canonical_engine_receipt(
+                &task,
+                &plan,
+                &invocation,
+                &tampered,
+                record.clone(),
+                &signing_key,
+                &ledger,
+            )
+            .is_err()
+        );
+
+        let mut mixed_invocation = invocation.clone();
+        mixed_invocation.invocation_id =
+            lean_ctx_protocol::EngineInvocationIdV1::new("mixed-invocation").unwrap();
+        let mut mixed_observation = observation.clone();
+        mixed_observation.invocation_id = mixed_invocation.invocation_id.clone();
+        mixed_observation.receipt_link = None;
+        let mixed_bytes = crate::core::engine_interface::canonical_engine_receipt_artifact_bytes(
+            &mixed_invocation,
+            &mixed_observation,
+        );
+        let mixed_digest = Sha256Digest::new(digest(&mixed_bytes)).unwrap();
+        crate::core::engine_interface::persist_engine_artifact_content(
+            "engine-interface/v1/receipts",
+            mixed_digest.hex(),
+            "json",
+            &mixed_bytes,
+        )
+        .unwrap();
+        let mut mixed_link = observation.receipt_link.clone().unwrap();
+        mixed_link.receipt_ref =
+            lean_ctx_protocol::ProtocolReference::new(format!("receipt:{}", mixed_digest.as_str()))
+                .unwrap();
+        mixed_link.receipt_digest = mixed_digest;
+        let mut mixed = observation.clone();
+        mixed.receipt_link = Some(mixed_link);
+        assert!(
+            record_canonical_engine_receipt(
+                &task,
+                &plan,
+                &invocation,
+                &mixed,
+                record.clone(),
+                &signing_key,
+                &ledger,
+            )
+            .is_err()
+        );
+
+        let self_bytes = crate::core::engine_interface::canonical_engine_receipt_artifact_bytes(
+            &invocation,
+            &observation,
+        );
+        let self_digest = Sha256Digest::new(digest(&self_bytes)).unwrap();
+        crate::core::engine_interface::persist_engine_artifact_content(
+            "engine-interface/v1/receipts",
+            self_digest.hex(),
+            "json",
+            &self_bytes,
+        )
+        .unwrap();
+        let mut self_link = observation.receipt_link.clone().unwrap();
+        self_link.receipt_ref =
+            lean_ctx_protocol::ProtocolReference::new(format!("receipt:{}", self_digest.as_str()))
+                .unwrap();
+        self_link.receipt_digest = self_digest;
+        let mut self_linked = observation.clone();
+        self_linked.receipt_link = Some(self_link);
+        assert!(
+            record_canonical_engine_receipt(
+                &task,
+                &plan,
+                &invocation,
+                &self_linked,
+                record.clone(),
+                &signing_key,
+                &ledger,
+            )
+            .is_err()
+        );
+        assert!(ledger.load().unwrap().is_empty());
+
         let published = record_canonical_engine_receipt(
             &task,
             &plan,
