@@ -68,28 +68,14 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // agent-chosen minimal selection — triage has nothing useful to strip.
     // #1492: mode="full" is documented as "verbatim, edit-ready" — triaging it
     // defeats its contract and causes agents to edit against incomplete content.
-    let triage_bypass = args.is_some_and(|a| {
-        a.get("raw")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-            || a.get("mode").and_then(|v| v.as_str()).is_some_and(|m| {
-                m == "raw"
-                    || m == "full"
-                    || m == "full-compact"
-                    || m.starts_with("lines:")
-                    || m.starts_with("anchored:")
-                    || m == "diff"
-            })
-            || a.get("aggressiveness")
-                .and_then(serde_json::Value::as_f64)
-                .is_some_and(|v| v == 0.0)
-            || a.get("fresh")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-    });
+    let triage_bypass = triage_bypass_requested(name, args);
     if !triage_bypass {
-        result_text =
-            apply_task_triage_filter(result_text, task_profile.as_ref(), &mut decision_context);
+        result_text = apply_task_triage_filter(
+            result_text,
+            task_profile.as_ref(),
+            &mut decision_context,
+            config.decision_loop.max_filter_level.min(2),
+        );
     }
 
     // #1484 (bug 3): if triage filtered lines, invalidate the dedup cache for
@@ -1009,19 +995,57 @@ pub(in crate::server) async fn dispatch_and_post_process(
     Ok(result)
 }
 
+/// `ctx_read` already owns mode selection and edit-safety guarantees. Running a
+/// second lossy pass after it resolved `auto` to `full` would hide content the
+/// caller must see (#1511), so every read result bypasses post-dispatch triage.
+fn triage_bypass_requested(
+    name: &str,
+    args: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    name == "ctx_read"
+        || args.is_some_and(|args| {
+            args.get("raw")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+                || args
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|mode| {
+                        mode == "raw"
+                            || mode == "full"
+                            || mode == "full-compact"
+                            || mode.starts_with("lines:")
+                            || mode.starts_with("anchored:")
+                            || mode == "diff"
+                    })
+                || args
+                    .get("aggressiveness")
+                    .and_then(serde_json::Value::as_f64)
+                    .is_some_and(|value| value == 0.0)
+                || args
+                    .get("fresh")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+        })
+}
+
 /// Applies task triage at the native dispatch chokepoint. If no profile is
 /// available or filtering panics, preserve the raw tool response unchanged.
 fn apply_task_triage_filter(
     result_text: String,
     profile: Option<&crate::core::triage::profile::TaskProfileLocal>,
     decision_context: &mut Option<crate::core::decision_loop_runtime::TaskContext>,
+    max_filter_level: u8,
 ) -> String {
+    if max_filter_level == 0 {
+        return result_text;
+    }
     let Some(profile) = profile else {
         return result_text;
     };
 
     let filtered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let level = context_gate::triage_filter_level(profile);
+        let level = context_gate::triage_filter_level(profile).min(max_filter_level);
         (level > 0).then(|| context_gate::apply_triage_filter(&result_text, profile, level))
     }));
     let Ok(Some((filtered_text, filtered_lines))) = filtered else {
@@ -1132,7 +1156,7 @@ fn record_decision_loop(
 
 #[cfg(test)]
 mod savings_tests {
-    use super::{apply_task_triage_filter, compression_tracker_tokens};
+    use super::{apply_task_triage_filter, compression_tracker_tokens, triage_bypass_requested};
 
     #[test]
     fn test_tracker_in_pipeline() {
@@ -1169,7 +1193,7 @@ mod savings_tests {
         });
         let raw = format!("// boilerplate\n{}", "content\n".repeat(100));
 
-        let filtered = apply_task_triage_filter(raw, Some(&profile), &mut context);
+        let filtered = apply_task_triage_filter(raw, Some(&profile), &mut context, 2);
 
         assert!(!filtered.starts_with("// boilerplate"));
         assert_eq!(context.as_ref().unwrap().filtered_lines, 1);
@@ -1181,8 +1205,36 @@ mod savings_tests {
         let mut context = None;
 
         assert_eq!(
-            apply_task_triage_filter(raw.clone(), None, &mut context),
+            apply_task_triage_filter(raw.clone(), None, &mut context, 2),
             raw
         );
+    }
+
+    #[test]
+    fn triage_filter_cap_zero_preserves_output_unchanged() {
+        let profile = crate::core::triage::profile::TaskProfileLocal {
+            confidence_milli: 500,
+            context_need_milli: 200,
+            ..Default::default()
+        };
+        let raw = format!("fn render() {{\n{}\n}}", "    token_value();\n".repeat(40));
+        let mut context = None;
+
+        assert_eq!(
+            apply_task_triage_filter(raw.clone(), Some(&profile), &mut context, 0),
+            raw
+        );
+    }
+
+    #[test]
+    fn ctx_read_always_bypasses_second_lossy_filter() {
+        let auto = serde_json::Map::from_iter([(
+            "mode".to_owned(),
+            serde_json::Value::String("auto".to_owned()),
+        )]);
+        assert!(triage_bypass_requested("ctx_read", Some(&auto)));
+
+        let shell = serde_json::Map::new();
+        assert!(!triage_bypass_requested("ctx_shell", Some(&shell)));
     }
 }

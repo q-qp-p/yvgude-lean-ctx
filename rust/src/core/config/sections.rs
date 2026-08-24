@@ -871,11 +871,18 @@ pub struct CostConfig {
 #[serde(default)]
 pub struct DecisionLoopConfig {
     pub enabled: bool,
+    /// Maximum lossy post-dispatch triage level (`0` disables output filtering).
+    /// Classification and decision-loop accounting remain active at level 0.
+    #[serde(default)]
+    pub max_filter_level: u8,
 }
 
 impl Default for DecisionLoopConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            max_filter_level: 0,
+        }
     }
 }
 
