@@ -380,6 +380,10 @@ pub fn run() {
                 super::cmd_discover(&rest);
                 return;
             }
+            "engine" => {
+                super::cmd_engine(&rest);
+                return;
+            }
             "ghost" => {
                 super::cmd_ghost(&rest);
                 return;

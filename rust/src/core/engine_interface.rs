@@ -3,7 +3,7 @@
 //! This module is deliberately crate-private. It proves the local Engine
 //! contract without promoting an SDK façade, an agent loop, or Cloud semantics.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lean_ctx_protocol::{
     CapabilityId, EngineFailureCodeV1, EngineFailureV1, EngineInterfaceV1, EngineInvocationIdV1,
@@ -27,8 +27,73 @@ const CAPABILITY_VERSION: &str = "1.0.0";
 const RECEIPT_DIRECTORY: &str = "engine-interface/v1/receipts";
 const OUTPUT_DIRECTORY: &str = "engine-interface/v1/outputs";
 const RECOVERY_DIRECTORY: &str = "engine-interface/v1/recovery";
+pub(crate) const ENGINE_TRANSPORT_VERSION: u32 = 1;
+pub(crate) const ENGINE_INTERFACE_VERSION: &str = "1.0.0";
+const ENGINE_TRANSPORT_POLICY_REF: &str = "policy:engine-transport-v1:admitted";
+const INPUT_REF_PREFIX: &str = "input:ctx-read-snapshot-sha256:";
+const SOURCE_REF_PREFIX: &str = "source:canonical-path-sha256:";
+const MAX_TRANSPORT_VIEW_BYTES: usize = 1024 * 1024;
 
 use super::engine_artifact as artifact_store;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EngineTransportError {
+    InvalidRequest,
+    UnsupportedMode,
+    UnsafeRoot,
+    SourceOutsideRoot,
+    SourceSymlink,
+    SourceUnavailable,
+    UnsupportedInput,
+    SourceChanged,
+    MalformedRecoveryRef,
+    ReceiptMismatch,
+    ObservationMismatch,
+    ViewTooLarge,
+    Internal,
+}
+
+impl EngineTransportError {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::UnsupportedMode => "unsupported_mode",
+            Self::UnsafeRoot => "unsafe_root",
+            Self::SourceOutsideRoot => "source_outside_root",
+            Self::SourceSymlink => "source_symlink",
+            Self::SourceUnavailable => "source_unavailable",
+            Self::UnsupportedInput => "unsupported_input",
+            Self::SourceChanged => "source_changed",
+            Self::MalformedRecoveryRef => "malformed_recovery_ref",
+            Self::ReceiptMismatch => "receipt_mismatch",
+            Self::ObservationMismatch => "observation_mismatch",
+            Self::ViewTooLarge => "view_too_large",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EngineTransportRecoveryDescriptor {
+    pub(crate) recovery_ref: ProtocolReference,
+    pub(crate) source_ref: ProtocolReference,
+    pub(crate) source_digest: Sha256Digest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EngineTransportView {
+    pub(crate) text: String,
+    pub(crate) output_ref: Option<ProtocolReference>,
+    pub(crate) output_digest: Option<Sha256Digest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EngineTransportResult {
+    pub(crate) view: EngineTransportView,
+    pub(crate) invocation: Option<EngineInvocationV1>,
+    pub(crate) observation: Option<EngineObservationV1>,
+    pub(crate) recovery: EngineTransportRecoveryDescriptor,
+}
 
 pub(super) fn persist_engine_artifact_content(
     directory: &str,
@@ -511,6 +576,242 @@ impl NativeContextEngine {
             .map_err(|error| format!("invalid Engine observation receipt link: {error}"))?;
         Ok((invocation, observation))
     }
+}
+
+/// Execute the standalone, versioned local Engine transport operation.
+pub(crate) fn execute_transport_context_view(
+    root: &Path,
+    path: &str,
+) -> Result<EngineTransportResult, EngineTransportError> {
+    let root = bind_transport_root(root)?;
+    let (input, canonical_path) = read_transport_source(&root, path)?;
+    if input.len() > MAX_TRANSPORT_VIEW_BYTES {
+        return Err(EngineTransportError::ViewTooLarge);
+    }
+
+    let source_digest =
+        sha256_digest(input.as_bytes()).map_err(|_| EngineTransportError::Internal)?;
+    let source_ref = source_reference(&canonical_path)?;
+    let policy_admission = EnginePolicyAdmissionV1 {
+        policy_ref: ProtocolReference::new(ENGINE_TRANSPORT_POLICY_REF)
+            .map_err(|_| EngineTransportError::Internal)?,
+        decision: EnginePolicyDecisionV1::Admitted,
+    };
+    let engine =
+        NativeContextEngine::with_root(&root).map_err(|_| EngineTransportError::UnsafeRoot)?;
+    let (invocation, observation) = engine
+        .execute_ctx_read_rooted_snapshot(&canonical_path, &input, policy_admission)
+        .map_err(|_| EngineTransportError::Internal)?;
+
+    let recovered_digest = parse_input_recovery_ref(&invocation.input_ref)?;
+    if recovered_digest != source_digest {
+        return Err(EngineTransportError::ObservationMismatch);
+    }
+    if !invocation.source_refs.contains(&source_ref) {
+        return Err(EngineTransportError::ObservationMismatch);
+    }
+
+    let receipt_link = observation
+        .receipt_link
+        .as_ref()
+        .ok_or(EngineTransportError::ReceiptMismatch)?;
+    if receipt_link.receipt_ref.as_str()
+        != format!("receipt:sha256:{}", receipt_link.receipt_digest.hex())
+    {
+        return Err(EngineTransportError::ReceiptMismatch);
+    }
+    let mut expected_observation = observation.clone();
+    expected_observation.receipt_link = None;
+    read_verified_engine_receipt(
+        &receipt_link.receipt_digest,
+        &invocation,
+        &expected_observation,
+    )
+    .map_err(|_| EngineTransportError::ReceiptMismatch)?;
+
+    let output_digest = observation
+        .output_digest
+        .clone()
+        .ok_or(EngineTransportError::ObservationMismatch)?;
+    let expected_output_ref = format!("output:{}", output_digest.hex());
+    if observation
+        .output_ref
+        .as_ref()
+        .map(ProtocolReference::as_str)
+        != Some(expected_output_ref.as_str())
+    {
+        return Err(EngineTransportError::ObservationMismatch);
+    }
+    let output = artifact_store::read_content(OUTPUT_DIRECTORY, output_digest.hex(), "txt")
+        .map_err(|_| EngineTransportError::Internal)?;
+    if output.len() > MAX_TRANSPORT_VIEW_BYTES {
+        return Err(EngineTransportError::ViewTooLarge);
+    }
+    let output_text =
+        String::from_utf8(output).map_err(|_| EngineTransportError::UnsupportedInput)?;
+    let recovery_ref = invocation.input_ref.clone();
+
+    Ok(EngineTransportResult {
+        view: EngineTransportView {
+            text: output_text,
+            output_ref: observation.output_ref.clone(),
+            output_digest: Some(output_digest),
+        },
+        invocation: Some(invocation),
+        observation: Some(observation),
+        recovery: EngineTransportRecoveryDescriptor {
+            recovery_ref,
+            source_ref,
+            source_digest,
+        },
+    })
+}
+
+/// Re-read the exact source snapshot named by a prior Engine input reference.
+pub(crate) fn recover_transport_source(
+    root: &Path,
+    path: &str,
+    recovery_ref: &ProtocolReference,
+    source_ref: &ProtocolReference,
+    source_digest: &Sha256Digest,
+) -> Result<EngineTransportResult, EngineTransportError> {
+    let root = bind_transport_root(root)?;
+    let expected_digest = parse_input_recovery_ref(recovery_ref)?;
+    if &expected_digest != source_digest {
+        return Err(EngineTransportError::MalformedRecoveryRef);
+    }
+
+    let (input, canonical_path) = read_transport_source(&root, path)?;
+    let actual_source_ref = source_reference(&canonical_path)?;
+    if &actual_source_ref != source_ref {
+        return Err(EngineTransportError::SourceChanged);
+    }
+    let actual_digest =
+        sha256_digest(input.as_bytes()).map_err(|_| EngineTransportError::Internal)?;
+    if &actual_digest != source_digest || actual_digest != expected_digest {
+        return Err(EngineTransportError::SourceChanged);
+    }
+    if input.len() > MAX_TRANSPORT_VIEW_BYTES {
+        return Err(EngineTransportError::ViewTooLarge);
+    }
+
+    Ok(EngineTransportResult {
+        view: EngineTransportView {
+            text: input,
+            output_ref: None,
+            output_digest: Some(actual_digest.clone()),
+        },
+        invocation: None,
+        observation: None,
+        recovery: EngineTransportRecoveryDescriptor {
+            recovery_ref: recovery_ref.clone(),
+            source_ref: source_ref.clone(),
+            source_digest: actual_digest,
+        },
+    })
+}
+
+fn bind_transport_root(root: &Path) -> Result<PathBuf, EngineTransportError> {
+    if root.as_os_str().is_empty() || crate::core::pathutil::is_broad_or_unsafe_root(root) {
+        return Err(EngineTransportError::UnsafeRoot);
+    }
+    let canonical = crate::core::pathutil::canonicalize_secure(root)
+        .map_err(|_| EngineTransportError::UnsafeRoot)?;
+    if !canonical.is_dir() || crate::core::pathutil::is_broad_or_unsafe_root(&canonical) {
+        return Err(EngineTransportError::UnsafeRoot);
+    }
+    Ok(canonical)
+}
+
+fn read_transport_source(
+    root: &Path,
+    path: &str,
+) -> Result<(String, String), EngineTransportError> {
+    if path.trim().is_empty() || path.as_bytes().contains(&0) {
+        return Err(EngineTransportError::InvalidRequest);
+    }
+    let requested = Path::new(path);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    // Reject a lexically outside absolute source before platform-specific
+    // canonicalization so the public transport error remains deterministic.
+    if !candidate.starts_with(root) {
+        return Err(EngineTransportError::SourceOutsideRoot);
+    }
+    crate::core::pathjail::jail_path(&candidate, root)
+        .map_err(|_| EngineTransportError::SourceOutsideRoot)?;
+    if contains_symlink_component(&candidate, root) {
+        return Err(EngineTransportError::SourceSymlink);
+    }
+    let rooted = crate::tools::ctx_read::read_file_lossy_rooted(
+        &candidate.to_string_lossy(),
+        &root.to_string_lossy(),
+    )
+    .map_err(|error| classify_source_error(&error))?;
+    let canonical = Path::new(&rooted.canonical_path);
+    if !canonical.starts_with(root) {
+        return Err(EngineTransportError::SourceOutsideRoot);
+    }
+    Ok((rooted.content, rooted.canonical_path))
+}
+
+fn classify_source_error(error: &std::io::Error) -> EngineTransportError {
+    if error
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("binary file")
+    {
+        EngineTransportError::UnsupportedInput
+    } else {
+        EngineTransportError::SourceUnavailable
+    }
+}
+
+fn contains_symlink_component(path: &Path, root: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return true;
+    };
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !current.pop() {
+                    return true;
+                }
+            }
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                if std::fs::symlink_metadata(&current)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    return true;
+                }
+            }
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => return true,
+        }
+    }
+    false
+}
+
+fn source_reference(canonical_path: &str) -> Result<ProtocolReference, EngineTransportError> {
+    let digest =
+        sha256_digest(canonical_path.as_bytes()).map_err(|_| EngineTransportError::Internal)?;
+    ProtocolReference::new(format!("{SOURCE_REF_PREFIX}{}", digest.hex()))
+        .map_err(|_| EngineTransportError::Internal)
+}
+
+fn parse_input_recovery_ref(
+    reference: &ProtocolReference,
+) -> Result<Sha256Digest, EngineTransportError> {
+    let Some(hex) = reference.as_str().strip_prefix(INPUT_REF_PREFIX) else {
+        return Err(EngineTransportError::MalformedRecoveryRef);
+    };
+    Sha256Digest::new(format!("sha256:{hex}"))
+        .map_err(|_| EngineTransportError::MalformedRecoveryRef)
 }
 
 fn engine_identity() -> Result<ResolvedLocalEngineIdentityV1, String> {

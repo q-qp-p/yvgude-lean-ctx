@@ -187,6 +187,8 @@ COMMANDS:
     init [--global]                Install shell aliases (zsh/bash/fish/PowerShell)
     init --agent <name>            Configure MCP for specific editor/agent
     read <file> [-m mode]          Read file with compression
+    engine context-view ...        Versioned local Engine context transport
+    engine recover ...             Exact source recovery for a prior Engine view
     diff <file1> <file2>           Compressed file diff
     grep <pattern> [path]          Search with compressed output
     find <pattern> [path]          Find files with compressed output
