@@ -13,9 +13,11 @@ use crate::core::data_dir;
 const ARTIFACT_BOUNDARY_REJECTED: &str = "engine_artifact_boundary_rejected";
 const ARTIFACT_BOUNDARY_UNSUPPORTED: &str = "engine_artifact_boundary_unsupported";
 const ARTIFACT_DIRECTORY_OPEN_FAILED: &str = "engine_artifact_directory_open_failed";
+#[cfg(unix)]
 const ARTIFACT_DIRECTORY_CREATE_FAILED: &str = "engine_artifact_directory_create_failed";
 const ARTIFACT_TEMP_CREATE_FAILED: &str = "engine_artifact_temp_create_failed";
 const ARTIFACT_WRITE_FAILED: &str = "engine_artifact_write_failed";
+#[cfg(unix)]
 const ARTIFACT_PERMISSIONS_FAILED: &str = "engine_artifact_permissions_failed";
 const ARTIFACT_SYNC_FAILED: &str = "engine_artifact_sync_failed";
 const ARTIFACT_PUBLISH_FAILED: &str = "engine_artifact_publish_failed";
@@ -23,10 +25,12 @@ const ARTIFACT_PUBLISH_UNSUPPORTED: &str = "engine_artifact_publish_unsupported"
 const ARTIFACT_LEAF_UNTRUSTED: &str = "engine_artifact_leaf_untrusted";
 const ARTIFACT_DIGEST_MISMATCH: &str = "engine_artifact_digest_mismatch";
 const ARTIFACT_CLEANUP_FAILED: &str = "engine_artifact_cleanup_failed";
+const ARTIFACT_SIZE_LIMIT_EXCEEDED: &str = "engine_artifact_size_limit_exceeded";
 
 #[cfg(test)]
 thread_local! {
     static TEST_FAIL_BEFORE_PUBLISH: Cell<bool> = const { Cell::new(false) };
+    static TEST_FAIL_CAPABILITY_PREFLIGHT: Cell<bool> = const { Cell::new(false) };
     #[cfg(windows)]
     static TEST_FAIL_TEMP_VALIDATION: Cell<bool> = const { Cell::new(false) };
 }
@@ -34,6 +38,11 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn inject_test_pre_publish_failure() {
     TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.set(true));
+}
+
+#[cfg(test)]
+pub(super) fn inject_test_capability_preflight_failure() {
+    TEST_FAIL_CAPABILITY_PREFLIGHT.with(|failpoint| failpoint.set(true));
 }
 
 #[cfg(all(test, windows))]
@@ -45,6 +54,17 @@ fn test_pre_publish_failure() -> bool {
     #[cfg(test)]
     {
         TEST_FAIL_BEFORE_PUBLISH.with(|failpoint| failpoint.replace(false))
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+fn test_capability_preflight_failure() -> bool {
+    #[cfg(test)]
+    {
+        TEST_FAIL_CAPABILITY_PREFLIGHT.with(|failpoint| failpoint.replace(false))
     }
     #[cfg(not(test))]
     {
@@ -83,29 +103,43 @@ pub(super) fn read_content(
     validate_artifact_name(digest, extension)?;
     let configured_root =
         data_dir::lean_ctx_data_dir().map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
+    let bytes = read_bounded_content(&configured_root, directory, digest, extension, 1024 * 1024)?;
+    if hex_sha256(&bytes) != digest {
+        return Err(ARTIFACT_DIGEST_MISMATCH.to_owned());
+    }
+    Ok(bytes)
+}
+
+pub(super) fn read_bounded_content(
+    configured_root: &Path,
+    directory: &str,
+    digest: &str,
+    extension: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    validate_artifact_name(digest, extension)?;
+    if max_bytes == 0 {
+        return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+    }
 
     #[cfg(unix)]
-    let mut artifact = unix::read_content(&configured_root, directory, digest, extension)?;
-    #[cfg(windows)]
-    let mut artifact = windows::read_content(&configured_root, directory, digest, extension)?;
-
-    #[cfg(any(unix, windows))]
     {
-        let mut bytes = Vec::new();
-        artifact
-            .read_to_end(&mut bytes)
-            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        Ok(bytes)
+        unix::read_bounded_content(configured_root, directory, digest, extension, max_bytes)
+    }
+
+    #[cfg(windows)]
+    {
+        windows::read_bounded_content(configured_root, directory, digest, extension, max_bytes)
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (configured_root, directory, digest, extension);
+        let _ = (configured_root, directory, digest, extension, max_bytes);
         Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())
     }
 }
 
-#[cfg(any(unix, windows))]
+#[cfg(all(test, any(unix, windows)))]
 pub(super) fn persist_content_with_test_barrier(
     directory: &str,
     digest: &str,
@@ -210,7 +244,8 @@ mod unix {
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
     const DIRECTORY_FLAGS: libc::c_int =
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-    const LEAF_READ_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    const LEAF_READ_FLAGS: libc::c_int =
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
     const TEMP_FLAGS: libc::c_int =
         libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW;
 
@@ -264,14 +299,15 @@ mod unix {
         bind_barrier: Option<Box<dyn FnOnce()>>,
         publish_barrier: Option<Box<dyn FnOnce()>>,
     ) -> Result<std::fs::File, String> {
-        let root = bind_root(configured_root)?;
-        let directories = prepare_directory(&root, relative)?;
+        let root_components = validate_absolute_components(configured_root)?;
+        let relative_components = validate_relative_components(relative)?;
+        let final_name = cstring(format!("{digest}.{extension}"))?;
+        let directories = bind_directories(&root_components, &relative_components, &final_name)?;
 
         if let Some(barrier) = bind_barrier {
             barrier();
         }
 
-        let final_name = cstring(format!("{digest}.{extension}"))?;
         let mut temp = create_temp_artifact(&directories.final_dir, &final_name)?;
         if let Err(error) = write_temp_artifact(&mut temp, bytes) {
             return Err(temp.cleanup().err().unwrap_or(error));
@@ -293,164 +329,210 @@ mod unix {
         )
     }
 
-    pub(super) fn read_content(
+    pub(super) fn read_bounded_content(
         configured_root: &Path,
         relative: &str,
         digest: &str,
         extension: &str,
-    ) -> Result<std::fs::File, String> {
-        let root = bind_existing_root(configured_root)?;
-        let directories = prepare_existing_directory(&root, relative)?;
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        let root_components = validate_absolute_components(configured_root)?;
+        let relative_components = validate_relative_components(relative)?;
         let final_name = cstring(format!("{digest}.{extension}"))?;
-        read_existing_artifact(&directories.final_dir, &final_name, digest)
+        let final_dir = bind_existing_directory(&root_components, &relative_components)?;
+        read_existing_artifact_bounded(final_dir.as_raw_fd(), &final_name, max_bytes)
     }
 
-    fn bind_existing_root(configured_root: &Path) -> Result<std::fs::File, String> {
-        if !configured_root.is_absolute() {
+    fn validate_absolute_components(path: &Path) -> Result<Vec<CString>, String> {
+        if !path.is_absolute() {
             return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
         }
-        let path = CString::new(configured_root.as_os_str().as_bytes())
-            .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
-        // SAFETY: path is NUL-terminated and File immediately owns a successful fd.
-        let fd = unsafe { libc::open(path.as_ptr(), ROOT_FLAGS) };
-        if fd < 0 {
-            return match errno() {
-                libc::ELOOP | libc::ENOTDIR => Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
-                _ => Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
+        #[cfg(target_os = "macos")]
+        let normalized = normalize_macos_root_alias(path);
+        #[cfg(target_os = "macos")]
+        let path = normalized.as_path();
+        let mut names = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::RootDir => {}
+                Component::Normal(name) => names.push(
+                    CString::new(name.as_bytes())
+                        .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?,
+                ),
+                _ => return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
+            }
+        }
+        if names.is_empty() {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        Ok(names)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn normalize_macos_root_alias(path: &Path) -> std::path::PathBuf {
+        for (alias, target) in [
+            (Path::new("/var"), Path::new("/private/var")),
+            (Path::new("/tmp"), Path::new("/private/tmp")),
+            (Path::new("/etc"), Path::new("/private/etc")),
+        ] {
+            if let Ok(suffix) = path.strip_prefix(alias) {
+                return target.join(suffix);
+            }
+        }
+        path.to_path_buf()
+    }
+
+    fn validate_relative_components(path: &str) -> Result<Vec<CString>, String> {
+        let mut names = Vec::new();
+        for component in Path::new(path).components() {
+            let Component::Normal(name) = component else {
+                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
             };
+            names.push(
+                CString::new(name.as_bytes()).map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?,
+            );
         }
-        // SAFETY: fd is a successful descriptor owned immediately by File.
-        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
-    }
-
-    fn bind_root(configured_root: &Path) -> Result<std::fs::File, String> {
-        if !configured_root.is_absolute() {
+        if names.is_empty() {
             return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
         }
-        let (mut root, missing) = open_existing_ancestor(configured_root)?;
-        for name in missing.iter().rev() {
-            let child_fd = open_directory_at(root.as_raw_fd(), name)?;
-            // SAFETY: child_fd is a successful descriptor owned immediately.
-            root = unsafe { std::fs::File::from_raw_fd(child_fd) };
-        }
-        chmod_directory(root.as_raw_fd())?;
-        Ok(root)
+        Ok(names)
     }
 
-    fn open_existing_ancestor(path: &Path) -> Result<(std::fs::File, Vec<CString>), String> {
-        let mut cursor = path.to_path_buf();
-        let mut missing = Vec::new();
-        loop {
-            let path = CString::new(cursor.as_os_str().as_bytes())
-                .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
-            // SAFETY: path is NUL-terminated; File owns a successful descriptor.
-            let fd = unsafe { libc::open(path.as_ptr(), ROOT_FLAGS) };
-            if fd >= 0 {
-                // SAFETY: fd is a successful descriptor owned immediately by File.
-                return Ok((unsafe { std::fs::File::from_raw_fd(fd) }, missing));
-            }
-            match errno() {
-                libc::ENOENT => {
-                    let name = cursor
-                        .file_name()
-                        .ok_or_else(|| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
-                    missing.push(
-                        CString::new(name.as_bytes())
-                            .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?,
-                    );
-                    cursor = cursor
-                        .parent()
-                        .ok_or_else(|| ARTIFACT_BOUNDARY_REJECTED.to_owned())?
-                        .to_path_buf();
-                }
-                libc::ELOOP | libc::ENOTDIR => {
-                    return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-                }
-                _ => return Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
-            }
-        }
-    }
-
-    fn prepare_directory(
-        root: &std::fs::File,
-        relative: &str,
+    fn bind_directories(
+        root_components: &[CString],
+        relative_components: &[CString],
+        final_name: &CString,
     ) -> Result<ArtifactDirectory, String> {
-        let mut parent = root
+        let slash = CString::new("/").expect("static root path");
+        // SAFETY: slash is NUL-terminated; File owns the successful descriptor.
+        let anchor_fd = unsafe { libc::open(slash.as_ptr(), ROOT_FLAGS) };
+        if anchor_fd < 0 {
+            return Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned());
+        }
+        // SAFETY: anchor_fd is a successful descriptor owned immediately.
+        let mut handles = vec![unsafe { std::fs::File::from_raw_fd(anchor_fd) }];
+        let names: Vec<&CString> = root_components
+            .iter()
+            .chain(relative_components.iter())
+            .collect();
+        let mut opened = 0usize;
+
+        for name in &names {
+            let parent = handles
+                .last()
+                .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
+            match open_existing_directory_at(parent.as_raw_fd(), name)? {
+                Some(child) => {
+                    handles.push(child);
+                    opened += 1;
+                }
+                None => break,
+            }
+        }
+
+        let existing_fd = handles
+            .last()
+            .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?
+            .as_raw_fd();
+        validate_component_lengths(existing_fd, &names, final_name)?;
+        preflight_publication(existing_fd)?;
+
+        for handle in handles.iter().skip(root_components.len()) {
+            chmod_directory(handle.as_raw_fd())?;
+        }
+
+        for (index, name) in names.iter().enumerate().skip(opened) {
+            let parent_fd = handles
+                .last()
+                .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?
+                .as_raw_fd();
+            let child = open_or_create_directory_at(parent_fd, name)?;
+            if index + 1 >= root_components.len() {
+                chmod_directory(child.as_raw_fd())?;
+            }
+            handles.push(child);
+        }
+
+        let root = handles
+            .get(root_components.len())
+            .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?
             .try_clone()
             .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
-        let mut saw_component = false;
-
-        for component in Path::new(relative).components() {
-            let Component::Normal(component) = component else {
-                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-            };
-            saw_component = true;
-            let name = CString::new(component.as_bytes())
-                .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
-            let child_fd = open_directory_at(parent.as_raw_fd(), &name)?;
-            // SAFETY: child_fd is a successful descriptor owned immediately.
-            let child = unsafe { std::fs::File::from_raw_fd(child_fd) };
-            if !child
-                .metadata()
-                .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED)?
-                .is_dir()
-            {
-                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-            }
-            chmod_directory(child.as_raw_fd())?;
-            parent = child;
-        }
-
-        if !saw_component {
-            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-        }
+        let final_dir = handles
+            .last()
+            .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?
+            .try_clone()
+            .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
         Ok(ArtifactDirectory {
-            _root: root
-                .try_clone()
-                .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?,
-            final_dir: parent,
+            _root: root,
+            final_dir,
         })
     }
 
-    fn prepare_existing_directory(
-        root: &std::fs::File,
-        relative: &str,
-    ) -> Result<ArtifactDirectory, String> {
-        let mut parent = root
-            .try_clone()
-            .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
-        let mut saw_component = false;
-        for component in Path::new(relative).components() {
-            let Component::Normal(component) = component else {
-                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-            };
-            saw_component = true;
-            let name = CString::new(component.as_bytes())
-                .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
-            // SAFETY: parent fd is held and name is NUL-terminated.
-            let child_fd =
-                unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), DIRECTORY_FLAGS) };
-            if child_fd < 0 {
-                return match errno() {
-                    libc::ELOOP | libc::ENOTDIR => Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
-                    _ => Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
-                };
-            }
-            // SAFETY: child_fd is a successful descriptor owned immediately.
-            parent = unsafe { std::fs::File::from_raw_fd(child_fd) };
+    fn bind_existing_directory(
+        root_components: &[CString],
+        relative_components: &[CString],
+    ) -> Result<std::fs::File, String> {
+        let slash = CString::new("/").expect("static root path");
+        // SAFETY: slash is NUL-terminated; File owns the successful descriptor.
+        let anchor_fd = unsafe { libc::open(slash.as_ptr(), ROOT_FLAGS) };
+        if anchor_fd < 0 {
+            return Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned());
         }
-        if !saw_component {
-            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        // SAFETY: anchor_fd is a successful descriptor owned immediately.
+        let mut directory = unsafe { std::fs::File::from_raw_fd(anchor_fd) };
+        for name in root_components.iter().chain(relative_components) {
+            directory = open_existing_directory_at(directory.as_raw_fd(), name)?
+                .ok_or_else(|| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
         }
-        Ok(ArtifactDirectory {
-            _root: root
-                .try_clone()
-                .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?,
-            final_dir: parent,
-        })
+        Ok(directory)
     }
 
-    fn open_directory_at(parent_fd: RawFd, name: &CString) -> Result<RawFd, String> {
+    fn validate_component_lengths(
+        directory_fd: RawFd,
+        names: &[&CString],
+        final_name: &CString,
+    ) -> Result<(), String> {
+        // SAFETY: directory_fd is a live descriptor and _PC_NAME_MAX is a
+        // side-effect-free limit query for the target filesystem.
+        let name_max = unsafe { libc::fpathconf(directory_fd, libc::_PC_NAME_MAX) };
+        let name_max =
+            usize::try_from(name_max).map_err(|_| ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())?;
+        let longest_temp = final_name
+            .as_bytes()
+            .len()
+            .checked_add("..tmp.127".len())
+            .ok_or_else(|| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
+        if names.iter().any(|name| name.as_bytes().len() > name_max)
+            || final_name.as_bytes().len() > name_max
+            || longest_temp > name_max
+        {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        Ok(())
+    }
+
+    fn open_existing_directory_at(
+        parent_fd: RawFd,
+        name: &CString,
+    ) -> Result<Option<std::fs::File>, String> {
+        // SAFETY: parent_fd is held and name is NUL-terminated.
+        let child_fd = unsafe { libc::openat(parent_fd, name.as_ptr(), DIRECTORY_FLAGS) };
+        if child_fd >= 0 {
+            // SAFETY: child_fd is a successful descriptor owned immediately.
+            return Ok(Some(unsafe { std::fs::File::from_raw_fd(child_fd) }));
+        }
+        match errno() {
+            libc::ENOENT => Ok(None),
+            libc::ELOOP | libc::ENOTDIR => Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
+            _ => Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
+        }
+    }
+
+    fn open_or_create_directory_at(
+        parent_fd: RawFd,
+        name: &CString,
+    ) -> Result<std::fs::File, String> {
         // SAFETY: parent_fd is held and name is NUL-terminated.
         let mut child_fd = unsafe { libc::openat(parent_fd, name.as_ptr(), DIRECTORY_FLAGS) };
         if child_fd < 0 && errno() == libc::ENOENT {
@@ -469,7 +551,73 @@ mod unix {
                 ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()
             });
         }
-        Ok(child_fd)
+        // SAFETY: child_fd is a successful descriptor owned immediately.
+        Ok(unsafe { std::fs::File::from_raw_fd(child_fd) })
+    }
+
+    fn preflight_publication(directory_fd: RawFd) -> Result<(), String> {
+        if super::test_capability_preflight_failure() {
+            return Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned());
+        }
+        let mut probe = None;
+        for suffix in 0..128u16 {
+            let name = cstring(format!(".leanctx-engine-capability-probe-{suffix}"))?;
+            // SAFETY: directory_fd is held and name is NUL-terminated.
+            let fd = unsafe {
+                libc::openat(
+                    directory_fd,
+                    name.as_ptr(),
+                    libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_WRONLY
+                        | libc::O_CLOEXEC
+                        | libc::O_NOFOLLOW,
+                    0o600,
+                )
+            };
+            if fd >= 0 {
+                // SAFETY: fd is a successful descriptor owned immediately.
+                probe = Some((unsafe { std::fs::File::from_raw_fd(fd) }, name));
+                break;
+            }
+            if errno() != libc::EEXIST {
+                return Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned());
+            }
+        }
+        let (probe_file, probe_name) =
+            probe.ok_or_else(|| ARTIFACT_PUBLISH_UNSUPPORTED.to_owned())?;
+
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                directory_fd,
+                probe_name.as_ptr(),
+                directory_fd,
+                probe_name.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(target_os = "macos")]
+        // SAFETY: directory_fd is held and both probe names are NUL-terminated.
+        let result = unsafe {
+            libc::renameatx_np(
+                directory_fd,
+                probe_name.as_ptr(),
+                directory_fd,
+                probe_name.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned());
+
+        let supported = result == 0 || errno() == libc::EEXIST;
+        drop(probe_file);
+        let cleanup = unlink_name(directory_fd, &probe_name);
+        if !supported || cleanup.is_err() {
+            return Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned());
+        }
+        Ok(())
     }
 
     fn create_temp_artifact(
@@ -532,59 +680,36 @@ mod unix {
         }
 
         #[cfg(target_os = "linux")]
-        {
-            // SAFETY: both directory descriptors are held; names are NUL-terminated.
-            let result = unsafe {
-                libc::renameat2(
-                    directory_fd,
-                    temp.name.as_ptr(),
-                    directory_fd,
-                    final_name.as_ptr(),
-                    libc::RENAME_NOREPLACE,
-                )
-            };
-            if result == 0 {
-                if !named_entry_matches_file(temp_file, directory_fd, final_name) {
-                    let cleanup = unlink_name(directory_fd, final_name);
-                    temp.disarmed = true;
-                    return Err(cleanup
-                        .err()
-                        .unwrap_or_else(|| ARTIFACT_LEAF_UNTRUSTED.to_owned()));
-                }
-                temp.disarmed = true;
-                return finish_published(temp, directory_fd);
-            }
-            if errno() == libc::EEXIST {
-                return verify_collision(temp, directory_fd, final_name, digest);
-            }
-            if !matches!(errno(), libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP) {
-                temp.cleanup()?;
-                return Err(ARTIFACT_PUBLISH_FAILED.to_owned());
-            }
-        }
-
-        // SAFETY: both directory_fd references are held; names are NUL-terminated.
-        let linked = unsafe {
-            libc::linkat(
+        let published = unsafe {
+            libc::renameat2(
                 directory_fd,
                 temp.name.as_ptr(),
                 directory_fd,
                 final_name.as_ptr(),
-                0,
+                libc::RENAME_NOREPLACE,
             )
         };
-        if linked == 0 {
+        #[cfg(target_os = "macos")]
+        // SAFETY: directory_fd is held and both names are NUL-terminated.
+        let published = unsafe {
+            libc::renameatx_np(
+                directory_fd,
+                temp.name.as_ptr(),
+                directory_fd,
+                final_name.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let published = -1;
+
+        if published == 0 {
             if !named_entry_matches_file(temp_file, directory_fd, final_name) {
-                let final_cleanup = unlink_name(directory_fd, final_name);
-                let temp_cleanup = temp.cleanup();
-                return Err(final_cleanup
+                let cleanup = unlink_name(directory_fd, final_name);
+                temp.disarmed = true;
+                return Err(cleanup
                     .err()
-                    .or_else(|| temp_cleanup.err())
                     .unwrap_or_else(|| ARTIFACT_LEAF_UNTRUSTED.to_owned()));
-            }
-            // SAFETY: directory_fd is held and temp name is NUL-terminated.
-            if unsafe { libc::unlinkat(directory_fd, temp.name.as_ptr(), 0) } != 0 {
-                return Err(ARTIFACT_CLEANUP_FAILED.to_owned());
             }
             temp.disarmed = true;
             return finish_published(temp, directory_fd);
@@ -592,13 +717,8 @@ mod unix {
         if errno() == libc::EEXIST {
             return verify_collision(temp, directory_fd, final_name, digest);
         }
-        let publish_errno = errno();
         temp.cleanup()?;
-        if [libc::EPERM, libc::ENOTSUP, libc::EOPNOTSUPP, libc::EXDEV].contains(&publish_errno) {
-            Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned())
-        } else {
-            Err(ARTIFACT_PUBLISH_FAILED.to_owned())
-        }
+        Err(ARTIFACT_PUBLISH_FAILED.to_owned())
     }
 
     fn named_entry_matches_file(file: &std::fs::File, directory_fd: RawFd, name: &CString) -> bool {
@@ -694,37 +814,39 @@ mod unix {
         Ok(artifact)
     }
 
-    fn read_existing_artifact(
-        directory: &std::fs::File,
+    fn read_existing_artifact_bounded(
+        directory_fd: RawFd,
         final_name: &CString,
-        digest: &str,
-    ) -> Result<std::fs::File, String> {
-        // SAFETY: directory fd is held and final_name is NUL-terminated.
-        let fd =
-            unsafe { libc::openat(directory.as_raw_fd(), final_name.as_ptr(), LEAF_READ_FLAGS) };
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        // SAFETY: directory_fd is held and final_name is NUL-terminated.
+        let fd = unsafe { libc::openat(directory_fd, final_name.as_ptr(), LEAF_READ_FLAGS) };
         if fd < 0 {
             return Err(ARTIFACT_LEAF_UNTRUSTED.to_owned());
         }
         // SAFETY: fd is a successful descriptor owned immediately.
-        let mut artifact = unsafe { std::fs::File::from_raw_fd(fd) };
-        if !artifact
+        let artifact = unsafe { std::fs::File::from_raw_fd(fd) };
+        let metadata = artifact
             .metadata()
-            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?
-            .is_file()
-        {
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        if !metadata.is_file() {
             return Err(ARTIFACT_LEAF_UNTRUSTED.to_owned());
         }
-        let mut bytes = Vec::new();
+        if metadata.len() > max_bytes as u64 {
+            return Err(ARTIFACT_SIZE_LIMIT_EXCEEDED.to_owned());
+        }
+        let read_limit = max_bytes
+            .checked_add(1)
+            .ok_or_else(|| ARTIFACT_BOUNDARY_REJECTED.to_owned())? as u64;
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
         artifact
+            .take(read_limit)
             .read_to_end(&mut bytes)
             .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        if hex_sha256(&bytes) != digest {
-            return Err(ARTIFACT_DIGEST_MISMATCH.to_owned());
+        if bytes.len() > max_bytes {
+            return Err(ARTIFACT_SIZE_LIMIT_EXCEEDED.to_owned());
         }
-        artifact
-            .rewind()
-            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        Ok(artifact)
+        Ok(bytes)
     }
 
     fn chmod_directory(fd: RawFd) -> Result<(), String> {
@@ -774,10 +896,10 @@ mod windows {
     use std::ptr::{null, null_mut};
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FILE_CREATE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_DELETE, FILE_DISPOSITION_INFORMATION_EX,
-        FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT,
-        FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT, FileDispositionInformationEx,
-        FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
+        FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_DELETE,
+        FILE_DISPOSITION_INFORMATION_EX, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+        FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_SYNCHRONOUS_IO_NONALERT,
+        FileDispositionInformationEx, FileRenameInformationEx, NtCreateFile, NtSetInformationFile,
     };
     use windows_sys::Win32::Foundation::{
         ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
@@ -811,6 +933,7 @@ mod windows {
         | SYNCHRONIZE;
     const LEAF_ACCESS: u32 =
         FILE_READ_DATA | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE;
+    const READ_LEAF_ACCESS: u32 = FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
 
     struct ArtifactDirectory {
         _root: std::fs::File,
@@ -856,12 +979,14 @@ mod windows {
         bind_barrier: Option<Box<dyn FnOnce()>>,
         publish_barrier: Option<Box<dyn FnOnce()>>,
     ) -> Result<std::fs::File, String> {
-        let root = bind_root(configured_root)?;
-        let directories = prepare_directory(&root, relative)?;
+        let (anchor, root_components) = split_windows_root(configured_root)?;
+        let relative_components = validate_relative_components(relative)?;
+        let final_name = wide_component(&format!("{digest}.{extension}"))?;
+        let root = bind_root(&anchor, &root_components)?;
+        let directories = prepare_directory(&root, &relative_components)?;
         if let Some(barrier) = bind_barrier {
             barrier();
         }
-        let final_name = wide_component(&format!("{digest}.{extension}"))?;
         let mut temp = create_temp_artifact(&directories.final_dir, &final_name)?;
         if let Err(error) = write_temp_artifact(&mut temp, bytes) {
             return Err(temp.cleanup().err().unwrap_or(error));
@@ -876,21 +1001,23 @@ mod windows {
         publish_temp_artifact(&mut temp, &directories.final_dir, &final_name, digest)
     }
 
-    pub(super) fn read_content(
+    pub(super) fn read_bounded_content(
         configured_root: &Path,
         relative: &str,
         digest: &str,
         extension: &str,
-    ) -> Result<std::fs::File, String> {
-        let root = bind_root_existing(configured_root)?;
-        let directories = prepare_existing_directory(&root, relative)?;
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        let (anchor, root_components) = split_windows_root(configured_root)?;
+        let relative_components = validate_relative_components(relative)?;
         let final_name = wide_component(&format!("{digest}.{extension}"))?;
-        read_existing_artifact(&directories.final_dir, &final_name, digest)
+        let root = bind_root_existing(&anchor, &root_components)?;
+        let directories = prepare_existing_directory(&root, &relative_components)?;
+        read_existing_artifact_bounded(&directories.final_dir, &final_name, max_bytes)
     }
 
-    fn bind_root_existing(configured_root: &Path) -> Result<std::fs::File, String> {
-        let (anchor, components) = split_windows_root(configured_root)?;
-        let name = wide_path(&anchor);
+    fn bind_root(anchor: &Path, components: &[Vec<u16>]) -> Result<std::fs::File, String> {
+        let name = wide_path(anchor);
         let handle = unsafe {
             CreateFileW(
                 name.as_ptr(),
@@ -908,24 +1035,41 @@ mod windows {
         // SAFETY: handle is successful and transferred immediately to File.
         let mut root = unsafe { std::fs::File::from_raw_handle(handle) };
         ensure_directory(&root)?;
-        ensure_opened_path(&root, &anchor)?;
+        ensure_opened_path(&root, anchor)?;
         let options = FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT;
+        let mut missing = None;
+        let mut opened = 0usize;
         for (index, name) in components.iter().enumerate() {
-            let access = if index + 1 == components.len() {
-                DIRECTORY_ACCESS
-            } else {
-                TRAVERSE_DIRECTORY_ACCESS
-            };
-            root = open_relative(&root, name, access, FILE_OPEN, options)
+            match open_relative(&root, name, DIRECTORY_ACCESS, FILE_OPEN, options) {
+                Ok(child) => {
+                    ensure_directory(&child)?;
+                    root = child;
+                    opened += 1;
+                }
+                Err(ArtifactStatus::Missing) => {
+                    missing = Some(index);
+                    break;
+                }
+                Err(status) => return Err(map_directory_status(status)),
+            }
+        }
+        if opened == 0 {
+            return Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned());
+        }
+        preflight_native_operations(&root)?;
+        let Some(first_missing) = missing else {
+            return Ok(root);
+        };
+        for name in &components[first_missing..] {
+            root = open_relative(&root, name, DIRECTORY_ACCESS, FILE_OPEN_IF, options)
                 .map_err(map_directory_status)?;
             ensure_directory(&root)?;
         }
         Ok(root)
     }
 
-    fn bind_root(configured_root: &Path) -> Result<std::fs::File, String> {
-        let (anchor, components) = split_windows_root(configured_root)?;
-        let name = wide_path(&anchor);
+    fn bind_root_existing(anchor: &Path, components: &[Vec<u16>]) -> Result<std::fs::File, String> {
+        let name = wide_path(anchor);
         let handle = unsafe {
             CreateFileW(
                 name.as_ptr(),
@@ -943,9 +1087,12 @@ mod windows {
         // SAFETY: handle is successful and transferred immediately to File.
         let mut root = unsafe { std::fs::File::from_raw_handle(handle) };
         ensure_directory(&root)?;
-        ensure_opened_path(&root, &anchor)?;
-        for (index, name) in components.iter().enumerate() {
-            root = open_root_component(&root, name, index + 1 == components.len())?;
+        ensure_opened_path(&root, anchor)?;
+        let options = FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT;
+        for name in components {
+            root = open_relative(&root, name, TRAVERSE_DIRECTORY_ACCESS, FILE_OPEN, options)
+                .map_err(map_directory_status)?;
+            ensure_directory(&root)?;
         }
         Ok(root)
     }
@@ -976,27 +1123,18 @@ mod windows {
         Ok((anchor, components))
     }
 
-    fn open_root_component(
-        parent: &std::fs::File,
-        name: &[u16],
-        is_final: bool,
-    ) -> Result<std::fs::File, String> {
-        let options = FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT;
-        let access = if is_final {
-            DIRECTORY_ACCESS
-        } else {
-            TRAVERSE_DIRECTORY_ACCESS
-        };
-        let child = match open_relative(parent, name, access, FILE_OPEN, options) {
-            Ok(child) => child,
-            Err(ArtifactStatus::Missing) => {
-                open_relative(parent, name, DIRECTORY_ACCESS, FILE_OPEN_IF, options)
-                    .map_err(map_directory_status)?
-            }
-            Err(status) => return Err(map_directory_status(status)),
-        };
-        ensure_directory(&child)?;
-        Ok(child)
+    fn validate_relative_components(path: &str) -> Result<Vec<Vec<u16>>, String> {
+        let mut components = Vec::new();
+        for component in Path::new(path).components() {
+            let Component::Normal(component) = component else {
+                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+            };
+            components.push(wide_os_component(component)?);
+        }
+        if components.is_empty() {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        Ok(components)
     }
 
     fn ensure_opened_path(file: &std::fs::File, expected: &Path) -> Result<(), String> {
@@ -1078,21 +1216,15 @@ mod windows {
 
     fn prepare_directory(
         root: &std::fs::File,
-        relative: &str,
+        components: &[Vec<u16>],
     ) -> Result<ArtifactDirectory, String> {
         let mut parent = root
             .try_clone()
             .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
-        let mut saw_component = false;
-        for component in Path::new(relative).components() {
-            let Component::Normal(component) = component else {
-                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-            };
-            saw_component = true;
-            let name = wide_os_component(component)?;
+        for name in components {
             let child = open_relative(
                 &parent,
-                &name,
+                name,
                 DIRECTORY_ACCESS,
                 FILE_OPEN_IF,
                 FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
@@ -1100,9 +1232,6 @@ mod windows {
             .map_err(map_directory_status)?;
             ensure_directory(&child)?;
             parent = child;
-        }
-        if !saw_component {
-            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
         }
         Ok(ArtifactDirectory {
             _root: root
@@ -1114,22 +1243,16 @@ mod windows {
 
     fn prepare_existing_directory(
         root: &std::fs::File,
-        relative: &str,
+        components: &[Vec<u16>],
     ) -> Result<ArtifactDirectory, String> {
         let mut parent = root
             .try_clone()
             .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
-        let mut saw_component = false;
-        for component in Path::new(relative).components() {
-            let Component::Normal(component) = component else {
-                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-            };
-            saw_component = true;
-            let name = wide_os_component(component)?;
+        for name in components {
             let child = open_relative(
                 &parent,
-                &name,
-                DIRECTORY_ACCESS,
+                name,
+                TRAVERSE_DIRECTORY_ACCESS,
                 FILE_OPEN,
                 FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
             )
@@ -1137,15 +1260,70 @@ mod windows {
             ensure_directory(&child)?;
             parent = child;
         }
-        if !saw_component {
-            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
-        }
         Ok(ArtifactDirectory {
             _root: root
                 .try_clone()
                 .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?,
             final_dir: parent,
         })
+    }
+
+    fn preflight_native_operations(directory: &std::fs::File) -> Result<(), String> {
+        if super::test_capability_preflight_failure() {
+            return Err(ARTIFACT_PUBLISH_UNSUPPORTED.to_owned());
+        }
+
+        let mut probe = None;
+        for suffix in 0..128u16 {
+            let name = wide_component(&format!(".leanctx-engine-capability-probe-{suffix}"))?;
+            match open_relative(
+                directory,
+                &name,
+                TEMP_ACCESS,
+                FILE_CREATE,
+                FILE_NON_DIRECTORY_FILE
+                    | FILE_OPEN_REPARSE_POINT
+                    | FILE_SYNCHRONOUS_IO_NONALERT
+                    | FILE_DELETE_ON_CLOSE,
+            ) {
+                Ok(file) => {
+                    probe = Some((file, name));
+                    break;
+                }
+                Err(ArtifactStatus::Collision) => continue,
+                Err(_) => return Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned()),
+            }
+        }
+        let (probe, probe_name) = probe.ok_or_else(|| ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())?;
+        ensure_regular(&probe).map_err(|_| ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())?;
+
+        if !matches!(
+            rename_relative(&probe, directory.as_raw_handle(), &probe_name),
+            Ok(PublishResult::Published | PublishResult::Collision)
+        ) {
+            return Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned());
+        }
+
+        // Exercise the exact disposition request used to clean production
+        // temporaries. FILE_DELETE_ON_CLOSE remains only a fail-safe if the
+        // information class is rejected.
+        mark_delete(&probe).map_err(|_| ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())?;
+        drop(probe);
+
+        match open_relative(
+            directory,
+            &probe_name,
+            TEMP_ACCESS,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+        ) {
+            Err(ArtifactStatus::Missing) => Ok(()),
+            Ok(stale) => {
+                let _ = mark_delete(&stale);
+                Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())
+            }
+            Err(_) => Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned()),
+        }
     }
 
     fn create_temp_artifact(
@@ -1287,34 +1465,38 @@ mod windows {
         Ok(artifact)
     }
 
-    fn read_existing_artifact(
+    fn read_existing_artifact_bounded(
         directory: &std::fs::File,
         final_name: &[u16],
-        digest: &str,
-    ) -> Result<std::fs::File, String> {
-        let mut artifact = open_relative(
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        let artifact = open_relative(
             directory,
             final_name,
-            LEAF_ACCESS,
+            READ_LEAF_ACCESS,
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
         )
-        .map_err(|status| match status {
-            ArtifactStatus::Unsupported => ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned(),
-            _ => ARTIFACT_LEAF_UNTRUSTED.to_owned(),
-        })?;
-        ensure_regular(&artifact).map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        let mut bytes = Vec::new();
+        .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        ensure_regular(&artifact)?;
+        let metadata = artifact
+            .metadata()
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        if metadata.len() > max_bytes as u64 {
+            return Err(ARTIFACT_SIZE_LIMIT_EXCEEDED.to_owned());
+        }
+        let read_limit = max_bytes
+            .checked_add(1)
+            .ok_or_else(|| ARTIFACT_BOUNDARY_REJECTED.to_owned())? as u64;
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
         artifact
+            .take(read_limit)
             .read_to_end(&mut bytes)
             .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        if hex_sha256(&bytes) != digest {
-            return Err(ARTIFACT_DIGEST_MISMATCH.to_owned());
+        if bytes.len() > max_bytes {
+            return Err(ARTIFACT_SIZE_LIMIT_EXCEEDED.to_owned());
         }
-        artifact
-            .rewind()
-            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
-        Ok(artifact)
+        Ok(bytes)
     }
 
     #[derive(Clone, Copy)]

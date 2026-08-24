@@ -30,8 +30,7 @@ const RECEIPT_DIRECTORY: &str = "engine-interface/v1/receipts";
 const OUTPUT_DIRECTORY: &str = "engine-interface/v1/outputs";
 const RECOVERY_DIRECTORY: &str = "engine-interface/v1/recovery";
 
-#[path = "engine_artifact.rs"]
-mod artifact_store;
+use super::engine_artifact as artifact_store;
 
 pub(super) fn persist_engine_artifact_content(
     directory: &str,
