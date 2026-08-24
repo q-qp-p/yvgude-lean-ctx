@@ -251,14 +251,14 @@ mod tests {
         }
     }
 
-    fn assert_receipt_ref_rejected(receipt_ref: String) {
+    fn assert_receipt_ref_rejected(receipt_ref: &str) {
         let mut fixture = fixture();
         fixture
             .observation
             .receipt_link
             .as_mut()
             .unwrap()
-            .receipt_ref = reference(&receipt_ref);
+            .receipt_ref = reference(receipt_ref);
         assert!(
             join_receipt_document_inputs(
                 &fixture.task,
@@ -303,7 +303,7 @@ mod tests {
             format!("receipt:{digest}:suffix"),
             digest,
         ] {
-            assert_receipt_ref_rejected(receipt_ref);
+            assert_receipt_ref_rejected(&receipt_ref);
         }
     }
 
