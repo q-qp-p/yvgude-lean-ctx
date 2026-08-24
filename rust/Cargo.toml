@@ -440,6 +440,7 @@ tikv-jemallocator = { version = "0.7", optional = true }
 tikv-jemalloc-ctl = { version = "0.7", optional = true }
 
 [dev-dependencies]
+leanctx-verify = { path = "../packages/leanctx-verify" }
 criterion = { version = "0.8", features = ["html_reports"] }
 filetime = "0.2"
 insta = "1.48"

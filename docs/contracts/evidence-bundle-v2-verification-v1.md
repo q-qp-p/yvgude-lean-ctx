@@ -25,9 +25,15 @@ present inventory item. Task-envelope, execution-plan, engine-invocation, and
 accepted-outcome sidecars are canonical JSON whose payload IDs, task join,
 admitted capability/version, policy admission, input/source binding, and outcome
 state agree exactly with the signed receipt; matching digest/kind alone is
-insufficient. The verifier recomputes the receipt ID, verifies its
+insufficient. When a signed receipt carries `engine_observation` evidence, the
+verifier additionally requires exactly one canonical observation, joins its
+invocation and source lineage to the receipt's invocation, validates terminal,
+measurement and failure semantics, resolves its output digest, and requires its
+Engine-receipt link to be signed evidence. Unknown status/classification/failure
+semantics, duplicate observations, missing linkage, or a delivery-only
+`Accepted` inference fail closed. The verifier recomputes the receipt ID, verifies its
 canonical padded-Base64 Ed25519 signature under the external trust store, and
-enforces the Task → Plan → Invocation → Receipt → Outcome joins from
+enforces the Task → Plan → Invocation → Observation → Receipt → Outcome joins from
 `receipt-document-v1.md` before any claim is eligible.
 
 ## Canonical signature and key identity

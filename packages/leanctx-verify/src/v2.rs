@@ -799,6 +799,7 @@ fn validate_inventory(value: &Value) -> Result<(), String> {
                 "task_envelope",
                 "execution_plan",
                 "engine_invocation",
+                "engine_observation",
                 "accepted_outcome",
                 "measurement",
                 "assumption",

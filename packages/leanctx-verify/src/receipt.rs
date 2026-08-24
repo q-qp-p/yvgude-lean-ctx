@@ -7,8 +7,9 @@ use ed25519_dalek::{Signature, Verifier};
 use serde_json::{Map, Value};
 
 use super::v2::{
-    array, canonical_bytes, check_fields, field, is_digest, is_rfc3339_utc_timestamp, object,
-    parse_canonical_json, string, trusted_receipt_key, unsigned, TrustStore,
+    array, canonical_bytes, check_fields, field, is_content_id, is_digest,
+    is_rfc3339_utc_timestamp, object, parse_canonical_json, string, trusted_receipt_key, unsigned,
+    TrustStore,
 };
 use crate::verify::sha256_hex;
 
@@ -71,10 +72,12 @@ pub(crate) fn verify_receipt_document(
         &["succeeded", "failed", "rejected", "cancelled", "timed_out"],
         "receipt.status",
     )?;
-    let task_id = verify_lineage(field(root, "lineage", "receipt")?, inventory)?;
+    let (task_id, invocation_id, invocation_ref) =
+        verify_lineage(field(root, "lineage", "receipt")?, inventory)?;
     let (chain_id, sequence_number, previous_receipt_id, previous_signature_digest) =
         verify_chain(field(root, "chain", "receipt")?, &receipt_id)?;
     let evidence = verify_evidence(field(root, "evidence_refs", "receipt")?, inventory)?;
+    verify_engine_observation(&evidence, inventory, &invocation_id, &invocation_ref)?;
     verify_values(field(root, "values", "receipt")?, &evidence)?;
     let outcome = verify_outcome(
         field(root, "outcome", "receipt")?,
@@ -151,7 +154,7 @@ pub(crate) fn verify_receipt_document(
 fn verify_lineage(
     value: &Value,
     inventory: &BTreeMap<String, InventoryArtifact>,
-) -> Result<String, String> {
+) -> Result<(String, String, String), String> {
     let lineage = object(value, "receipt.lineage")?;
     check_fields(
         lineage,
@@ -252,7 +255,11 @@ fn verify_lineage(
         &policy_refs,
         &capability_bindings,
     )?;
-    Ok(task_id.to_owned())
+    Ok((
+        task_id.to_owned(),
+        invocation_id.to_owned(),
+        invocation_ref.to_owned(),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -448,9 +455,6 @@ fn verify_lineage_artifacts(
         return Err("engine invocation input_digest is malformed".to_string());
     }
     require_artifact_kind(input_digest, inventory, "engine input", "replay_input")?;
-    if input_ref != format!("id:{input_digest}") {
-        return Err("engine invocation input_ref does not match input_digest".to_string());
-    }
     let source_refs = array(
         field(invocation, "source_refs", "engine invocation")?,
         "engine invocation source_refs",
@@ -464,7 +468,9 @@ fn verify_lineage_artifacts(
             .as_str()
             .ok_or_else(|| "engine invocation source_refs must be strings".to_string())?;
         bounded(reference, "engine invocation source_ref")?;
-        require_artifact_ref(reference, inventory, "engine invocation source_ref")?;
+        if is_content_id(reference) {
+            require_artifact_ref(reference, inventory, "engine invocation source_ref")?;
+        }
         if !unique_sources.insert(reference) {
             return Err("engine invocation source_refs must be unique".to_string());
         }
@@ -582,7 +588,10 @@ fn verify_evidence(
         require_artifact(digest, inventory, "receipt evidence")?;
         let inventory_kind = inventory.get(digest).map(|artifact| artifact.kind.as_str());
         let kind_matches = match kind {
-            "measurement" => matches!(inventory_kind, Some("measurement" | "quality_measurement")),
+            "measurement" => matches!(
+                inventory_kind,
+                Some("measurement" | "quality_measurement" | "engine_observation")
+            ),
             "outcome" => matches!(inventory_kind, Some("accepted_outcome")),
             "runtime" => matches!(inventory_kind, Some("run_metadata")),
             "methodology" => matches!(inventory_kind, Some("claim_basis")),
@@ -625,6 +634,273 @@ fn verify_evidence(
         )?;
     }
     Ok(evidence)
+}
+
+fn verify_engine_observation(
+    evidence: &BTreeMap<String, String>,
+    inventory: &BTreeMap<String, InventoryArtifact>,
+    invocation_id: &str,
+    invocation_ref: &str,
+) -> Result<(), String> {
+    let observations: Vec<(&str, &InventoryArtifact)> = evidence
+        .keys()
+        .filter_map(|digest| {
+            inventory
+                .get(digest)
+                .filter(|artifact| artifact.kind == "engine_observation")
+                .map(|artifact| (digest.as_str(), artifact))
+        })
+        .collect();
+    if observations.is_empty() {
+        return Ok(());
+    }
+    let [(observation_digest, observation_artifact)] = observations.as_slice() else {
+        return Err("receipt permits at most one engine_observation artifact".to_string());
+    };
+    let observation = parse_canonical_json(&observation_artifact.bytes, "engine observation")?;
+    let observation = object(&observation, "engine observation")?;
+    check_fields(
+        observation,
+        "engine observation",
+        &[
+            "schema_version",
+            "invocation_id",
+            "status",
+            "source_lineage",
+            "measurements",
+        ],
+        &["output_ref", "output_digest", "failure", "receipt_link"],
+    )?;
+    require_schema_v1(observation, "engine observation")?;
+    if string(observation, "invocation_id", "engine observation")? != invocation_id {
+        return Err("engine observation invocation_id disagrees with receipt lineage".to_string());
+    }
+
+    let invocation = artifact_document(inventory, invocation_ref, "engine invocation")?;
+    let invocation = object(&invocation, "engine invocation")?;
+    let invocation_sources = array(
+        field(invocation, "source_refs", "engine invocation")?,
+        "engine invocation.source_refs",
+    )?
+    .iter()
+    .map(|value| {
+        value
+            .as_str()
+            .ok_or_else(|| "engine invocation source_refs must be strings".to_string())
+    })
+    .collect::<Result<BTreeSet<_>, _>>()?;
+    let source_lineage = array(
+        field(observation, "source_lineage", "engine observation")?,
+        "engine observation.source_lineage",
+    )?;
+    if source_lineage.is_empty() || source_lineage.len() > 32 {
+        return Err("engine observation source_lineage must contain 1..=32 refs".to_string());
+    }
+    let mut unique_sources = BTreeSet::new();
+    for source in source_lineage {
+        let source = source
+            .as_str()
+            .ok_or_else(|| "engine observation source_lineage must be strings".to_string())?;
+        bounded(source, "engine observation source_lineage")?;
+        if !invocation_sources.contains(source) || !unique_sources.insert(source) {
+            return Err(
+                "engine observation source_lineage is duplicate or absent from invocation"
+                    .to_string(),
+            );
+        }
+    }
+
+    let status = string(observation, "status", "engine observation")?;
+    one_of(
+        status,
+        &["succeeded", "degraded", "rejected", "failed"],
+        "engine observation.status",
+    )?;
+    let output_ref = observation.get("output_ref").and_then(Value::as_str);
+    let output_digest = observation.get("output_digest").and_then(Value::as_str);
+    if output_ref.is_some() != output_digest.is_some() {
+        return Err(
+            "engine observation output_ref and output_digest must appear together".to_string(),
+        );
+    }
+    if let Some(digest) = output_digest {
+        if !is_digest(digest) || output_ref != Some(format!("output:{}", &digest[7..]).as_str()) {
+            return Err("engine observation output reference is invalid".to_string());
+        }
+        require_artifact(digest, inventory, "engine observation output")?;
+    }
+
+    let failure = observation.get("failure");
+    match (status, output_ref.is_some(), failure) {
+        ("succeeded", true, None)
+        | ("degraded", true, Some(_))
+        | ("failed", false, Some(_))
+        | ("rejected", false, Some(_)) => {}
+        _ => return Err("engine observation terminal semantics are inconsistent".to_string()),
+    }
+    if let Some(failure) = failure {
+        let failure = object(failure, "engine observation.failure")?;
+        check_fields(
+            failure,
+            "engine observation.failure",
+            &["code", "retryable_by_host"],
+            &["recovery_ref"],
+        )?;
+        let code = string(failure, "code", "engine observation.failure")?;
+        one_of(
+            code,
+            &[
+                "policy_rejected",
+                "source_unavailable",
+                "source_integrity_mismatch",
+                "resource_limit",
+                "unsupported_operation",
+                "internal",
+            ],
+            "engine observation.failure.code",
+        )?;
+        let retryable = field(failure, "retryable_by_host", "engine observation.failure")?
+            .as_bool()
+            .ok_or_else(|| {
+                "engine observation.failure.retryable_by_host must be boolean".to_string()
+            })?;
+        let recovery = failure
+            .get("recovery_ref")
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| {
+                        "engine observation.failure.recovery_ref must be a string".to_string()
+                    })
+                    .and_then(|value| bounded(value, "engine observation.failure.recovery_ref"))
+            })
+            .transpose()?;
+        if (code == "policy_rejected" && (retryable || recovery.is_some()))
+            || (matches!(code, "source_unavailable" | "source_integrity_mismatch")
+                && recovery.is_none())
+            || (status == "rejected" && code != "policy_rejected")
+        {
+            return Err("engine observation failure semantics are inconsistent".to_string());
+        }
+    }
+    if string(
+        object(
+            field(invocation, "policy_admission", "engine invocation")?,
+            "engine invocation.policy_admission",
+        )?,
+        "decision",
+        "engine invocation.policy_admission",
+    )? == "admitted"
+        && status == "rejected"
+    {
+        return Err("admitted invocation cannot have a rejected observation".to_string());
+    }
+
+    let measurements = array(
+        field(observation, "measurements", "engine observation")?,
+        "engine observation.measurements",
+    )?;
+    if measurements.len() > MAX_ITEMS {
+        return Err("engine observation measurements exceed 64".to_string());
+    }
+    let mut names = BTreeSet::new();
+    for measurement in measurements {
+        let measurement = object(measurement, "engine observation measurement")?;
+        check_fields(
+            measurement,
+            "engine observation measurement",
+            &["name", "unit", "classification"],
+            &["value"],
+        )?;
+        let name = bounded(
+            string(measurement, "name", "engine observation measurement")?,
+            "engine observation measurement.name",
+        )?;
+        bounded(
+            string(measurement, "unit", "engine observation measurement")?,
+            "engine observation measurement.unit",
+        )?;
+        if !names.insert(name) {
+            return Err("engine observation measurement names must be unique".to_string());
+        }
+        let classification = string(
+            measurement,
+            "classification",
+            "engine observation measurement",
+        )?;
+        one_of(
+            classification,
+            &["measured", "estimated", "unavailable"],
+            "engine observation measurement.classification",
+        )?;
+        let value = measurement.get("value");
+        if classification == "unavailable" {
+            if value.is_some() {
+                return Err("unavailable engine measurement must omit value".to_string());
+            }
+        } else {
+            let Some(value) = value else {
+                return Err("measured or estimated engine measurement requires value".to_string());
+            };
+            if value.as_u64().is_none() {
+                return Err("engine observation measurement value must be unsigned".to_string());
+            }
+        }
+    }
+
+    let receipt_link = object(
+        field(observation, "receipt_link", "engine observation")?,
+        "engine observation.receipt_link",
+    )?;
+    check_fields(
+        receipt_link,
+        "engine observation.receipt_link",
+        &[
+            "schema_version",
+            "receipt_id",
+            "receipt_ref",
+            "receipt_digest",
+            "invocation_id",
+        ],
+        &[],
+    )?;
+    require_schema_v1(receipt_link, "engine observation.receipt_link")?;
+    if string(
+        receipt_link,
+        "invocation_id",
+        "engine observation.receipt_link",
+    )? != invocation_id
+    {
+        return Err("engine observation receipt link invocation_id disagrees".to_string());
+    }
+    bounded(
+        string(
+            receipt_link,
+            "receipt_id",
+            "engine observation.receipt_link",
+        )?,
+        "engine observation.receipt_link.receipt_id",
+    )?;
+    let receipt_digest = string(
+        receipt_link,
+        "receipt_digest",
+        "engine observation.receipt_link",
+    )?;
+    if !is_digest(receipt_digest)
+        || string(
+            receipt_link,
+            "receipt_ref",
+            "engine observation.receipt_link",
+        )? != format!("receipt:{receipt_digest}")
+        || !evidence.contains_key(receipt_digest)
+    {
+        return Err("engine observation receipt link is not signed evidence".to_string());
+    }
+    require_artifact(receipt_digest, inventory, "engine receipt artifact")?;
+    if !is_digest(observation_digest) {
+        return Err("engine observation evidence digest is malformed".to_string());
+    }
+    Ok(())
 }
 
 fn verify_values(value: &Value, evidence: &BTreeMap<String, String>) -> Result<(), String> {
@@ -1260,6 +1536,82 @@ fn one_of(value: &str, allowed: &[&str], label: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn artifact(kind: &str, bytes: Vec<u8>) -> (String, InventoryArtifact) {
+        (
+            format!("sha256:{}", sha256_hex(&bytes)),
+            InventoryArtifact {
+                kind: kind.to_owned(),
+                bytes,
+            },
+        )
+    }
+
+    fn observation_fixture(
+        observation_invocation_id: &str,
+        status: &str,
+    ) -> (
+        BTreeMap<String, String>,
+        BTreeMap<String, InventoryArtifact>,
+        String,
+        String,
+    ) {
+        let (output_digest, output) = artifact("replay_input", b"real engine output".to_vec());
+        let (engine_receipt_digest, engine_receipt) =
+            artifact("measurement", b"canonical engine receipt".to_vec());
+        let invocation = canonical_bytes(&serde_json::json!({
+            "schema_version": 1,
+            "invocation_id": "invocation-real",
+            "engine": {"engine_id": "lean-ctx-local", "engine_version": "3.9.20"},
+            "operation": {
+                "capability_id": "capability://leanctx/context",
+                "capability_version": "1.0.0"
+            },
+            "input_ref": "input:fixture",
+            "input_digest": output_digest.clone(),
+            "source_refs": ["input:fixture", "source:fixture"],
+            "policy_admission": {"policy_ref": "policy:fixture", "decision": "admitted"}
+        }));
+        let (invocation_ref, invocation) = artifact("engine_invocation", invocation);
+        let observation = canonical_bytes(&serde_json::json!({
+            "schema_version": 1,
+            "invocation_id": observation_invocation_id,
+            "status": status,
+            "output_ref": format!("output:{}", &output_digest[7..]),
+            "output_digest": output_digest.clone(),
+            "source_lineage": ["input:fixture", "source:fixture"],
+            "measurements": [{
+                "name": "output_tokens",
+                "unit": "token",
+                "classification": "measured",
+                "value": 4
+            }],
+            "receipt_link": {
+                "schema_version": 1,
+                "receipt_id": "engine-receipt-real",
+                "receipt_ref": format!("receipt:{engine_receipt_digest}"),
+                "receipt_digest": engine_receipt_digest.clone(),
+                "invocation_id": "invocation-real"
+            }
+        }));
+        let (observation_digest, observation) = artifact("engine_observation", observation);
+        let evidence = BTreeMap::from([
+            (observation_digest.clone(), "measurement".to_owned()),
+            (engine_receipt_digest.clone(), "measurement".to_owned()),
+        ]);
+        let inventory = BTreeMap::from([
+            (output_digest, output),
+            (engine_receipt_digest, engine_receipt),
+            (invocation_ref.clone(), invocation),
+            (observation_digest, observation),
+        ]);
+        (
+            evidence,
+            inventory,
+            "invocation-real".to_owned(),
+            invocation_ref,
+        )
+    }
+
     #[test]
     fn direct_artifact_resolution_rehashes_bytes() {
         let advertised = format!("sha256:{}", "0".repeat(64));
@@ -1273,5 +1625,40 @@ mod tests {
 
         assert!(artifact_document(&inventory, &advertised, "task").is_err());
         assert!(require_artifact(&advertised, &inventory, "task").is_err());
+    }
+
+    #[test]
+    fn engine_observation_semantics_bind_invocation_and_receipt_evidence() {
+        let (evidence, inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref).unwrap();
+
+        let (evidence, inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-other", "succeeded");
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+
+        let (evidence, inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "unknown");
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
+
+        let (mut evidence, inventory, invocation_id, invocation_ref) =
+            observation_fixture("invocation-real", "succeeded");
+        let engine_receipt_digest = inventory
+            .iter()
+            .find_map(|(digest, artifact)| {
+                (artifact.kind == "measurement").then_some(digest.clone())
+            })
+            .unwrap();
+        evidence.remove(&engine_receipt_digest);
+        assert!(
+            verify_engine_observation(&evidence, &inventory, &invocation_id, &invocation_ref)
+                .is_err()
+        );
     }
 }

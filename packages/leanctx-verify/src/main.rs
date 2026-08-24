@@ -13,12 +13,8 @@
 use std::io::Read;
 use std::process::ExitCode;
 
-mod receipt;
-mod v2;
-mod verify;
-
-use v2::verify_v2_document;
-use verify::{verify_bundle, StepStatus, MAX_ARCHIVE_BYTES};
+use leanctx_verify::v2::verify_v2_document;
+use leanctx_verify::verify::{verify_bundle, StepStatus, MAX_ARCHIVE_BYTES};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

@@ -315,6 +315,7 @@ fn parse_v2_artifact(
         "task_envelope" => Kind::TaskEnvelope,
         "execution_plan" => Kind::ExecutionPlan,
         "engine_invocation" => Kind::EngineInvocation,
+        "engine_observation" => Kind::EngineObservation,
         "accepted_outcome" => Kind::AcceptedOutcome,
         "measurement" => Kind::Measurement,
         "assumption" => Kind::Assumption,

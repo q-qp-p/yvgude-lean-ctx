@@ -6,9 +6,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer as _, SigningKey};
 use lean_ctx_protocol::{
     AcceptanceState, ContextBalanceV1, EngineInvocationV1, EngineObservationV1, ExecutionPlanV1,
-    ReceiptChainLinkV1, ReceiptDocumentV1, ReceiptEvidenceRefV1, ReceiptKeyAdmissionV1,
-    ReceiptOutcomeLinkV1, ReceiptSignerV1, ReceiptTerminalStatusV1, ReceiptValueV1, Sha256Digest,
-    TaskEnvelopeV1, UtcTimestamp,
+    ReceiptChainLinkV1, ReceiptDocumentV1, ReceiptEvidenceKindV1, ReceiptEvidenceRefV1,
+    ReceiptKeyAdmissionV1, ReceiptOutcomeLinkV1, ReceiptSignerV1, ReceiptTerminalStatusV1,
+    ReceiptValueV1, Sha256Digest, SignatureStatus, TaskEnvelopeV1, UtcTimestamp,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -49,7 +49,7 @@ pub fn record_canonical_engine_receipt(
     plan: &ExecutionPlanV1,
     invocation: &EngineInvocationV1,
     observation: &EngineObservationV1,
-    record: CanonicalReceiptRecordV1,
+    mut record: CanonicalReceiptRecordV1,
     signing_key: &SigningKey,
     ledger: &ExecutionLedgerStore,
 ) -> Result<PublishedCanonicalReceipt> {
@@ -87,6 +87,23 @@ pub fn record_canonical_engine_receipt(
     .map_err(ExecutionLedgerError::InvalidRecord)?;
     let inputs = join_receipt_document_inputs(task, plan, &verified, receipt_link)
         .map_err(|error| ExecutionLedgerError::InvalidRecord(error.to_string()))?;
+    let observation_bytes = crate::core::canonical::canonical_serialize(observation);
+    let observation_digest = Sha256Digest::new(digest(&observation_bytes))
+        .map_err(|error| ExecutionLedgerError::InvalidRecord(error.to_string()))?;
+    if !record
+        .evidence_refs
+        .iter()
+        .any(|evidence| evidence.digest == observation_digest)
+    {
+        record.evidence_refs.push(ReceiptEvidenceRefV1 {
+            kind: ReceiptEvidenceKindV1::Measurement,
+            uri: lean_ctx_protocol::ProtocolReference::new("artifact://engine/observation")
+                .map_err(invalid_protocol)?,
+            digest: observation_digest.clone(),
+            media_type: "application/json".to_owned(),
+            signature_status: SignatureStatus::NotSigned,
+        });
+    }
 
     if !record
         .evidence_refs
@@ -101,6 +118,7 @@ pub fn record_canonical_engine_receipt(
     persist_lineage_sidecar(&task, &inputs.lineage.task_ref)?;
     persist_lineage_sidecar(&plan, &inputs.lineage.plan_ref)?;
     persist_lineage_sidecar(&invocation, &inputs.lineage.invocation_ref)?;
+    persist_lineage_sidecar(observation, &observation_digest)?;
     persist_lineage_sidecar(&task.agent_id, &inputs.lineage.identity_ref)?;
     persist_lineage_sidecar(
         &invocation.policy_admission,
@@ -280,10 +298,19 @@ fn invalid_protocol(error: impl std::fmt::Display) -> ExecutionLedgerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::customer_proof_v2::{
+        CustomerProofArtifact, CustomerProofArtifactKind, CustomerProofDraftV2,
+        CustomerProofRedactionClass, CustomerProofSigner, CustomerProofTrustBasis,
+        assemble_customer_proof_v2,
+    };
     use lean_ctx_protocol::{
         EnginePolicyAdmissionV1, EnginePolicyDecisionV1, ReceiptEvidenceKindV1,
         ReceiptValueClassificationV1, SignatureStatus,
     };
+
+    fn canonical<T: serde::Serialize>(value: &T) -> Vec<u8> {
+        crate::core::canonical::canonical_serialize(value)
+    }
 
     #[test]
     fn native_engine_to_signed_receipt_and_ledger_is_one_verified_path() {
@@ -572,7 +599,7 @@ mod tests {
             &plan,
             &invocation,
             &observation,
-            record,
+            record.clone(),
             &signing_key,
             &ledger,
         )
@@ -593,5 +620,248 @@ mod tests {
             receipt.lineage.invocation_id,
             invocation.invocation_id.as_str()
         );
+
+        let mut treatment_record = record;
+        treatment_record.chain.chain_id = "chain-2".to_owned();
+        let treatment_ledger =
+            ExecutionLedgerStore::new(root.path().join("treatment-ledger.jsonl"));
+        let treatment = record_canonical_engine_receipt(
+            &task,
+            &plan,
+            &invocation,
+            &observation,
+            treatment_record,
+            &signing_key,
+            &treatment_ledger,
+        )
+        .unwrap();
+
+        let artifact = |kind, path: &str, bytes: Vec<u8>| CustomerProofArtifact {
+            kind,
+            path: path.to_owned(),
+            redaction_class: CustomerProofRedactionClass::None,
+            bytes,
+        };
+        let task_bytes = canonical(&task);
+        let plan_bytes = canonical(&plan);
+        let invocation_bytes = canonical(&invocation);
+        let observation_bytes = canonical(&observation);
+        let identity_bytes = canonical(&task.agent_id);
+        let policy_bytes = canonical(&invocation.policy_admission);
+        let input_bytes = b"stable native context".to_vec();
+        let engine_receipt_bytes = crate::core::engine_artifact::read_content(
+            "engine-interface/v1/receipts",
+            engine_receipt.receipt_digest.hex(),
+            "json",
+        )
+        .unwrap();
+        let quality_bytes = crate::core::canonical::canonical_serialize(&serde_json::json!({
+            "method": "provider_free_engine_fixture",
+            "score_milli": 1000
+        }));
+        let replay_result_bytes = b"standalone-verifier-accepted".to_vec();
+        let mut artifacts = vec![
+            artifact(
+                CustomerProofArtifactKind::ArmReceipt,
+                "arms/control.json",
+                std::fs::read(&published.path).unwrap(),
+            ),
+            artifact(
+                CustomerProofArtifactKind::ArmReceipt,
+                "arms/treatment.json",
+                std::fs::read(&treatment.path).unwrap(),
+            ),
+            artifact(
+                CustomerProofArtifactKind::TaskEnvelope,
+                "lineage/task.json",
+                task_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::ExecutionPlan,
+                "lineage/plan.json",
+                plan_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::EngineInvocation,
+                "lineage/invocation.json",
+                invocation_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::EngineObservation,
+                "lineage/observation.json",
+                observation_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::RunMetadata,
+                "lineage/identity.json",
+                identity_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::ClaimBasis,
+                "lineage/policy.json",
+                policy_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::Measurement,
+                "engine/receipt.json",
+                engine_receipt_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::QualityMeasurement,
+                "quality/measurement.json",
+                quality_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::ReplayInput,
+                "replay/input.txt",
+                input_bytes,
+            ),
+            artifact(
+                CustomerProofArtifactKind::ReplayResult,
+                "replay/result.txt",
+                replay_result_bytes,
+            ),
+        ];
+        let control_ref = artifacts[0].reference();
+        let treatment_ref = artifacts[1].reference();
+        let quality_ref = artifacts[9].reference();
+        let replay_input_ref = artifacts[10].reference();
+        let replay_result_ref = artifacts[11].reference();
+        let workload_digest = invocation.input_digest.as_str();
+        let shared_identity = serde_json::json!({
+            "provider": "leanctx",
+            "model": "local-engine",
+            "source_commit": "git:2c7d0044302d50af8d218a041b45726ad710757c",
+            "workload_digest": workload_digest
+        });
+        let arm = |role: &str, arm_id: &str, evidence_ref: &str| {
+            serde_json::json!({
+                "role": role,
+                "arm_id": arm_id,
+                "identity": shared_identity.clone(),
+                "status": "complete",
+                "measurements": {
+                    "input_tokens": 4,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 4,
+                    "latency_ms": 1,
+                    "cost": {
+                        "currency": "USD",
+                        "amount_micros": 0,
+                        "status": "observed"
+                    },
+                    "status": "observed"
+                },
+                "evidence_refs": [evidence_ref]
+            })
+        };
+        let draft = CustomerProofDraftV2 {
+            created_at: "2026-08-24T12:00:00Z".to_owned(),
+            status: "complete".to_owned(),
+            subject: serde_json::json!({
+                "customer_ref": "customer:provider-free",
+                "project_ref": "project:lean-ctx",
+                "workload_ref": format!("id:{workload_digest}")
+            }),
+            matched_arms: serde_json::json!({
+                "match_id": format!("id:{}", digest(b"provider-free-engine-match")),
+                "match_basis": ["provider", "model", "source_commit", "workload_digest"],
+                "shared_identity": shared_identity,
+                "control": arm(
+                    "control",
+                    &format!("id:{}", published.receipt_id),
+                    &control_ref
+                ),
+                "treatment": arm(
+                    "treatment",
+                    &format!("id:{}", treatment.receipt_id),
+                    &treatment_ref
+                )
+            }),
+            quality: serde_json::json!({
+                "status": "preserved",
+                "metric": "score_milli",
+                "control_score_milli": 1000,
+                "treatment_score_milli": 1000,
+                "confidence": "high",
+                "method": "automated",
+                "evidence_refs": [quality_ref.clone()]
+            }),
+            replay: serde_json::json!({
+                "status": "replayable",
+                "mode": "offline",
+                "determinism": "same_inputs_expected",
+                "input_refs": [replay_input_ref],
+                "result_refs": [replay_result_ref],
+                "notes": "real NativeContextEngine provider-free fixture"
+            }),
+            limitations: serde_json::json!({
+                "known_limitations": [],
+                "unproven": ["omission_before_capture"]
+            }),
+            redaction: serde_json::json!({
+                "class": "none",
+                "policy": "no_redaction",
+                "reversible": false,
+                "notes": "provider-free local fixture"
+            }),
+            claims: serde_json::json!([{
+                "claim_id": format!("id:{}", digest(b"provider-free-quality-claim")),
+                "claim_type": "quality_preserved",
+                "statement": "The real local Engine run preserved fixture quality.",
+                "claim_validity": "supported",
+                "scope": "matched_run",
+                "basis_refs": [quality_ref]
+            }]),
+        };
+        let proof = assemble_customer_proof_v2(
+            &draft,
+            std::mem::take(&mut artifacts),
+            CustomerProofSigner {
+                signing_key: &signing_key,
+                trust_basis: CustomerProofTrustBasis::OutOfBand,
+            },
+        )
+        .unwrap();
+        let proof_root = root.path().join("provider-free-proof");
+        proof.write_to(&proof_root).unwrap();
+        let bundle_key_id = format!("id:{}", digest(signing_key.verifying_key().as_bytes()));
+        let trust_store = crate::core::canonical::canonical_serialize(&serde_json::json!({
+            "schema_version": "leanctx.customer-proof-trust-store/v1",
+            "trust_revision": 1,
+            "evaluated_at": "2026-08-24T12:00:00Z",
+            "trusted_signers": [{
+                "trusted_signer_ref": format!("signer:{bundle_key_id}"),
+                "key_id": bundle_key_id,
+                "public_key": crate::core::agent_identity::hex_encode(
+                    signing_key.verifying_key().as_bytes()
+                ),
+                "allowed_trust_bases": ["out_of_band"],
+                "receipt_key_ids": ["test-key"],
+                "revision": 1,
+                "admitted_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2027-01-01T00:00:00Z",
+                "revoked_at": null
+            }],
+            "receipt_chain_heads": [
+                {
+                    "chain_id": "chain-1",
+                    "sequence_number": 1,
+                    "receipt_id": published.receipt_id
+                },
+                {
+                    "chain_id": "chain-2",
+                    "sequence_number": 1,
+                    "receipt_id": treatment.receipt_id
+                }
+            ]
+        }));
+        let report = leanctx_verify::v2::verify_v2_document(
+            &proof.canonical_json,
+            Some(&trust_store),
+            Some(&proof_root),
+        );
+        assert!(report.valid, "{:?}", report.steps);
+        assert!(report.proof_eligible);
     }
 }

@@ -33,7 +33,7 @@ pub struct Report {
 /// (future bundle versions), unknown files anywhere else are an error.
 const RESERVED_DIRS: &[&str] = &["slo/", "registry/"];
 
-pub(crate) const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 1_024;
 const MAX_ENTRY_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;

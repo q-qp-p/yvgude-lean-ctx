@@ -2073,6 +2073,7 @@ dependencies = [
  "jsonschema",
  "lean-ctx-ocla",
  "lean-ctx-protocol",
+ "leanctx-verify",
  "libc",
  "libloading 0.8.9",
  "lru",
@@ -2187,6 +2188,18 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "leanctx-verify"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "zip",
 ]
 
 [[package]]

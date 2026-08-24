@@ -41,6 +41,7 @@ pub(super) fn inject_test_pre_publish_failure() {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn inject_test_capability_preflight_failure() {
     TEST_FAIL_CAPABILITY_PREFLIGHT.with(|failpoint| failpoint.set(true));
 }
