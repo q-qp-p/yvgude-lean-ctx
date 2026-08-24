@@ -325,12 +325,24 @@
           "type": "string",
           "enum": [
             "arm_receipt",
+            "receipt_predecessor",
             "quality_measurement",
             "replay_input",
             "replay_result",
             "run_metadata",
             "claim_basis",
-            "frozen_audit_bundle_v1"
+            "frozen_audit_bundle_v1",
+            "task_envelope",
+            "execution_plan",
+            "engine_invocation",
+            "engine_observation",
+            "accepted_outcome",
+            "measurement",
+            "assumption",
+            "formula",
+            "price_table",
+            "invoice",
+            "acceptance_evidence"
           ]
         },
         "path": {

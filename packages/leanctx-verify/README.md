@@ -62,3 +62,23 @@ organisation's public key out-of-band; see
 ```
 cargo build --release   # → target/release/leanctx-verify
 ```
+
+## Provider-free reference fixture
+
+`fixtures/provider-free-v2/` is a committed, metadata-only customer-proof V2
+fixture with all 13 referenced artifacts and an out-of-band test trust store.
+It requires no provider, account, network access, LeanCTX daemon, or Engine
+installation:
+
+```
+cargo run --release -- v2 \
+  fixtures/provider-free-v2/customer-proof.json \
+  --trust-store fixtures/provider-free-v2/trust-store.json \
+  --artifact-root fixtures/provider-free-v2 \
+  --json
+```
+
+The fixture signer is deterministic test material and is never a production
+trust anchor. `tests/provider_free_fixture.rs` freezes the exact file set,
+requires every verification step to pass, and proves that a copied fixture
+fails after a single referenced artifact is changed.

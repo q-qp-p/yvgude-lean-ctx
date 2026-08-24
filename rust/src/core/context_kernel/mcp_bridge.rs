@@ -149,7 +149,9 @@ pub fn generate_mcp_receipt(
         delivered_tokens: output_tokens,
         cache_hits: usize::from(cache_hit),
         cache_misses: usize::from(!cache_hit),
-        outcome: ReceiptOutcome::Accepted,
+        // A successful MCP delivery is an Engine/tool fact, not an explicit
+        // host or evaluator judgment about task quality.
+        outcome: ReceiptOutcome::Unknown,
         quality_signals: vec![],
         feedback_attribution: HashMap::new(),
     }
@@ -331,7 +333,7 @@ pub mod tests {
         assert_eq!(receipt.plan_id, "plan-42");
         assert!(receipt.receipt_id.starts_with("mcp-ctx_read-"));
         assert_eq!(receipt.delivered_tokens, 20);
-        assert_eq!(receipt.outcome, ReceiptOutcome::Accepted);
+        assert_eq!(receipt.outcome, ReceiptOutcome::Unknown);
     }
 
     #[test]

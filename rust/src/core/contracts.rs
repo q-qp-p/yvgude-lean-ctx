@@ -316,6 +316,21 @@ pub fn contract_docs() -> Vec<ContractDoc> {
             1,
             Stable,
         ),
+        // P2 protocol artifacts: strict canonical surfaces with exact Rust and
+        // schema conformance tests; hashes are pinned in frozen-hashes.json.
+        doc(
+            "invocation-context-binding",
+            "invocation-context-binding-v1.md",
+            1,
+            Frozen,
+        ),
+        doc(
+            "invocation-evidence-manifest",
+            "invocation-evidence-manifest-v1.md",
+            1,
+            Frozen,
+        ),
+        doc("receipt-document", "receipt-document-v1.md", 1, Frozen),
         doc(
             "native-engine-context-proof",
             "native-engine-context-proof-v1.md",
