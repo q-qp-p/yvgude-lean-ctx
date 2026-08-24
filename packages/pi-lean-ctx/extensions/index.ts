@@ -25,7 +25,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { homedir, platform } from "node:os";
 import { McpBridge } from "./mcp-bridge.js";
-import { loadPiConfig, resolveSuppressedBuiltins } from "./config.js";
+import { loadPiConfig, resolvePiShellPath, resolveSuppressedBuiltins } from "./config.js";
 import type { CompressionStats } from "./types.js";
 
 const BRIDGE_STARTUP_TIMEOUT_MS = 10_000;
@@ -414,7 +414,9 @@ export default async function (pi: ExtensionAPI) {
     }
   }) as unknown as ExtensionAPI["registerTool"];
 
+  const shellPath = resolvePiShellPath();
   const baseBashTool = createBashToolDefinition(process.cwd(), {
+    shellPath,
     spawnHook: ({ command, cwd, env }) => {
       const bin = resolveBinary();
       return {
@@ -425,7 +427,7 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-  const rawBash = createBashToolDefinition(process.cwd());
+  const rawBash = createBashToolDefinition(process.cwd(), { shellPath });
 
   const bashSchemaWithRaw = Type.Object({
     command: Type.String({ description: "Bash command to execute" }),
