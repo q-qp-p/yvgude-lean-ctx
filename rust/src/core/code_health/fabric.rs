@@ -374,6 +374,7 @@ pub mod tests {
     /// the lookup `ctx_callgraph risk` uses.
     #[test]
     fn hotspot_cc_reads_back_persisted_edge() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
         std::fs::write(dir.path().join("lib.rs"), "pub fn ok() {}\n").unwrap();
