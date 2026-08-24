@@ -274,7 +274,8 @@ mod tests {
             policy_ref: lean_ctx_protocol::ProtocolReference::new("policy:fixture").unwrap(),
             decision: EnginePolicyDecisionV1::Admitted,
         };
-        let engine = crate::core::engine_interface::NativeContextEngine::with_root(root.path());
+        let engine = crate::core::engine_interface::NativeContextEngine::with_root(root.path())
+            .expect("test root must canonicalize securely");
         let (invocation, observation) = engine
             .execute_ctx_read_snapshot(source.to_str().unwrap(), "stable native context", policy)
             .unwrap();
