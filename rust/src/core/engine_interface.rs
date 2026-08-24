@@ -736,6 +736,11 @@ fn read_transport_source(
     } else {
         root.join(requested)
     };
+    // Reject a lexically outside absolute source before platform-specific
+    // canonicalization so the public transport error remains deterministic.
+    if !candidate.starts_with(root) {
+        return Err(EngineTransportError::SourceOutsideRoot);
+    }
     crate::core::pathjail::jail_path(&candidate, root)
         .map_err(|_| EngineTransportError::SourceOutsideRoot)?;
     if contains_symlink_component(&candidate, root) {
