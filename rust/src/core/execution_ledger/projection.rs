@@ -320,7 +320,6 @@ pub fn legacy_receipt_for_task_from_store(
             ExecutionEvent::CanonicalReceiptRecorded { .. } => has_canonical_receipt = true,
             ExecutionEvent::OutcomeRecorded { .. }
             | ExecutionEvent::TaskStarted { .. }
-            | ExecutionEvent::AdmissionConsumed { .. }
             | ExecutionEvent::EngineInvoked { .. } => {}
         }
     }

@@ -18,8 +18,6 @@ use sha2::{Digest, Sha256};
 use crate::core::canonical;
 #[cfg(test)]
 use crate::core::data_dir;
-use crate::core::execution_ledger::{ExecutionEvent, ExecutionLedgerStore};
-use crate::core::invocation_admission::VerifiedInvocationAdmissionV1;
 use crate::core::ocla::adapters::native_context::{
     NativeContextAdapter, NativeContextInvocationFailure,
 };
@@ -178,70 +176,6 @@ struct CtxReadInvocationIdentityV1<'a> {
 /// One strictly local implementation of the published Engine records.
 pub(crate) struct NativeContextEngine {
     adapter: NativeContextAdapter,
-}
-
-fn append_verified_admission(
-    ledger: &ExecutionLedgerStore,
-    admission: &VerifiedInvocationAdmissionV1,
-    trace_id: &str,
-) -> Result<bool, String> {
-    if trace_id.is_empty() {
-        return Err("Engine admission trace_id must be non-empty".to_owned());
-    }
-    let binding = admission.binding();
-    ledger
-        .append_if_new(ExecutionEvent::AdmissionConsumed {
-            admission_id: binding.admission_id.as_str().to_owned(),
-            binding_digest: admission.binding_digest().as_str().to_owned(),
-            task_id: binding.task_id.as_str().to_owned(),
-            trace_id: trace_id.to_owned(),
-            invocation_id: binding.invocation_id.as_str().to_owned(),
-            timestamp: binding.issued_at.as_str().to_owned(),
-            sequence_number: 0,
-            prev_hash: String::new(),
-        })
-        .map_err(|error| error.to_string())
-}
-
-fn validate_admission_binding(
-    binding_invocation_id: &EngineInvocationIdV1,
-    binding_invocation_ref: &Sha256Digest,
-    invocation: &EngineInvocationV1,
-) -> Result<(), String> {
-    if binding_invocation_id != &invocation.invocation_id {
-        return Err("engine admission invocation_id does not match runtime invocation".to_owned());
-    }
-    let invocation_ref = sha256_digest(&canonical::canonical_serialize(invocation))?;
-    if binding_invocation_ref != &invocation_ref {
-        return Err("engine admission invocation_ref does not match runtime invocation".to_owned());
-    }
-    Ok(())
-}
-
-fn dispatch_after_consumption<T, F>(consumed: Result<bool, String>, execute: F) -> Result<T, String>
-where
-    F: FnOnce() -> Result<T, String>,
-{
-    match consumed {
-        Ok(true) => execute(),
-        Ok(false) => Err("Engine admission was already consumed".to_owned()),
-        Err(error) => Err(error),
-    }
-}
-
-fn dispatch_after_admission<T, F>(
-    ledger: &ExecutionLedgerStore,
-    admission: &VerifiedInvocationAdmissionV1,
-    trace_id: &str,
-    execute: F,
-) -> Result<T, String>
-where
-    F: FnOnce() -> Result<T, String>,
-{
-    dispatch_after_consumption(
-        append_verified_admission(ledger, admission, trace_id),
-        execute,
-    )
 }
 
 /// Stored without a receipt link so its digest cannot self-reference.
@@ -438,35 +372,6 @@ impl NativeContextEngine {
             policy_admission,
         )?;
         self.execute_materialized(request, &input)
-    }
-
-    /// Gate an admitted rooted dispatch on one atomic admission consumption.
-    pub(crate) fn execute_ctx_read_rooted_snapshot_admitted(
-        &self,
-        ledger: &ExecutionLedgerStore,
-        admission: &VerifiedInvocationAdmissionV1,
-        trace_id: &str,
-        rooted_path: &str,
-        raw_input: &str,
-        policy_admission: EnginePolicyAdmissionV1,
-    ) -> Result<(EngineInvocationV1, EngineObservationV1), String> {
-        let root = self.adapter.root();
-        let rooted_path = Path::new(rooted_path);
-        if !rooted_path.is_absolute() || !rooted_path.starts_with(root) {
-            return Err("ctx_read Engine source is outside its rooted boundary".to_owned());
-        }
-        let (request, input) = NativeContextEngineRequest::ctx_read_snapshot_canonical(
-            rooted_path,
-            raw_input,
-            30_000,
-            policy_admission,
-        )?;
-        let invocation = self.invocation_for(&request)?;
-        let binding = admission.binding();
-        validate_admission_binding(&binding.invocation_id, &binding.invocation_ref, &invocation)?;
-        dispatch_after_admission(ledger, admission, trace_id, || {
-            self.execute_materialized(request, &input)
-        })
     }
 
     pub(crate) fn execute_ctx_read_rejection(
@@ -778,99 +683,6 @@ fn sha256_digest(bytes: &[u8]) -> Result<Sha256Digest, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn denied_admission_never_dispatches_the_native_adapter() {
-        let called = std::cell::Cell::new(false);
-        let retry = dispatch_after_consumption(Ok(false), || {
-            called.set(true);
-            Ok::<_, String>(())
-        });
-        assert!(retry.is_err());
-        assert!(!called.get());
-
-        let error = dispatch_after_consumption(Err("ledger unavailable".to_owned()), || {
-            called.set(true);
-            Ok::<_, String>(())
-        });
-        assert!(error.is_err());
-        assert!(!called.get());
-    }
-
-    fn runtime_invocation_fixture() -> EngineInvocationV1 {
-        let root = tempfile::tempdir().expect("native adapter root");
-        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
-        engine
-            .invocation_for(&request(
-                "fixture.md",
-                b"runtime invocation",
-                EnginePolicyDecisionV1::Admitted,
-            ))
-            .expect("runtime invocation")
-    }
-
-    fn assert_binding_mismatch_does_not_append_or_dispatch(
-        binding_invocation_id: &EngineInvocationIdV1,
-        binding_invocation_ref: &Sha256Digest,
-        invocation: &EngineInvocationV1,
-    ) {
-        let directory = tempfile::tempdir().expect("ledger directory");
-        let ledger = ExecutionLedgerStore::new(directory.path().join("ledger.jsonl"));
-        let before = ledger.load().expect("empty ledger");
-        let called = std::cell::Cell::new(false);
-        let result =
-            validate_admission_binding(binding_invocation_id, binding_invocation_ref, invocation)
-                .and_then(|()| {
-                    dispatch_after_consumption(Ok(true), || {
-                        called.set(true);
-                        Ok::<_, String>(())
-                    })
-                });
-
-        assert!(result.is_err());
-        assert!(!called.get());
-        assert_eq!(ledger.load().expect("ledger after mismatch"), before);
-    }
-
-    #[test]
-    fn invocation_id_mismatch_is_rejected_before_append_or_adapter() {
-        let invocation = runtime_invocation_fixture();
-        let invocation_ref = sha256_digest(&canonical::canonical_serialize(&invocation))
-            .expect("runtime invocation digest");
-        let wrong_id =
-            EngineInvocationIdV1::new("engine-invocation-other").expect("mismatched invocation id");
-
-        assert_binding_mismatch_does_not_append_or_dispatch(
-            &wrong_id,
-            &invocation_ref,
-            &invocation,
-        );
-    }
-
-    #[test]
-    fn invocation_ref_mismatch_is_rejected_before_append_or_adapter() {
-        let invocation = runtime_invocation_fixture();
-        let wrong_ref = Sha256Digest::new(format!("sha256:{}", "0".repeat(64)))
-            .expect("mismatched invocation ref");
-
-        assert_binding_mismatch_does_not_append_or_dispatch(
-            &invocation.invocation_id,
-            &wrong_ref,
-            &invocation,
-        );
-    }
-
-    #[test]
-    fn accepted_consumption_dispatches_exactly_once() {
-        let called = std::cell::Cell::new(0u8);
-        let result = dispatch_after_consumption(Ok(true), || {
-            called.set(called.get() + 1);
-            Ok::<_, String>(())
-        });
-
-        assert!(result.is_ok());
-        assert_eq!(called.get(), 1);
-    }
 
     fn digest(value: &[u8]) -> Sha256Digest {
         sha256_digest(value).expect("test SHA-256 digest")

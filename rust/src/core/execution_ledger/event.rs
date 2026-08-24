@@ -44,16 +44,6 @@ pub enum ExecutionEvent {
         sequence_number: u64,
         prev_hash: String,
     },
-    AdmissionConsumed {
-        admission_id: String,
-        binding_digest: String,
-        task_id: String,
-        trace_id: String,
-        invocation_id: String,
-        timestamp: String,
-        sequence_number: u64,
-        prev_hash: String,
-    },
     ModelInvoked {
         task_id: String,
         trace_id: String,
@@ -167,7 +157,6 @@ impl ExecutionEvent {
                 ..
             } => Some(("decision", task_id, decision_id)),
             Self::ContextDelivered { task_id, .. } => Some(("context", task_id, "")),
-            Self::AdmissionConsumed { admission_id, .. } => Some(("admission", admission_id, "")),
         }
     }
 
@@ -190,9 +179,6 @@ impl ExecutionEvent {
                 sequence_number, ..
             }
             | Self::ContextDelivered {
-                sequence_number, ..
-            }
-            | Self::AdmissionConsumed {
                 sequence_number, ..
             }
             | Self::ModelInvoked {
@@ -223,7 +209,6 @@ impl ExecutionEvent {
             Self::TaskStarted { prev_hash, .. }
             | Self::PlanCreated { prev_hash, .. }
             | Self::ContextDelivered { prev_hash, .. }
-            | Self::AdmissionConsumed { prev_hash, .. }
             | Self::ModelInvoked { prev_hash, .. }
             | Self::EngineInvoked { prev_hash, .. }
             | Self::ReceiptSigned { prev_hash, .. }
@@ -240,7 +225,6 @@ impl ExecutionEvent {
             Self::TaskStarted { task_id, .. }
             | Self::PlanCreated { task_id, .. }
             | Self::ContextDelivered { task_id, .. }
-            | Self::AdmissionConsumed { task_id, .. }
             | Self::ModelInvoked { task_id, .. }
             | Self::EngineInvoked { task_id, .. }
             | Self::ReceiptSigned { task_id, .. }
@@ -257,7 +241,6 @@ impl ExecutionEvent {
             Self::TaskStarted { trace_id, .. }
             | Self::PlanCreated { trace_id, .. }
             | Self::ContextDelivered { trace_id, .. }
-            | Self::AdmissionConsumed { trace_id, .. }
             | Self::ModelInvoked { trace_id, .. }
             | Self::EngineInvoked { trace_id, .. }
             | Self::ReceiptSigned { trace_id, .. }
@@ -274,7 +257,6 @@ impl ExecutionEvent {
             Self::TaskStarted { timestamp, .. }
             | Self::PlanCreated { timestamp, .. }
             | Self::ContextDelivered { timestamp, .. }
-            | Self::AdmissionConsumed { timestamp, .. }
             | Self::ModelInvoked { timestamp, .. }
             | Self::EngineInvoked { timestamp, .. }
             | Self::ReceiptSigned { timestamp, .. }
@@ -334,11 +316,6 @@ impl ExecutionEvent {
                 ..
             }
             | Self::ContextDelivered {
-                sequence_number: sequence,
-                prev_hash: previous,
-                ..
-            }
-            | Self::AdmissionConsumed {
                 sequence_number: sequence,
                 prev_hash: previous,
                 ..
