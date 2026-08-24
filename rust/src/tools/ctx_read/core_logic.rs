@@ -158,6 +158,30 @@ pub(super) fn handle_with_options_inner(
                 tuning.aggressiveness,
                 tuning.protect,
             );
+            // #1287: a same-conversation re-read of the SAME variant of an
+            // unchanged file collapses to the ~15-token variant stub instead
+            // of re-emitting the identical payload. Staleness was verified
+            // above (a stale entry is invalidated before this point), and the
+            // conversation gate mirrors the full-content stub — stubs must
+            // never leak across chats (#1042). Fresh reads bypass the cache
+            // entirely, so `fresh=true` remains the escape hatch.
+            if super::dispatch::stub_policy_allows()
+                && let crate::core::cache::VariantDelivery::Conversation(delivered) =
+                    cache.compressed_delivered_conversation(path, &cache_key)
+                && crate::core::conversation::conversation_allows_stub(
+                    crate::core::conversation::current_conversation_id_fresh().as_deref(),
+                    Some(&delivered),
+                )
+            {
+                crate::core::telemetry::global_metrics().record_cache(true);
+                crate::core::auto_mode_resolver::count_source("compressed_cache_stub");
+                let stub =
+                    super::dispatch::render_unchanged_variant_stub(&file_ref, path, &resolved_mode);
+                crate::core::stats::record_reread(
+                    original_tokens.saturating_sub(stub.output_tokens),
+                );
+                return stub;
+            }
             let hit = cache.get_compressed(path, &cache_key).cloned();
             if let Some(cached_output) = &hit {
                 // get_compressed() already recorded the cache hit (stats + event)
@@ -669,15 +693,28 @@ mod tests {
             None,
         );
         assert!(r2.is_cache_hit, "second map read must hit compressed cache");
-        assert_eq!(
-            r2.content, r1.content,
-            "cached output must be byte-identical"
-        );
+        // #1287: with a resolvable conversation scope the hit collapses to the
+        // tiny variant stub; without one it re-serves the byte-identical
+        // payload. Both are cache hits — assert the matching invariant.
+        if r2.content.contains("unchanged map view") {
+            assert!(r2.content.contains("fresh=true"), "stub carries the escape");
+            assert!(
+                r2.output_tokens < r1.output_tokens,
+                "stub must be smaller than the payload"
+            );
+        } else {
+            assert_eq!(
+                r2.content, r1.content,
+                "cached output must be byte-identical"
+            );
+        }
 
         let counts = crate::core::auto_mode_resolver::source_counts();
         assert!(
-            counts.iter().any(|(k, _)| *k == "compressed_cache_hit"),
-            "compressed_cache_hit counter must fire; got: {counts:?}"
+            counts
+                .iter()
+                .any(|(k, _)| *k == "compressed_cache_hit" || *k == "compressed_cache_stub"),
+            "compressed cache counter must fire; got: {counts:?}"
         );
     }
 }

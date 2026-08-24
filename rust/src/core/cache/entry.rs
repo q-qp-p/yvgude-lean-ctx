@@ -75,13 +75,23 @@ fn next_compressed_output_access() -> u64 {
 struct CompressedOutputVariant {
     output: String,
     last_access: AtomicU64,
+    /// #1287: the conversation that first received this variant. A later
+    /// re-read from the SAME conversation of the unchanged file can collapse
+    /// to the ~15-token variant stub; other conversations keep receiving the
+    /// full payload (stub semantics must never leak across chats, #1042).
+    /// Set at store time — storing a variant IS delivering it. A payload hit
+    /// from a different conversation does not retarget this field (interior
+    /// mutability would be needed); that conversation simply keeps payload
+    /// delivery, which is correct, just not optimal.
+    delivered_conversation: Option<String>,
 }
 
 impl CompressedOutputVariant {
-    fn new(output: String) -> Self {
+    fn new(output: String, delivered_conversation: Option<String>) -> Self {
         Self {
             output,
             last_access: AtomicU64::new(next_compressed_output_access()),
+            delivered_conversation,
         }
     }
 
@@ -108,10 +118,29 @@ impl CompressedOutputLru {
         Some(&variant.output)
     }
 
+    /// #1287: which conversation first received this variant. Outer `None`
+    /// means the variant does not exist; inner `None` means it was stored
+    /// without a resolvable conversation id (stub must not be served).
+    /// The nested Option is deliberate for this private, allocation-free
+    /// helper — the public API (`SessionCache::compressed_delivered_conversation`)
+    /// exposes it as the explicit `VariantDelivery` enum.
+    #[allow(clippy::option_option)]
+    fn delivered_conversation(&self, mode_key: &str) -> Option<Option<&str>> {
+        self.entries
+            .get(mode_key)
+            .map(|variant| variant.delivered_conversation.as_deref())
+    }
+
     /// Stores a variant and returns the deterministic LRU victim, if any.
-    fn set(&mut self, mode_key: &str, output: String) -> Option<String> {
+    fn set(
+        &mut self,
+        mode_key: &str,
+        output: String,
+        delivered_conversation: Option<String>,
+    ) -> Option<String> {
         if let Some(variant) = self.entries.get_mut(mode_key) {
             variant.output = output;
+            variant.delivered_conversation = delivered_conversation;
             variant.touch();
             return None;
         }
@@ -131,8 +160,10 @@ impl CompressedOutputLru {
             None
         };
 
-        self.entries
-            .insert(mode_key.to_string(), CompressedOutputVariant::new(output));
+        self.entries.insert(
+            mode_key.to_string(),
+            CompressedOutputVariant::new(output, delivered_conversation),
+        );
         evicted
     }
 
@@ -322,8 +353,22 @@ impl CacheEntry {
         self.compressed_outputs.get(mode_key)
     }
 
+    /// #1287: which conversation first received this compressed variant.
+    /// Outer `None` = variant absent; inner `None` = stored without a
+    /// resolvable conversation (variant stub must not be served). Nested
+    /// Option kept allocation-free here; `SessionCache` exposes the explicit
+    /// `VariantDelivery` enum publicly.
+    #[allow(clippy::option_option)]
+    pub fn compressed_delivered_conversation(&self, mode_key: &str) -> Option<Option<&str>> {
+        self.compressed_outputs.delivered_conversation(mode_key)
+    }
+
     pub fn set_compressed(&mut self, mode_key: &str, output: String) {
-        if let Some(evicted_key) = self.compressed_outputs.set(mode_key, output) {
+        // #1287: storing a variant IS delivering it — stamp the conversation
+        // so a same-conversation re-read of the unchanged file can collapse
+        // to the variant stub.
+        let conversation = crate::core::conversation::current_conversation_id();
+        if let Some(evicted_key) = self.compressed_outputs.set(mode_key, output, conversation) {
             self.evicted_compressed_variants.insert(evicted_key);
         }
         self.evicted_compressed_variants.remove(mode_key);

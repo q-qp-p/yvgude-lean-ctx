@@ -454,6 +454,31 @@ fn compressed_outputs_cached_and_retrieved() {
     assert_eq!(cache.get_compressed("/test.rs", "signatures"), None);
 }
 
+/// #1287: storing a variant stamps the delivering conversation; re-storing
+/// restamps it; a missing variant reports `Absent`.
+#[test]
+fn compressed_variant_tracks_delivered_conversation() {
+    let mut cache = SessionCache::new();
+    cache.store("/test.rs", "fn main() {}");
+    assert_eq!(
+        cache.compressed_delivered_conversation("/test.rs", "signatures"),
+        VariantDelivery::Absent
+    );
+    cache.set_compressed("/test.rs", "signatures", "sig view".to_string());
+    // Present variant: either a concrete conversation (agent environments) or
+    // UnknownConversation (no resolvable id — stub must not be served, never
+    // "stub allowed"). Absent would mean the store was lost.
+    assert_ne!(
+        cache.compressed_delivered_conversation("/test.rs", "signatures"),
+        VariantDelivery::Absent,
+        "stored variant must report delivery state"
+    );
+    assert_eq!(
+        cache.compressed_delivered_conversation("/other.rs", "signatures"),
+        VariantDelivery::Absent
+    );
+}
+
 #[test]
 fn compressed_outputs_evict_least_recently_used_variant() {
     let mut cache = SessionCache::new();

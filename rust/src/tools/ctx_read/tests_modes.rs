@@ -1,6 +1,79 @@
 use super::*;
 use std::time::Duration;
 
+/// #1287: the variant stub is a pure function of (file_ref, path, mode) —
+/// byte-stable across identical re-reads (#498, provider prompt caching), tiny,
+/// and always carries the static `fresh=true` escape.
+#[test]
+fn variant_stub_is_byte_stable_and_tiny() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    crate::test_env::set_var("LEAN_CTX_META", "1");
+    let a = super::dispatch::render_unchanged_variant_stub("F3", "/src/router.js", "signatures");
+    let b = super::dispatch::render_unchanged_variant_stub("F3", "/src/router.js", "signatures");
+    assert_eq!(a.content, b.content, "identical inputs must be byte-stable");
+    assert!(a.content.contains("unchanged signatures view"));
+    assert!(a.content.contains("fresh=true"));
+    assert!(a.is_cache_hit);
+    assert_eq!(a.resolved_mode, "signatures");
+    assert!(
+        a.output_tokens < 40,
+        "stub must stay tiny, got {} tokens",
+        a.output_tokens
+    );
+    crate::test_env::remove_var("LEAN_CTX_META");
+}
+
+/// #1287 gate invariants, valid in every environment: when a conversation
+/// scope is resolvable (e.g. CLAUDECODE per-process scope), the same-scope
+/// variant re-read collapses to the tiny stub with the `fresh=true` escape;
+/// without a provably delivered conversation the full payload is re-served
+/// byte-identically — the stub must never appear on unknown delivery.
+#[test]
+fn variant_reread_stub_or_payload_invariants() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    let dir = std::env::temp_dir().join(format!("lean_ctx_vstub_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let p = dir.join("sample.rs");
+    let mut body = String::new();
+    for i in 0..80 {
+        use std::fmt::Write as _;
+        let _ = writeln!(
+            body,
+            "pub fn generated_function_{i}(value: usize) -> usize {{ value + {i} }}"
+        );
+    }
+    std::fs::write(&p, &body).expect("write sample file");
+    let path = p.to_str().expect("temp path is valid UTF-8");
+
+    let mut cache = SessionCache::new();
+    let first = super::dispatch::handle(&mut cache, path, "signatures", CrpMode::Off);
+    let second = super::dispatch::handle(&mut cache, path, "signatures", CrpMode::Off);
+    let _ = std::fs::remove_file(&p);
+
+    assert!(
+        !first.contains("unchanged signatures view"),
+        "first delivery must always be the real payload"
+    );
+    if second.contains("unchanged signatures view") {
+        // Positive path: a conversation scope was resolvable here.
+        assert!(second.contains("fresh=true"), "stub must carry the escape");
+        assert!(
+            second.len() < first.len() / 3,
+            "stub must be a fraction of the payload ({} vs {})",
+            second.len(),
+            first.len()
+        );
+    } else if second.contains("already in context") {
+        // Pre-existing legacy short-circuit (conversation scoping explicitly
+        // disabled: one daemon == one conversation by contract) — its own
+        // stub, not ours; small by construction.
+        assert!(second.len() < first.len() / 3);
+    } else {
+        // Conservative path: unknown delivery -> byte-identical payload.
+        assert_eq!(first, second, "variant cache hit must be byte-stable");
+    }
+}
+
 #[test]
 fn test_header_toon_format_no_brackets() {
     let _lock = crate::core::data_dir::test_env_lock();

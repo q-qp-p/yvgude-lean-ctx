@@ -699,6 +699,12 @@ class CockpitLive extends HTMLElement {
       sessionSaved = windowStats.saved;
       sessionOrig = windowStats.original;
     }
+    // #1284 honesty fields: metered_* covers EVERY metered ctx_* call today
+    // (zero-saving ones included); native passthroughs bypassed lean-ctx
+    // entirely and are counted, not tokenized.
+    var meteredInput = comp ? Number(comp.metered_input_tokens || 0) : 0;
+    var meteredPct = comp ? Math.round(Number(comp.savings_percent_of_metered || 0)) : 0;
+    var nativePassthrough = comp ? Number(comp.native_passthrough_calls || 0) : 0;
 
     var allTimeSaved = 0;
     if (stats) {
@@ -735,7 +741,15 @@ class CockpitLive extends HTMLElement {
       esc(ff(sessionSaved)) +
       '</div>' +
       (sessionOrig > 0
-        ? '<p class="hs">of ' + esc(ff(sessionOrig)) + ' original tokens</p>'
+        ? '<p class="hs">of ' + esc(ff(sessionOrig)) + ' tokens in compression events' +
+          (meteredInput > 0
+            ? ' · ' + esc(String(meteredPct)) + '% of all ' + esc(ff(meteredInput)) + ' metered tokens'
+            : '') +
+          (nativePassthrough > 0
+            ? ' · <span title="native shell calls that bypassed lean-ctx — token volume unmetered">' +
+              esc(ff(nativePassthrough)) + ' native passthrough</span>'
+            : '') +
+          '</p>'
         : '<p class="hs">verified savings today</p>') +
       '</div>' +
       '<div class="hc">' +
