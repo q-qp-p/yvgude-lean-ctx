@@ -668,4 +668,29 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             description: "Optional LLM enhancement settings (query expansion, contradiction explanation). Deterministic fallback when disabled or unreachable.".into(),
             keys: llm_keys,
         });
+
+    let mut decision_loop = BTreeMap::new();
+    decision_loop.insert(
+        "enabled".into(),
+        key(
+            "bool",
+            serde_json::json!(cfg.decision_loop.enabled),
+            "Enable the MCP decision-loop runtime",
+        ),
+    );
+    decision_loop.insert(
+        "max_filter_level".into(),
+        key(
+            "u8",
+            serde_json::json!(cfg.decision_loop.max_filter_level),
+            "Maximum lossy post-dispatch triage level (0 disables output filtering)",
+        ),
+    );
+    sections.insert(
+        "decision_loop".into(),
+        SectionSchema {
+            description: "MCP decision-loop runtime settings".into(),
+            keys: decision_loop,
+        },
+    );
 }

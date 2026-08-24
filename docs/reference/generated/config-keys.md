@@ -181,6 +181,13 @@ Custom command aliases (array of {command, alias} entries). Note: field names ar
 - `alias` (string, default `""`) — The alias definition to execute
 - `command` (string, default `""`) — The command pattern to match (e.g. 'deploy')
 
+## `[decision_loop]`
+
+MCP decision-loop runtime settings
+
+- `enabled` (bool, default `true`) — Enable the MCP decision-loop runtime
+- `max_filter_level` (u8, default `0`) — Maximum lossy post-dispatch triage level (0 disables output filtering)
+
 ## `[embedding]`
 
 Semantic-embedding engine settings (model selection for ctx_semantic_search)
