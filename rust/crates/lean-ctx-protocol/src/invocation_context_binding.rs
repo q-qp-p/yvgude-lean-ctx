@@ -142,11 +142,10 @@ impl InvocationContextBindingV1 {
 
     fn validate_unsigned(&self) -> Result<(), ValidationError> {
         validate_schema_version(self.schema_version)?;
-        reject_binding_feff(self.admission_id.as_str(), "admission_id")?;
-        validate_bounded_opaque_identifier(self.admission_id.as_str(), "admission_id")?;
-        reject_binding_feff(self.task_id.as_str(), "task_id")?;
-        reject_binding_feff(self.plan_id.as_str(), "plan_id")?;
-        reject_binding_feff(self.invocation_id.as_str(), "invocation_id")?;
+        validate_bounded_binding_identifier(self.admission_id.as_str(), "admission_id")?;
+        validate_bounded_binding_identifier(self.task_id.as_str(), "task_id")?;
+        validate_bounded_binding_identifier(self.plan_id.as_str(), "plan_id")?;
+        validate_bounded_binding_identifier(self.invocation_id.as_str(), "invocation_id")?;
         validate_schema_digest(&self.session_identity_ref, "session_identity_ref")?;
         validate_schema_digest(&self.task_ref, "task_ref")?;
         validate_schema_digest(&self.plan_ref, "plan_ref")?;
@@ -187,6 +186,11 @@ fn validate_signer(signer: &InvocationContextBindingSignerV1) -> Result<(), Vali
     // retaining it as a typed field prevents embedding a public key or a
     // variable-length key digest in this metadata-only contract.
     validate_schema_digest(&signer.public_key_digest, "public_key_digest")
+}
+
+fn validate_bounded_binding_identifier(value: &str, field: &str) -> Result<(), ValidationError> {
+    reject_binding_feff(value, field)?;
+    validate_bounded_opaque_identifier(value, field)
 }
 
 fn reject_binding_feff(value: &str, field: &str) -> Result<(), ValidationError> {
@@ -294,10 +298,8 @@ fn validate_capability_bindings(
     let mut digests = BTreeSet::new();
     let mut previous_key = None;
     for binding in bindings {
-        validate_manifest_reference(
-            &ProtocolReference::new(binding.capability_id.as_str().to_owned())?,
-            "capability_id",
-        )?;
+        validate_bounded_binding_identifier(binding.capability_id.as_str(), "capability_id")?;
+        reject_binding_feff(binding.capability_version.as_str(), "capability_version")?;
         let key = (
             binding.capability_id.as_str(),
             binding.capability_version.as_str(),
@@ -648,6 +650,22 @@ mod tests {
     }
 
     #[test]
+    fn unicode_fixture_uses_utf8_without_optional_escapes() {
+        let bytes = include_bytes!(
+            "../../../../docs/contracts/invocation-context-binding/v1/valid-unicode.json"
+        );
+        let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+        let binding = InvocationContextBindingV1::from_canonical_bytes(bytes).unwrap();
+        let canonical = binding.canonical_bytes().unwrap();
+        assert!(
+            canonical
+                .windows("source:é".len())
+                .any(|w| w == "source:é".as_bytes())
+        );
+        assert!(!canonical.windows(br"\u00e9".len()).any(|w| w == br"\u00e9"));
+    }
+
+    #[test]
     fn signature_metadata_and_admission_invariants_are_strict() {
         let mut binding = valid_binding();
         binding.signature = "A".repeat(85) + "B==";
@@ -688,6 +706,17 @@ mod tests {
         let mut binding = valid_binding();
         binding.signer.key_id = "key:\u{feff}".to_owned();
         assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.policy_ref = source_ref("policy:\u{feff}ref");
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.source_bindings[0].source_ref = source_ref("source:\u{feff}input");
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.capability_bindings[0].capability_id =
+            crate::CapabilityId::new("capability:\u{feff}engine").unwrap();
+        assert!(binding.validate().is_err());
+        assert!(crate::SemanticVersion::new("1.0.0\u{feff}").is_err());
     }
 
     #[test]
@@ -703,30 +732,28 @@ mod tests {
     }
 
     #[test]
-    fn capability_order_and_duplicates_are_rejected() {
+    fn signature_mutation_changes_full_digest_not_unsigned_coverage() {
+        let binding = valid_binding();
+        let unsigned = binding.unsigned_canonical_bytes().unwrap();
+        let original_digest = binding.digest().unwrap();
+        let mut mutated = binding.clone();
+        mutated.signature.replace_range(0..1, "B");
+        assert_ne!(mutated.digest().unwrap(), original_digest);
+        assert_eq!(mutated.unsigned_canonical_bytes().unwrap(), unsigned);
+    }
+
+    #[test]
+    fn capability_cardinality_is_exactly_one_in_v1() {
         let mut binding = valid_binding();
+        assert!(binding.validate().is_ok());
         binding
             .capability_bindings
             .push(InvocationCapabilityBindingV1 {
-                capability_id: crate::CapabilityId::new("capability:z").unwrap(),
+                capability_id: crate::CapabilityId::new("capability:other").unwrap(),
                 capability_version: crate::SemanticVersion::new("1.0.0").unwrap(),
-                manifest_digest: digest('4'),
+                manifest_digest: digest('3'),
             });
-        binding.capability_bindings.reverse();
-        assert!(binding.validate().is_err());
-        binding.capability_bindings.sort_by(|left, right| {
-            (
-                left.capability_id.as_str(),
-                left.capability_version.as_str(),
-            )
-                .cmp(&(
-                    right.capability_id.as_str(),
-                    right.capability_version.as_str(),
-                ))
-        });
-        binding.capability_bindings[1] = binding.capability_bindings[0].clone();
-        assert!(binding.validate().is_err());
-        binding.capability_bindings[1].manifest_digest = digest('5');
+        assert_eq!(binding.capability_bindings.len(), 2);
         assert!(binding.validate().is_err());
     }
 
@@ -739,7 +766,6 @@ mod tests {
             "invalid-signature-pad-bits.json",
             "invalid-time-order.json",
             "invalid-duplicate-source.json",
-            "invalid-capability-count.json",
             "invalid-feff-task-id.json",
         ] {
             let bytes: &[u8] = match name {
@@ -761,9 +787,6 @@ mod tests {
                 "invalid-duplicate-source.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-context-binding/v1/invalid-duplicate-source.json"
                 ),
-                "invalid-capability-count.json" => include_bytes!(
-                    "../../../../docs/contracts/invocation-context-binding/v1/invalid-capability-count.json"
-                ),
                 "invalid-feff-task-id.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-task-id.json"
                 ),
@@ -774,6 +797,62 @@ mod tests {
                 "fixture {name} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn additional_adversarial_fixtures_are_rejected() {
+        let fixtures: &[&[u8]] = &[
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-algorithm.json"
+            ) as &[u8],
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-signature-length.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-zero-input.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-multiple-inputs.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-extra-capability.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-admission-id.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-plan-id.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-invocation-id.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-policy-reference.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-source-reference.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-capability-id.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-capability-version.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-key-id.json"
+            ),
+            include_bytes!(
+                "../../../../docs/contracts/invocation-context-binding/v1/invalid-key-id-material.json"
+            ) as &[u8],
+        ];
+        for bytes in fixtures {
+            assert!(InvocationContextBindingV1::from_canonical_bytes(bytes).is_err());
+        }
+        let error = InvocationContextBindingV1::from_canonical_bytes(include_bytes!(
+            "../../../../docs/contracts/invocation-context-binding/v1/invalid-signature-pad-bits.json"
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("pad bits"));
     }
 
     fn decode_hex(bytes: &[u8]) -> Vec<u8> {
@@ -806,6 +885,14 @@ mod tests {
             true
         );
         assert_eq!(schema["x-conformance"]["signature"]["decoded_bytes"], 64);
+        assert_eq!(
+            schema["x-conformance"]["signature_domain_terminator_hex"],
+            "00"
+        );
+        assert_eq!(
+            schema["x-conformance"]["canonical_json"]["encoding"],
+            "UTF-8"
+        );
         assert_eq!(schema["properties"]["capability_bindings"]["minItems"], 1);
         assert_eq!(schema["properties"]["capability_bindings"]["maxItems"], 1);
         let requirements = schema["x-conformance"]["stages"][2]["requirements"]

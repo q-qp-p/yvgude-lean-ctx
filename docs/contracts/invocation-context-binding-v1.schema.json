@@ -9,7 +9,13 @@
     "semantic_validation_required": true,
     "cross_artifact_join_required": true,
     "semantic_validator": "lean_ctx_protocol::InvocationContextBindingV1::from_canonical_bytes",
-    "signature_domain": "leanctx/invocation-context-binding/v1\\0",
+    "signature_domain": "leanctx/invocation-context-binding/v1",
+    "signature_domain_terminator_hex": "00",
+    "canonical_json": {
+      "encoding": "UTF-8",
+      "object_key_order": "Unicode scalar-value order",
+      "string_escaping": "JSON-required escapes only; printable non-ASCII remains UTF-8"
+    },
     "stages": [
       {
         "name": "schema_validation",
@@ -121,7 +127,7 @@
       "maxLength": 256,
       "pattern": "^(?=[\\s\\S]*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
       "x-maxUtf8Bytes": 256,
-      "description": "Schema maxLength counts code points; semantic validation enforces the shared 256-byte UTF-8 bound."
+      "description": "Schema maxLength counts code points; semantic validation enforces the shared 256-byte UTF-8 bound and rejects U+FEFF."
     },
     "reference": {
       "type": "string",
@@ -129,7 +135,7 @@
       "maxLength": 1024,
       "pattern": "^(?=[\\s\\S]*[^\\s])[^\\u0000-\\u001F\\u007F-\\u009F\\uFEFF]+$",
       "x-maxUtf8Bytes": 1024,
-      "description": "Schema maxLength counts code points; semantic validation enforces the shared 1,024-byte UTF-8 bound."
+      "description": "Schema maxLength counts code points; semantic validation enforces the shared 1,024-byte UTF-8 bound and rejects U+FEFF."
     },
     "timestamp": {
       "type": "string",

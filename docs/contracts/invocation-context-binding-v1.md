@@ -16,7 +16,9 @@ then resolves the signed admission policy bytes.
 The JSON Schema in `invocation-context-binding-v1.schema.json` is normative.
 Unknown fields are rejected recursively. Every digest is a canonical
 `sha256:` plus 64 lowercase hexadecimal characters. Shared IDs and references
-retain their protocol UTF-8 byte bounds and control-character rules.
+retain their protocol UTF-8 byte bounds and control-character rules;
+binding-local validation also rejects U+FEFF (BOM) from every bounded ID,
+reference, algorithm, key ID, and capability version.
 
 The `decision` is always `admitted`; rejected decisions are not represented by
 this sidecar. `source_bindings` contains exactly one `input` and any remaining
@@ -41,24 +43,34 @@ Canonical JSON means:
 
 1. input is valid UTF-8 with no duplicate object key at any depth;
 2. values contain no floating-point JSON numbers;
-3. objects are recursively sorted by Unicode key and emitted compactly;
-4. arrays retain their declared deterministic order; and
-5. exact raw bytes, including key order, whitespace, escapes, and UTF-8, are
-   the accepted representation.
+3. objects are recursively sorted by Unicode scalar-value key order and
+   emitted compactly;
+4. strings use UTF-8 with the profile's required escaping, including no
+   optional \\u escapes for printable non-ASCII characters;
+5. arrays retain their declared deterministic order; and
+6. exact raw bytes, including key order, whitespace, escapes, and UTF-8, are
+   the accepted representation. Non-ASCII value vectors are mandatory
+   conformance coverage.
 
-`InvocationContextBindingV1::from_canonical_bytes` enforces all five rules,
+`InvocationContextBindingV1::from_canonical_bytes` enforces all six rules,
 rejects unknown fields, validates bounds and joins, and requires the exact
 canonical bytes on re-encoding.
 
 The signature covers:
 
+The signing domain is the ASCII bytes
+`leanctx/invocation-context-binding/v1` followed by exactly one NUL byte
+(`0x00`, U+0000), not two printable characters \\ and 0. The signing
+bytes are:
+
 ```text
-leanctx/invocation-context-binding/v1\0
-<canonical JSON object with signature omitted>
+ASCII(leanctx/invocation-context-binding/v1) || 0x00 ||
+canonical UTF-8 JSON object with signature omitted
 ```
 
 `signature` is canonical Base64 for exactly 64 Ed25519 signature bytes (88
-characters including `==`, with zero pad bits). `signer.algorithm` is exactly
+characters including `==`, with zero pad bits); non-zero pad bits are
+rejected. `signer.algorithm` is exactly
 `ed25519`; `signer.key_id` identifies an external key and
 `signer.public_key_digest` identifies its 32-byte SHA-256 digest. The protocol
 crate exposes canonical and signing-byte helpers; cryptographic key lookup and
