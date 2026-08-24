@@ -30,8 +30,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, DELETE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED,
     FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FileAttributeTagInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW, OPEN_EXISTING,
-    SYNCHRONIZE, VOLUME_NAME_DOS,
+    FileAttributeTagInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+    GetLongPathNameW, OPEN_EXISTING, SYNCHRONIZE, VOLUME_NAME_DOS,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -521,7 +521,7 @@ fn windows_handle_matches_path(file: &File, expected: &Path) -> Result<bool> {
             0,
         );
     };
-    let expected = normalize_windows_path(expected.as_os_str().encode_wide().collect());
+    let expected = long_windows_path(expected)?;
     Ok(actual.len() == expected.len()
         && actual.iter().zip(expected).all(|(left, right)| {
             if *left <= u8::MAX as u16 && right <= u8::MAX as u16 {
@@ -530,6 +530,37 @@ fn windows_handle_matches_path(file: &File, expected: &Path) -> Result<bool> {
                 *left == right
             }
         }))
+}
+
+#[cfg(windows)]
+fn long_windows_path(path: &Path) -> Result<Vec<u16>> {
+    let source: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buffer = vec![0_u16; 512];
+    loop {
+        let capacity = u32::try_from(buffer.len())
+            .map_err(|_| invalid("execution ledger path exceeds platform"))?;
+        // SAFETY: source is NUL-terminated and buffer is writable.
+        let length = unsafe { GetLongPathNameW(source.as_ptr(), buffer.as_mut_ptr(), capacity) };
+        if length == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let length = usize::try_from(length)
+            .map_err(|_| invalid("execution ledger path exceeds platform"))?;
+        if length < buffer.len() {
+            buffer.truncate(length);
+            return Ok(normalize_windows_path(buffer));
+        }
+        buffer.resize(
+            length
+                .checked_add(1)
+                .ok_or_else(|| invalid("execution ledger path exceeds platform"))?,
+            0,
+        );
+    }
 }
 
 #[cfg(windows)]
