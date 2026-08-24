@@ -23,7 +23,7 @@ python3 -m venv /tmp/leanctx-p3-venv
 ```
 
 ```python
-from agents import Agent
+from agents import Agent, Runner
 from lean_ctx import LeanCTX
 
 agent = Agent(name="Assistant", instructions="Be concise and helpful.")

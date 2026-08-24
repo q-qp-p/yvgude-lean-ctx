@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lean_ctx import ContextSource, LeanCTX
+from lean_ctx import ContextSource, ContextView, LeanCTX, LocalEngineClient
 from lean_ctx.errors import (
     LeanCtxEngineProtocolError,
     LeanCtxEngineTimeout,
@@ -33,7 +33,7 @@ def _response(source_text="# Review\n", view_text="Review view\n"):
     invocation = {
         "schema_version": 1,
         "invocation_id": invocation_id,
-        "engine": {"engine_id": "lean-ctx-local", "engine_version": "1.0.0"},
+        "engine": {"engine_id": "lean-ctx-local", "engine_version": "3.9.20"},
         "operation": {
             "capability_id": "capability://leanctx/context-optimization",
             "capability_version": "1.0.0",
@@ -155,6 +155,30 @@ def test_engine_v1_compatibility_fixture_projects_exact_sdk_contract(monkeypatch
     assert receipt.engine_interface_version == fixture["engine_interface_version"]
     assert receipt.transport_version == f'{fixture["transport_version"]}.0.0'
     assert actual == fixture["expected_sdk_projection"]
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("transport_version",), "1"),
+        (("invocation", "engine", "engine_id"), "other-engine"),
+        (("invocation", "engine", "engine_version"), "3"),
+        (("invocation", "engine", "engine_version"), "4.0.0"),
+        (("invocation", "operation", "capability_id"), "capability://other"),
+        (("invocation", "operation", "capability_version"), "1.0.1"),
+        (("recovery", "recovery_ref"), None),
+    ],
+)
+def test_engine_v1_rejects_unpinned_identity_version_and_recovery(tmp_path, path, value):
+    response = _response()
+    target = response
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    source = ContextSource(str(tmp_path / "review.md"), project_root=str(tmp_path))
+
+    with pytest.raises(LeanCtxEngineProtocolError):
+        ContextView.from_response(response, source=source, engine=LocalEngineClient())
 
 
 def test_recovery_requires_exact_admitted_source(monkeypatch, tmp_path):
@@ -320,7 +344,17 @@ def test_real_rust_engine_binary_context_view_and_recovery(monkeypatch, tmp_path
     view = session.prepare(ContextSource(str(source), project_root=str(tmp_path)))
     assert view.status == "succeeded"
     assert view.text is not None
+    calls = []
+
+    def custom_host_agent(context):
+        calls.append(context)
+        return {"summary": context.splitlines()[0]}
+
+    host_result = custom_host_agent(view.text)
     assert view.recover() == source_text
-    receipt = session.complete(object())
+    receipt = session.complete(host_result)
+    assert calls == [view.text]
+    assert receipt.host_result is host_result
+    assert receipt.output == host_result
     assert receipt.outcome == "unknown"
     assert receipt.verify() is True

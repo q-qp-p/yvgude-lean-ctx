@@ -316,8 +316,9 @@ class ContextReceipt:
         link = self.view.receipt_link
         if link is None or link.invocation_id != self.view.invocation_id:
             return False
-        if self.view.status == "succeeded" and self.view.text is None:
-            return False
+        if self.view.status == "succeeded":
+            if self.view.text is None or self.view.recovery_ref is None:
+                return False
         return True
 
     def to_dict(self) -> Dict[str, object]:

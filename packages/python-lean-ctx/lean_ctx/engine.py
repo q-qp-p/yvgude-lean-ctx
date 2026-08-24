@@ -42,6 +42,10 @@ SCHEMA_VERSION = 1
 TRANSPORT_VERSION = "1.0.0"
 WIRE_TRANSPORT_VERSION = 1
 ENGINE_INTERFACE_VERSION = "1.0.0"
+ENGINE_ID = "lean-ctx-local"
+ENGINE_VERSION_MAJOR = 3
+CAPABILITY_ID = "capability://leanctx/context-optimization"
+CAPABILITY_VERSION = "1.0.0"
 ENGINE_BINARY_ENV = "LEAN_CTX_ENGINE_BINARY"
 
 _MAX_PATH_BYTES = 4096
@@ -49,7 +53,10 @@ _MAX_REF_BYTES = 512
 _MAX_VIEW_BYTES = 8 * 1024 * 1024
 _MAX_REQUEST_BYTES = 64 * 1024
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-_SEMVER = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?$")
+_SEMVER = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 _OPAQUE = re.compile(r"^[\x21-\x7e]+$")
 _FAILURE_CODES = {
     "policy_rejected",
@@ -121,10 +128,10 @@ def _version(value: object, field_name: str, *, major: Optional[int] = None) -> 
     if not _SEMVER.fullmatch(value):
         raise _error(f"{field_name} must be a semantic version")
     try:
-        major = int(value.split(".", 1)[0])
+        actual_major = int(value.split(".", 1)[0])
     except ValueError:  # pragma: no cover - guarded by the regexp
         raise _error(f"{field_name} must be a semantic version")
-    if major is not None and major != int(value.split(".", 1)[0]):
+    if major is not None and major != actual_major:
         raise _error(f"{field_name} major version is unsupported")
     return value
 
@@ -307,7 +314,10 @@ class ContextView:
 
     @property
     def integrity_status(self) -> str:
-        return "sealed" if self.receipt_link is not None else "unsealed"
+        sealed = self.receipt_link is not None and (
+            self.status != "succeeded" or self.recovery_ref is not None
+        )
+        return "sealed" if sealed else "unsealed"
 
     @property
     def input_ref(self) -> str:
@@ -544,15 +554,25 @@ def _parse_invocation(value: object) -> Mapping[str, object]:
     engine = _strict_mapping(
         invocation["engine"], "invocation.engine", required=("engine_id", "engine_version")
     )
-    _opaque(engine["engine_id"], "invocation.engine.engine_id")
-    _version(engine["engine_version"], "invocation.engine.engine_version")
+    engine_id = _opaque(engine["engine_id"], "invocation.engine.engine_id")
+    engine_version = _version(
+        engine["engine_version"],
+        "invocation.engine.engine_version",
+        major=ENGINE_VERSION_MAJOR,
+    )
+    if engine_id != ENGINE_ID:
+        raise _error("invocation.engine identity is not pinned")
     operation = _strict_mapping(
         invocation["operation"],
         "invocation.operation",
         required=("capability_id", "capability_version"),
     )
-    _ref(operation["capability_id"], "invocation.operation.capability_id")
-    _version(operation["capability_version"], "invocation.operation.capability_version")
+    capability_id = _ref(operation["capability_id"], "invocation.operation.capability_id")
+    capability_version = _version(
+        operation["capability_version"], "invocation.operation.capability_version", major=1
+    )
+    if capability_id != CAPABILITY_ID or capability_version != CAPABILITY_VERSION:
+        raise _error("invocation.operation capability is not pinned")
     input_ref = _ref(invocation["input_ref"], "invocation.input_ref")
     input_digest = _digest(invocation["input_digest"], "invocation.input_digest")
     source_refs = _list_of_strings(invocation["source_refs"], "invocation.source_refs")
@@ -723,6 +743,8 @@ def _parse_recovery(
     recovery_ref = recovery["recovery_ref"]
     if recovery_ref is not None:
         recovery_ref = _ref(recovery_ref, "recovery.recovery_ref")
+    if observation["status"] == "succeeded" and recovery_ref is None:
+        raise _error("succeeded Engine observation requires exact recovery")
     source_ref = _ref(recovery["source_ref"], "recovery.source_ref")
     source_digest = _digest(recovery["source_digest"], "recovery.source_digest")
     if source_ref not in invocation["source_refs"]:

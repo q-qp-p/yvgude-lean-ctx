@@ -3,7 +3,7 @@
   "schema_version": 1,
   "transport_version": 1,
   "engine_interface_version": "1.0.0",
-  "engine_version": "1.0.0",
+  "engine_version": "3.9.20",
   "request": {
     "schema_version": 1,
     "transport_version": 1,
@@ -25,7 +25,7 @@
     "invocation_id": "engine-invocation-preview-fixture",
     "engine": {
       "engine_id": "lean-ctx-local",
-      "engine_version": "1.0.0"
+      "engine_version": "3.9.20"
     },
     "operation": {
       "capability_id": "capability://leanctx/context-optimization",
