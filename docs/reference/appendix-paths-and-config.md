@@ -145,7 +145,7 @@ or the single dir for legacy/mixed installs — see §1); per-project override a
 | `[archive]` | Zero-loss tool-output archive: `enabled`, `threshold_chars` (800), `max_age_hours` (48), `max_disk_mb` (500) |
 | `[search]` | BM25/dense/splade weights + candidate counts |
 | `[autonomy]` | Auto preload/dedup/consolidate, cognition loop |
-| `[decision_loop]` | Enable the MCP decision-loop runtime (`enabled = true` by default) |
+| `[decision_loop]` | MCP decision loop plus optional lossy output triage (`enabled = true`, `max_filter_level = 0` by default) |
 | `[shadow]` | Counterfactual baseline comparisons: `enabled`, `report_interval`, `baseline_model` |
 | `[knowledge_routing]` | Add focused cross-source knowledge hints: `enabled`, `max_references` |
 | `[providers]` | GitHub/GitLab/Jira/Postgres + MCP bridges |
@@ -171,6 +171,7 @@ Key defaults worth knowing:
 ```toml
 [decision_loop]
 enabled = true
+max_filter_level = 0
 
 [shadow]
 enabled = false
@@ -183,6 +184,10 @@ max_references = 5
 ```
 
 - `[decision_loop].enabled` enables outcome-aware decision-loop runtime; default `true`.
+- `[decision_loop].max_filter_level` caps lossy output triage: `0` preserves output
+  unchanged (default), `1` removes low-value comments, and `2` permits aggressive
+  task-profile filtering. `ctx_read` always trusts its selected read mode and
+  bypasses this second-stage filter; explicit lossless modes on other tools do too.
 - `[shadow].enabled` records counterfactual comparisons; default `false`.
 - `[shadow].report_interval` creates a report after this many measurements; default `10`.
 - `[shadow].baseline_model` names the model used for baseline cost comparisons; default `"gpt-4o"`.

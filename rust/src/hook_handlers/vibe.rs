@@ -210,13 +210,12 @@ mod tests {
         .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let ti = &v["hook_specific_output"]["tool_input"];
-        // `wrap_single_command` quotes with `"..."` on Windows (cmd) and
-        // `'...'` on POSIX shells, so the expected wrapping is platform-aware.
-        let expected = if cfg!(windows) {
-            "lean-ctx -c \"git status\""
-        } else {
-            "lean-ctx -c 'git status'"
-        };
+        // Wrapping follows the detected shell, which can be Git Bash on Windows.
+        let expected = crate::shell::join_command(&[
+            "lean-ctx".to_owned(),
+            "-c".to_owned(),
+            "git status".to_owned(),
+        ]);
         assert_eq!(ti["command"], expected);
         assert_eq!(ti["timeout"], 42, "non-command fields must be preserved");
     }

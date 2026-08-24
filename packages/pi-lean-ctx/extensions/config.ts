@@ -116,6 +116,40 @@ export function piConfigPath(): string {
   return existsSync(legacy) ? legacy : direct;
 }
 
+function piSettingsPath(): string {
+  return resolve(process.env.PI_CODING_AGENT_DIR ?? resolve(homedir(), ".pi", "agent"), "settings.json");
+}
+
+/**
+ * Resolve the shell used by this extension's private bash tools (#1512).
+ * Pi injects `settings.json.shellPath` only into its native bash tool, so the
+ * extension must forward the same setting explicitly. Invalid paths fail open
+ * to Pi's normal resolver instead of breaking every `ctx_shell` call.
+ */
+export function resolvePiShellPath(): string | undefined {
+  for (const value of [process.env.LEAN_CTX_SHELL, process.env.PI_SHELL_PATH]) {
+    const path = value?.trim();
+    if (path && existsSync(path)) return path;
+  }
+
+  const settingsPath = piSettingsPath();
+  if (!existsSync(settingsPath)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const value = (parsed as { shellPath?: unknown }).shellPath;
+      if (typeof value === "string") {
+        const path = value.trim();
+        if (path && existsSync(path)) return path;
+      }
+    }
+  } catch {
+    // Pi owns this file. A malformed/unreadable setting must preserve its
+    // built-in shell discovery rather than making the extension unload.
+  }
+  return undefined;
+}
+
 function envFlag(name: string): boolean {
   const raw = process.env[name];
   if (!raw) return false;

@@ -210,6 +210,49 @@ fn powershell_pipeline_with_destructive_blocked() {
     assert!(result.is_err());
 }
 
+/// GH #1514: PowerShell assignment and member-expression wrappers are syntax,
+/// not command names. The wrapped cmdlet still owns the security decision.
+#[test]
+fn powershell_assignment_and_member_wrappers_validate_inner_cmdlets() {
+    let list = allow(&["git"]);
+
+    assert!(
+        check_all_segments(
+            "$d = Get-Content 'C:\\Users\\Max\\notes.json' -Raw | ConvertFrom-Json -AsHashtable",
+            &list,
+        )
+        .is_ok()
+    );
+    assert!(check_all_segments("$d['items'] | ConvertTo-Json -Depth 6", &list).is_ok());
+    assert!(check_all_segments("$d = (Get-Item 'C:\\Temp').Name", &list).is_ok());
+    assert!(
+        check_all_segments(
+            "(Get-Item 'C:\\Users\\Max\\.cargo\\bin\\lean-ctx.exe').VersionInfo | Format-List *",
+            &list,
+        )
+        .is_ok()
+    );
+
+    assert!(check_all_segments("$d = Remove-Item file.txt", &list).is_err());
+    assert!(check_all_segments("(Invoke-Expression 'Get-Process').Length", &list).is_err());
+    assert!(
+        check_all_segments("(Get-Item 'C:\\Temp\\victim.txt').Delete()", &list).is_err(),
+        "method calls must not be mistaken for safe property access"
+    );
+    assert!(
+        check_all_segments("$d = (Get-Item 'C:\\Temp\\victim.txt').Delete()", &list).is_err(),
+        "assignment wrappers must not hide method calls"
+    );
+    assert!(
+        check_all_segments("$env:PATH = 'C:\\attacker'", &list).is_err(),
+        "environment mutation must not be normalized into a safe local assignment"
+    );
+    assert!(
+        check_all_segments("$env:PATH='C:\\attacker'", &list).is_err(),
+        "compact scoped assignments must not be consumed as POSIX environment prefixes"
+    );
+}
+
 /// Case insensitivity: PowerShell cmdlets are case-insensitive.
 #[test]
 fn powershell_case_insensitive_enforcement() {

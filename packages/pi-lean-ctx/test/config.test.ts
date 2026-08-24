@@ -7,6 +7,7 @@ import {
   loadPiConfig,
   piConfigPath,
   REPLACEABLE_BUILTIN_TOOLS,
+  resolvePiShellPath,
   resolveRouteShell,
   resolveSuppressedBuiltins,
   resolveToolProfile,
@@ -14,11 +15,57 @@ import {
 
 const ENV_KEY = "LEAN_CTX_PI_ROUTE_SHELL";
 const PROFILE_ENV_KEYS = ["LEAN_CTX_PI_TOOL_PROFILE", "LEAN_CTX_TOOL_PROFILE"];
+const SHELL_ENV_KEYS = ["LEAN_CTX_SHELL", "PI_SHELL_PATH"];
 
 afterEach(() => {
   delete process.env[ENV_KEY];
   delete process.env.PI_CODING_AGENT_DIR;
   for (const key of PROFILE_ENV_KEYS) delete process.env[key];
+  for (const key of SHELL_ENV_KEYS) delete process.env[key];
+});
+
+describe("resolvePiShellPath", () => {
+  it("honors Pi's settings.json under PI_CODING_AGENT_DIR", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-lean-ctx-shell-"));
+    const shellPath = join(agentDir, "Git", "bin", "bash.exe");
+    mkdirSync(join(agentDir, "Git", "bin"), { recursive: true });
+    writeFileSync(shellPath, "");
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ shellPath }));
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    try {
+      expect(resolvePiShellPath()).toBe(shellPath);
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers LEAN_CTX_SHELL, then PI_SHELL_PATH, over settings.json", () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-lean-ctx-shell-env-"));
+    const configured = join(root, "configured-bash.exe");
+    const piEnv = join(root, "pi-env-bash.exe");
+    const leanEnv = join(root, "lean-env-bash.exe");
+    for (const path of [configured, piEnv, leanEnv]) writeFileSync(path, "");
+    writeFileSync(join(root, "settings.json"), JSON.stringify({ shellPath: configured }));
+    process.env.PI_CODING_AGENT_DIR = root;
+    process.env.PI_SHELL_PATH = piEnv;
+    expect(resolvePiShellPath()).toBe(piEnv);
+    process.env.LEAN_CTX_SHELL = leanEnv;
+    expect(resolvePiShellPath()).toBe(leanEnv);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fails open to Pi's normal resolver for missing or malformed paths", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-lean-ctx-shell-missing-"));
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.env.LEAN_CTX_SHELL = join(agentDir, "missing.exe");
+    writeFileSync(join(agentDir, "settings.json"), "{not-json");
+    try {
+      expect(resolvePiShellPath()).toBeUndefined();
+    } finally {
+      rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("piConfigPath", () => {
