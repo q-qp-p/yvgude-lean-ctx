@@ -35,6 +35,8 @@ pub mod html_crush;
 pub mod ib;
 pub mod import;
 pub mod integration_proof;
+#[allow(dead_code)]
+pub(crate) mod invocation_admission;
 pub mod json_crush;
 pub mod json_sample;
 pub(crate) mod markdown_compact;
