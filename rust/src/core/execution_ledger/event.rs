@@ -121,7 +121,6 @@ pub enum ExecutionEvent {
 
 impl ExecutionEvent {
     /// Stable logical identity for append retries that must not duplicate events.
-    #[cfg(unix)]
     #[must_use]
     pub(crate) fn idempotency_key(&self) -> Option<(&'static str, &str, &str)> {
         match self {
@@ -162,7 +161,6 @@ impl ExecutionEvent {
     }
 
     /// Canonical payload bytes excluding store-assigned chain metadata.
-    #[cfg(unix)]
     pub(crate) fn payload_json(&self) -> serde_json::Result<String> {
         let mut event = self.clone();
         event.set_chain_fields(0, String::new());
@@ -305,7 +303,6 @@ impl ExecutionEvent {
     }
 
     /// Fills the chain metadata immediately before append.
-    #[cfg(any(unix, test))]
     pub(crate) fn set_chain_fields(&mut self, sequence_number: u64, prev_hash: String) {
         match self {
             Self::TaskStarted {

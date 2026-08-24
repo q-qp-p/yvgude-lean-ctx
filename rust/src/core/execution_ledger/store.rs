@@ -3,49 +3,50 @@
 //! not this unkeyed sidecar, provide adversarial authenticity.
 
 use std::fs;
-#[cfg(unix)]
 use std::fs::File;
 #[cfg(test)]
 use std::fs::OpenOptions;
-#[cfg(any(unix, test))]
 use std::io::Write;
-#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[cfg(unix)]
 use fs2::FileExt;
-#[cfg(unix)]
 use serde::de::Error as _;
-#[cfg(unix)]
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
-#[cfg(any(unix, test))]
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
 use serde_json::{Number, Value};
-#[cfg(any(unix, test))]
 use sha2::{Digest, Sha256};
 
 use super::event::ExecutionEvent;
-#[cfg(unix)]
 use super::verify::verify_events;
-#[cfg(any(unix, test))]
 use super::verify::{GENESIS, hash_event};
 use super::{ExecutionLedgerError, Result};
 
-#[cfg(any(unix, test))]
+mod platform;
+#[cfg(not(unix))]
+mod portable;
+#[cfg(test)]
+use platform::path_parts;
+#[cfg(unix)]
+use platform::{
+    Operation, capture_relative_parent_identity, create_regular_operation, directory_identity,
+    hard_link_operation, open_ledger_for_append_operation, open_nofollow_operation,
+    open_regular_nofollow_operation, operation_stat, relative_sibling, remove_file_operation,
+    unix_open_operation, unix_open_root, unlink_operation, validate_directory_identity,
+    validate_operation_file,
+};
+#[cfg(unix)]
+use platform::{capture_directory_identity, ensure_default_data_root};
+#[cfg(not(unix))]
+use portable::{capture_directory_identity, ensure_default_data_root};
+
 const LEDGER_RECORD_SCHEMA: &str = "lean-ctx.execution-ledger-record.v1";
-#[cfg(any(unix, test))]
 const LEDGER_RECORD_KIND: &str = "execution_event";
-#[cfg(any(unix, test))]
 const APPEND_JOURNAL_SCHEMA: &str = "lean-ctx.execution-ledger-append-journal.v1";
-#[cfg(any(unix, test))]
 const MAX_LEDGER_RECORD_BYTES: usize = 1024 * 1024;
-#[cfg(any(unix, test))]
 const MAX_APPEND_JOURNAL_BYTES: usize = MAX_LEDGER_RECORD_BYTES * 2 + 1024;
 
-#[cfg(any(unix, test))]
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct LedgerRecordV1 {
@@ -55,7 +56,6 @@ struct LedgerRecordV1 {
     entry_hash: String,
 }
 
-#[cfg(any(unix, test))]
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AppendJournalV1 {
@@ -185,11 +185,7 @@ impl ExecutionLedgerStore {
         }
         #[cfg(not(unix))]
         {
-            let _ = (trusted_root, relative_path);
-            Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger descriptor-relative access is unsupported on this platform"
-                    .to_owned(),
-            ))
+            portable::new_verified(trusted_root, relative_path)
         }
     }
 
@@ -274,11 +270,7 @@ impl ExecutionLedgerStore {
     pub(crate) fn append_if_new(&self, event: ExecutionEvent) -> Result<bool> {
         #[cfg(not(unix))]
         {
-            let _ = event;
-            return Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger descriptor-relative access is unsupported on this platform"
-                    .to_owned(),
-            ));
+            return portable::append_if_new(self, event);
         }
         #[cfg(unix)]
         {
@@ -385,10 +377,7 @@ impl ExecutionLedgerStore {
     pub fn verify_chain(&self) -> Result<bool> {
         #[cfg(not(unix))]
         {
-            return Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger descriptor-relative access is unsupported on this platform"
-                    .to_owned(),
-            ));
+            return portable::verify_chain(self);
         }
         #[cfg(unix)]
         {
@@ -424,10 +413,7 @@ impl ExecutionLedgerStore {
     pub fn load(&self) -> Result<Vec<ExecutionEvent>> {
         #[cfg(not(unix))]
         {
-            return Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger descriptor-relative access is unsupported on this platform"
-                    .to_owned(),
-            ));
+            return portable::load(self, false);
         }
         #[cfg(unix)]
         {
@@ -461,10 +447,7 @@ impl ExecutionLedgerStore {
     pub fn load_verified(&self) -> Result<Vec<ExecutionEvent>> {
         #[cfg(not(unix))]
         {
-            return Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger descriptor-relative access is unsupported on this platform"
-                    .to_owned(),
-            ));
+            return portable::load(self, true);
         }
         #[cfg(unix)]
         {
@@ -609,619 +592,6 @@ fn validate_relative_path(relative: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn relative_sibling(relative: &Path, suffix: &str) -> Result<PathBuf> {
-    let file_name = relative.file_name().ok_or_else(|| {
-        ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
-    })?;
-    let mut name = file_name.to_os_string();
-    name.push(suffix);
-    let mut sibling = relative.to_path_buf();
-    sibling.set_file_name(name);
-    validate_relative_path(&sibling)?;
-    Ok(sibling)
-}
-
-#[cfg(unix)]
-struct Operation {
-    root: File,
-    parent: File,
-    root_path: PathBuf,
-    parent_path: PathBuf,
-    parent_relative: PathBuf,
-    relative: PathBuf,
-}
-
-#[cfg(unix)]
-impl Operation {
-    fn leaf_name(&self, relative: &Path) -> Result<std::ffi::CString> {
-        if relative.parent().unwrap_or_else(|| Path::new("")) != self.parent_relative {
-            return Err(ExecutionLedgerError::InvalidRecord(
-                "execution ledger operation escaped its parent".to_owned(),
-            ));
-        }
-        let name = relative.file_name().ok_or_else(|| {
-            ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
-        })?;
-        use std::os::unix::ffi::OsStrExt;
-        std::ffi::CString::new(name.as_bytes()).map_err(|_| {
-            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
-        })
-    }
-
-    fn validate_paths(&self) -> Result<()> {
-        validate_directory_identity(&self.root_path, &self.root)?;
-        validate_directory_identity(&self.parent_path, &self.parent)?;
-        Ok(())
-    }
-
-    fn sync_parent(&self) -> Result<()> {
-        self.parent.sync_all()?;
-        self.validate_paths()
-    }
-}
-
-#[cfg(unix)]
-fn directory_identity(file: &File) -> Result<DirectoryIdentity> {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = file.metadata()?;
-    if !metadata.is_dir() {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger trusted root is not a directory".to_owned(),
-        ));
-    }
-    Ok(DirectoryIdentity {
-        dev: metadata.dev(),
-        ino: metadata.ino(),
-    })
-}
-
-#[cfg(not(unix))]
-fn capture_directory_identity(path: &Path) -> Result<DirectoryIdentity> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger trusted root is not a directory".to_owned(),
-        ));
-    }
-    Ok(DirectoryIdentity)
-}
-
-#[cfg(unix)]
-fn capture_directory_identity(path: &Path) -> Result<DirectoryIdentity> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger trusted root is not a directory".to_owned(),
-        ));
-    }
-    use std::os::unix::fs::MetadataExt;
-    Ok(DirectoryIdentity {
-        dev: metadata.dev(),
-        ino: metadata.ino(),
-    })
-}
-
-#[cfg(unix)]
-fn validate_directory_identity(path: &Path, directory: &File) -> Result<()> {
-    let expected = directory_identity(directory)?;
-    let actual = capture_directory_identity(path)?;
-    if actual != expected {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger trusted directory changed while opening".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn capture_relative_parent_identity(
-    root: &Path,
-    relative: &Path,
-) -> Result<Option<DirectoryIdentity>> {
-    let root_directory = unix_open_root(root)?;
-    match unix_open_parent_from_root(&root_directory, relative, false) {
-        Ok(parent) => Ok(Some(directory_identity(&parent)?)),
-        Err(ExecutionLedgerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(unix)]
-fn ensure_default_data_root(path: &Path) -> Result<()> {
-    if !path.is_absolute() {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger data root must be absolute".to_owned(),
-        ));
-    }
-    let (absolute, components) = unix_trusted_root_components(path)?;
-    let mut directory = unix_open_start(absolute)?;
-    for component in components {
-        use std::ffi::CString;
-        use std::os::fd::{AsRawFd, FromRawFd};
-        use std::os::unix::ffi::OsStrExt;
-        let name = CString::new(component.as_bytes()).map_err(|_| {
-            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
-        })?;
-        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-        // SAFETY: directory is live and name is NUL-terminated.
-        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-        if fd < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::NotFound {
-                return Err(error.into());
-            }
-            // SAFETY: directory is live and name is NUL-terminated.
-            let result = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-            if result < 0 {
-                let mkdir_error = std::io::Error::last_os_error();
-                if mkdir_error.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(mkdir_error.into());
-                }
-            } else {
-                directory.sync_all()?;
-            }
-            // SAFETY: directory is live and name is NUL-terminated.
-            fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-        }
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        // SAFETY: fd is a new descriptor owned by the returned File.
-        directory = unsafe { File::from_raw_fd(fd) };
-    }
-    directory.sync_all()?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_default_data_root(path: &Path) -> Result<()> {
-    let _ = path;
-    Err(ExecutionLedgerError::InvalidRecord(
-        "execution ledger descriptor-relative access is unsupported on this platform".to_owned(),
-    ))
-}
-
-#[cfg(test)]
-fn path_parts(path: &Path) -> Result<(PathBuf, PathBuf)> {
-    let root = path
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let relative = path.file_name().map(PathBuf::from).ok_or_else(|| {
-        ExecutionLedgerError::InvalidRecord("execution ledger path has no file name".to_owned())
-    })?;
-    validate_root_path(&root)?;
-    validate_relative_path(&relative)?;
-    Ok((root, relative))
-}
-
-#[cfg(unix)]
-fn unix_open_start(absolute: bool) -> Result<File> {
-    use std::ffi::CString;
-    use std::os::fd::FromRawFd;
-
-    let start = if absolute {
-        b"/".as_slice()
-    } else {
-        b".".as_slice()
-    };
-    let start = CString::new(start).expect("static path has no NUL");
-    // SAFETY: start is a NUL-terminated static path.
-    let fd = unsafe {
-        libc::open(
-            start.as_ptr(),
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // SAFETY: fd is a new descriptor owned by the returned File.
-    Ok(unsafe { File::from_raw_fd(fd) })
-}
-
-#[cfg(unix)]
-fn unix_open_root(root: &Path) -> Result<File> {
-    let (absolute, components) = unix_trusted_root_components(root)?;
-    let mut directory = unix_open_start(absolute)?;
-    for component in components {
-        use std::ffi::CString;
-        use std::os::fd::{AsRawFd, FromRawFd};
-        use std::os::unix::ffi::OsStrExt;
-        let name = CString::new(component.as_bytes()).map_err(|_| {
-            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
-        })?;
-        // SAFETY: directory is live and name is NUL-terminated.
-        let fd = unsafe {
-            libc::openat(
-                directory.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            )
-        };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        // SAFETY: fd is a new descriptor owned by the returned File.
-        directory = unsafe { File::from_raw_fd(fd) };
-    }
-    Ok(directory)
-}
-
-#[cfg(unix)]
-fn unix_open_parent_from_root(
-    root: &File,
-    relative: &Path,
-    create_directories: bool,
-) -> Result<File> {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-
-    let components = unix_normal_components(relative)?;
-    let directory_components = components
-        .get(..components.len().saturating_sub(1))
-        .unwrap_or_default();
-    let mut directory = root.try_clone()?;
-    for component in directory_components {
-        let name = CString::new(component.as_bytes()).map_err(|_| {
-            ExecutionLedgerError::InvalidRecord("execution ledger path contains NUL".to_owned())
-        })?;
-        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW;
-        // SAFETY: directory is live and name is NUL-terminated.
-        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-        if fd < 0 && create_directories {
-            let error = std::io::Error::last_os_error();
-            if error.kind() == std::io::ErrorKind::NotFound {
-                // SAFETY: directory is live and name is NUL-terminated.
-                let result = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-                if result < 0 {
-                    let mkdir_error = std::io::Error::last_os_error();
-                    if mkdir_error.kind() != std::io::ErrorKind::AlreadyExists {
-                        return Err(mkdir_error.into());
-                    }
-                } else {
-                    directory.sync_all()?;
-                }
-                // SAFETY: directory is live and name is NUL-terminated.
-                fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
-            }
-        }
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        // SAFETY: fd is a new descriptor owned by the returned File.
-        directory = unsafe { File::from_raw_fd(fd) };
-    }
-    Ok(directory)
-}
-
-#[cfg(unix)]
-fn unix_open_operation(
-    root_path: &Path,
-    relative: &Path,
-    expected_root: Option<DirectoryIdentity>,
-    expected_parent: Option<DirectoryIdentity>,
-    create_parent: bool,
-) -> Result<Operation> {
-    validate_root_path(root_path)?;
-    validate_relative_path(relative)?;
-    let root = unix_open_root(root_path)?;
-    let root_identity = directory_identity(&root)?;
-    if expected_root.is_some_and(|expected| expected != root_identity) {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger trusted root changed while opening".to_owned(),
-        ));
-    }
-    let parent = unix_open_parent_from_root(&root, relative, create_parent)?;
-    let parent_identity = directory_identity(&parent)?;
-    if expected_parent.is_some_and(|expected| expected != parent_identity) {
-        return Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger parent changed while opening".to_owned(),
-        ));
-    }
-    let parent_relative = relative
-        .parent()
-        .map_or_else(PathBuf::new, Path::to_path_buf);
-    let operation = Operation {
-        root,
-        parent,
-        root_path: root_path.to_path_buf(),
-        parent_path: root_path.join(&parent_relative),
-        parent_relative,
-        relative: relative.to_path_buf(),
-    };
-    operation.validate_paths()?;
-    Ok(operation)
-}
-
-#[cfg(unix)]
-fn open_regular_nofollow_operation(operation: &Operation, relative: &Path) -> Result<Option<File>> {
-    let Some(file) = open_nofollow_operation(operation, relative)? else {
-        return Ok(None);
-    };
-    validate_operation_file(operation, relative, &file, "execution ledger", true)?;
-    Ok(Some(file))
-}
-
-#[cfg(unix)]
-fn open_nofollow_operation(operation: &Operation, relative: &Path) -> Result<Option<File>> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    let name = operation.leaf_name(relative)?;
-    // SAFETY: parent is live and name is NUL-terminated.
-    let fd = unsafe {
-        libc::openat(
-            operation.parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK,
-        )
-    };
-    if fd < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(None);
-        }
-        return Err(error.into());
-    }
-    // SAFETY: fd is a new descriptor owned by the returned File.
-    let file = unsafe { File::from_raw_fd(fd) };
-    Ok(Some(file))
-}
-
-#[cfg(unix)]
-fn open_ledger_for_append_operation(operation: &Operation) -> Result<File> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    let name = operation.leaf_name(&operation.relative)?;
-    loop {
-        // SAFETY: parent is live and name is NUL-terminated.
-        let fd = unsafe {
-            libc::openat(
-                operation.parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR
-                    | libc::O_APPEND
-                    | libc::O_CLOEXEC
-                    | libc::O_NOFOLLOW
-                    | libc::O_NONBLOCK,
-            )
-        };
-        if fd >= 0 {
-            // SAFETY: fd is a new descriptor owned by the returned File.
-            let file = unsafe { File::from_raw_fd(fd) };
-            validate_operation_file(
-                operation,
-                &operation.relative,
-                &file,
-                "execution ledger",
-                true,
-            )?;
-            return Ok(file);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(error.into());
-        }
-        ensure_no_pending_append_operation(operation)?;
-        // SAFETY: parent is live and name is NUL-terminated.
-        let fd = unsafe {
-            libc::openat(
-                operation.parent.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDWR
-                    | libc::O_APPEND
-                    | libc::O_CLOEXEC
-                    | libc::O_NOFOLLOW
-                    | libc::O_NONBLOCK
-                    | libc::O_CREAT
-                    | libc::O_EXCL,
-                0o600,
-            )
-        };
-        if fd >= 0 {
-            // SAFETY: fd is a new descriptor owned by the returned File.
-            let file = unsafe { File::from_raw_fd(fd) };
-            validate_operation_file(
-                operation,
-                &operation.relative,
-                &file,
-                "execution ledger",
-                true,
-            )?;
-            operation.sync_parent()?;
-            return Ok(file);
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            continue;
-        }
-        return Err(error.into());
-    }
-}
-
-#[cfg(unix)]
-fn operation_stat(operation: &Operation, relative: &Path) -> Result<libc::stat> {
-    use std::os::fd::AsRawFd;
-    let name = operation.leaf_name(relative)?;
-    // SAFETY: zeroed stat is initialized by fstatat before it is read.
-    let mut metadata = unsafe { std::mem::zeroed::<libc::stat>() };
-    // SAFETY: parent is live, name is NUL-terminated, metadata is writable.
-    let result = unsafe {
-        libc::fstatat(
-            operation.parent.as_raw_fd(),
-            name.as_ptr(),
-            &raw mut metadata,
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    Ok(metadata)
-}
-
-#[cfg(unix)]
-fn validate_operation_file(
-    operation: &Operation,
-    relative: &Path,
-    file: &File,
-    label: &str,
-    require_single_link: bool,
-) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-    operation.validate_paths()?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err(ExecutionLedgerError::InvalidRecord(format!(
-            "{label} path is not a regular file"
-        )));
-    }
-    if require_single_link && metadata.nlink() != 1 {
-        return Err(ExecutionLedgerError::InvalidRecord(format!(
-            "{label} has multiple hard links"
-        )));
-    }
-    let path_metadata = operation_stat(operation, relative)?;
-    let mode = path_metadata.st_mode as libc::mode_t;
-    if mode & libc::S_IFMT != libc::S_IFREG
-        || path_metadata.st_dev as u64 != metadata.dev()
-        || path_metadata.st_ino as u64 != metadata.ino()
-        || path_metadata.st_nlink as u64 != metadata.nlink()
-    {
-        return Err(ExecutionLedgerError::InvalidRecord(format!(
-            "{label} changed while opening"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn create_regular_operation(operation: &Operation, relative: &Path, label: &str) -> Result<File> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    operation.validate_paths()?;
-    let name = operation.leaf_name(relative)?;
-    // SAFETY: parent is live and name is NUL-terminated.
-    let fd = unsafe {
-        libc::openat(
-            operation.parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL,
-            0o600,
-        )
-    };
-    if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    // SAFETY: fd is a new descriptor owned by the returned File.
-    let file = unsafe { File::from_raw_fd(fd) };
-    validate_operation_file(operation, relative, &file, label, true)?;
-    Ok(file)
-}
-
-#[cfg(unix)]
-fn unlink_operation(operation: &Operation, relative: &Path) -> Result<()> {
-    use std::os::fd::AsRawFd;
-    let name = operation.leaf_name(relative)?;
-    // SAFETY: parent is live and name is NUL-terminated.
-    let result = unsafe { libc::unlinkat(operation.parent.as_raw_fd(), name.as_ptr(), 0) };
-    if result == 0 {
-        operation.validate_paths()
-    } else {
-        Err(std::io::Error::last_os_error().into())
-    }
-}
-
-#[cfg(unix)]
-fn remove_file_operation(operation: &Operation, relative: &Path) -> Result<bool> {
-    let Some(file) = open_nofollow_operation(operation, relative)? else {
-        return Ok(false);
-    };
-    validate_operation_file(operation, relative, &file, "cleanup target", true)?;
-    match unlink_operation(operation, relative) {
-        Ok(()) => Ok(true),
-        Err(ExecutionLedgerError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok(false)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(unix)]
-fn hard_link_operation(operation: &Operation, source: &Path, destination: &Path) -> Result<()> {
-    use std::os::fd::AsRawFd;
-    let source_name = operation.leaf_name(source)?;
-    let destination_name = operation.leaf_name(destination)?;
-    let Some(source_file) = open_nofollow_operation(operation, source)? else {
-        return Err(ExecutionLedgerError::Io(std::io::Error::from(
-            std::io::ErrorKind::NotFound,
-        )));
-    };
-    validate_operation_file(
-        operation,
-        source,
-        &source_file,
-        "append journal temporary",
-        true,
-    )?;
-    operation.validate_paths()?;
-    // SAFETY: both names and parent descriptor are valid and live.
-    let result = unsafe {
-        libc::linkat(
-            operation.parent.as_raw_fd(),
-            source_name.as_ptr(),
-            operation.parent.as_raw_fd(),
-            destination_name.as_ptr(),
-            0,
-        )
-    };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    operation.validate_paths()
-}
-
-#[cfg(unix)]
-fn unix_normal_components(path: &Path) -> Result<Vec<std::ffi::OsString>> {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(name) => components.push(name.to_owned()),
-            std::path::Component::CurDir
-            | std::path::Component::RootDir
-            | std::path::Component::Prefix(_) => {}
-            std::path::Component::ParentDir => {
-                return Err(ExecutionLedgerError::InvalidRecord(
-                    "execution ledger path contains parent traversal".to_owned(),
-                ));
-            }
-        }
-    }
-    Ok(components)
-}
-
-#[cfg(unix)]
-fn unix_trusted_root_components(root: &Path) -> Result<(bool, Vec<std::ffi::OsString>)> {
-    let absolute = root.is_absolute();
-    let mut components = unix_normal_components(root)?;
-    if absolute
-        && let Some(first) = components.first()
-        && (first == "var" || first == "tmp")
-    {
-        // macOS exposes /var and /tmp as stable system aliases. Resolve only
-        // this first component; user-controlled parent symlinks remain denied
-        // by the descriptor-relative O_NOFOLLOW traversal below.
-        let alias = Path::new("/").join(first);
-        if let Ok(target) = fs::read_link(alias) {
-            let mut replacement = unix_normal_components(&target)?;
-            replacement.extend(components.into_iter().skip(1));
-            components = replacement;
-        }
-    }
-    Ok((absolute, components))
-}
-
-#[cfg(unix)]
 fn read_events_from_file(file: &File) -> Result<Vec<ExecutionEvent>> {
     let mut source = file.try_clone()?;
     source.seek(SeekFrom::Start(0))?;
@@ -1247,7 +617,6 @@ fn ensure_no_pending_append_operation(operation: &Operation) -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEvent>, Vec<u8>)> {
     let mut reader = BufReader::new(source);
     let mut events = Vec::new();
@@ -1276,7 +645,6 @@ fn read_complete_events_and_tail(source: impl Read) -> Result<(Vec<ExecutionEven
     }
 }
 
-#[cfg(unix)]
 fn read_bounded_line(reader: &mut impl BufRead) -> Result<Option<(Vec<u8>, bool)>> {
     let mut line = Vec::new();
     loop {
@@ -1394,7 +762,6 @@ fn recover_pending_append_operation(file: &mut File, operation: &Operation) -> R
     clear_append_journal_operation(operation)
 }
 
-#[cfg(unix)]
 fn file_is_newline_terminated(file: &File) -> Result<bool> {
     let len = file.metadata()?.len();
     if len == 0 {
@@ -1407,13 +774,11 @@ fn file_is_newline_terminated(file: &File) -> Result<bool> {
     Ok(last[0] == b'\n')
 }
 
-#[cfg(unix)]
 fn file_len_and_sha256(file: &File) -> Result<(u64, String)> {
     let len = file.metadata()?.len();
     Ok((len, sha256_prefix(file, len)?))
 }
 
-#[cfg(unix)]
 fn sha256_prefix(file: &File, len: u64) -> Result<String> {
     let mut reader = file.try_clone()?;
     reader.seek(SeekFrom::Start(0))?;
@@ -1475,11 +840,12 @@ fn write_append_journal(
     }
     #[cfg(not(unix))]
     {
-        let _ = (root, relative, previous_len, previous_sha256, record);
-        Err(ExecutionLedgerError::InvalidRecord(
-            "execution ledger descriptor-relative access is unsupported on this platform"
-                .to_owned(),
-        ))
+        portable::write_append_journal_path(
+            &root.join(relative),
+            previous_len,
+            previous_sha256,
+            record,
+        )
     }
 }
 
@@ -1553,7 +919,6 @@ fn write_append_journal_operation(
     result
 }
 
-#[cfg(unix)]
 fn read_bounded_file(mut file: File, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let max_len = u64::try_from(max_bytes).map_err(|_| {
         ExecutionLedgerError::InvalidRecord(format!("{label} byte limit exceeds platform"))
@@ -1704,12 +1069,10 @@ fn clear_append_journal_operation(operation: &Operation) -> Result<()> {
     operation.sync_parent()
 }
 
-#[cfg(any(unix, test))]
 fn sha256(bytes: &[u8]) -> String {
     encode_sha256(Sha256::digest(bytes))
 }
 
-#[cfg(any(unix, test))]
 fn encode_sha256(digest: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut encoded = String::with_capacity(71);
@@ -1721,7 +1084,6 @@ fn encode_sha256(digest: impl AsRef<[u8]>) -> String {
     encoded
 }
 
-#[cfg(unix)]
 enum StrictJson {
     Null,
     Bool(bool),
@@ -1731,7 +1093,6 @@ enum StrictJson {
     Object(serde_json::Map<String, Value>),
 }
 
-#[cfg(unix)]
 impl StrictJson {
     fn into_value(self) -> Value {
         match self {
@@ -1745,7 +1106,6 @@ impl StrictJson {
     }
 }
 
-#[cfg(unix)]
 impl<'de> Deserialize<'de> for StrictJson {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -1827,7 +1187,6 @@ impl<'de> Deserialize<'de> for StrictJson {
     }
 }
 
-#[cfg(unix)]
 fn parse_canonical_event(line: &str) -> Result<ExecutionEvent> {
     let mut deserializer = serde_json::Deserializer::from_str(line);
     let value = StrictJson::deserialize(&mut deserializer)
@@ -1854,761 +1213,4 @@ fn parse_canonical_event(line: &str) -> Result<ExecutionEvent> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn task_started() -> ExecutionEvent {
-        ExecutionEvent::TaskStarted {
-            task_id: "task-1".to_owned(),
-            trace_id: "trace-1".to_owned(),
-            envelope_ref: "task:1".to_owned(),
-            timestamp: "2026-08-23T12:00:00Z".to_owned(),
-            sequence_number: 0,
-            prev_hash: String::new(),
-        }
-    }
-
-    fn plan_created() -> ExecutionEvent {
-        ExecutionEvent::PlanCreated {
-            task_id: "task-1".to_owned(),
-            trace_id: "trace-1".to_owned(),
-            plan_id: "plan-1".to_owned(),
-            plan_ref: "plan:1".to_owned(),
-            timestamp: "2026-08-23T12:00:01Z".to_owned(),
-            sequence_number: 0,
-            prev_hash: String::new(),
-        }
-    }
-
-    fn stage_prepared_append(
-        store: &ExecutionLedgerStore,
-        event: ExecutionEvent,
-        omitted_suffix: usize,
-    ) -> Vec<u8> {
-        let previous = fs::read(store.path()).unwrap_or_default();
-        store.append(event).unwrap();
-        let complete = fs::read(store.path()).unwrap();
-        let record = complete[previous.len()..].to_vec();
-        assert!(record.ends_with(b"\n"));
-        OpenOptions::new()
-            .write(true)
-            .open(store.path())
-            .unwrap()
-            .set_len(u64::try_from(previous.len()).unwrap())
-            .unwrap();
-        let line = std::str::from_utf8(&record[..record.len() - 1]).unwrap();
-        write_append_journal(
-            store.path(),
-            u64::try_from(previous.len()).unwrap(),
-            &sha256(&previous),
-            line,
-        )
-        .unwrap();
-        let written = record.len().saturating_sub(omitted_suffix);
-        let mut file = OpenOptions::new().append(true).open(store.path()).unwrap();
-        file.write_all(&record[..written]).unwrap();
-        file.sync_all().unwrap();
-        record
-    }
-
-    #[test]
-    fn prepared_complete_record_without_newline_is_finalized_before_retry() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        stage_prepared_append(&store, task_started(), 1);
-
-        assert!(store.load_verified().is_err());
-        assert!(!store.append_if_new(task_started()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 1);
-        assert!(fs::read(&path).unwrap().ends_with(b"\n"));
-        assert!(!append_journal_path(&path).exists());
-    }
-
-    #[test]
-    fn prepared_partial_record_is_completed_before_retry() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 7);
-
-        assert!(!store.append_if_new(plan_created()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 2);
-        assert!(store.verify_chain().unwrap());
-        assert!(!append_journal_path(&path).exists());
-    }
-
-    #[test]
-    fn prepared_record_is_completed_when_no_ledger_byte_was_written() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), usize::MAX);
-
-        assert!(!store.append_if_new(plan_created()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn prepared_first_record_is_completed_from_empty_ledger() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        stage_prepared_append(&store, task_started(), usize::MAX);
-
-        assert!(!store.append_if_new(task_started()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn completed_prepared_record_only_clears_stale_journal() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 0);
-
-        assert!(store.load_verified().is_err());
-        assert!(!store.append_if_new(plan_created()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 2);
-        assert!(!append_journal_path(&path).exists());
-    }
-
-    #[test]
-    fn newline_terminated_corruption_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
-        file.write_all(b"garbage\n").unwrap();
-        file.sync_all().unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert!(store.by_task_verified("task-1").is_err());
-        assert!(store.last_sequence_verified().is_err());
-        assert!(store.canonical_receipt_for_task_verified("task-1").is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn unmatched_unterminated_corruption_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
-        file.write_all(b"garbage").unwrap();
-        file.sync_all().unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn tampered_prefix_prevents_prepared_tail_recovery() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 7);
-        let bytes = fs::read(&path).unwrap();
-        let tampered = String::from_utf8(bytes)
-            .unwrap()
-            .replace("task-1", "task-X");
-        fs::write(&path, tampered.as_bytes()).unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn prepared_tail_mismatch_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 7);
-        let mut bytes = fs::read(&path).unwrap();
-        *bytes.last_mut().unwrap() ^= 1;
-        fs::write(&path, &bytes).unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn bytes_after_prepared_record_remain_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 0);
-        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
-        file.write_all(b"extra").unwrap();
-        file.sync_all().unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn prepared_lifecycle_violation_is_rejected_before_mutation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let previous = fs::read(&path).unwrap();
-        let previous_event = store.load_verified().unwrap().pop().unwrap();
-        let mut event = task_started();
-        event.set_chain_fields(2, hash_event(&previous_event).unwrap());
-        let entry_hash = hash_event(&event).unwrap();
-        event.set_entry_hash(entry_hash.clone());
-        let line = serde_json::to_string(&LedgerRecordV1 {
-            schema: LEDGER_RECORD_SCHEMA.to_owned(),
-            kind: LEDGER_RECORD_KIND.to_owned(),
-            event,
-            entry_hash,
-        })
-        .unwrap();
-        write_append_journal(
-            &path,
-            u64::try_from(previous.len()).unwrap(),
-            &sha256(&previous),
-            &line,
-        )
-        .unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), previous);
-    }
-
-    #[test]
-    fn crlf_terminated_record_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let mut bytes = fs::read(&path).unwrap();
-        bytes.pop();
-        bytes.extend_from_slice(b"\r\n");
-        fs::write(&path, &bytes).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
-
-    #[test]
-    fn incomplete_utf8_tail_without_journal_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
-        file.write_all(&[0xe2, 0x82]).unwrap();
-        file.sync_all().unwrap();
-
-        let before = fs::read(&path).unwrap();
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn incomplete_first_record_without_journal_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        fs::write(&path, b"{\"schema\":").unwrap();
-        let store = ExecutionLedgerStore::new(&path);
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(task_started()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn valid_unterminated_record_without_journal_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let file = OpenOptions::new().write(true).open(&path).unwrap();
-        file.set_len(file.metadata().unwrap().len() - 1).unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.load_verified().is_err());
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[test]
-    fn every_pending_journal_state_is_hidden_until_exclusive_recovery() {
-        for omitted_suffix in [usize::MAX, 7, 1, 0] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("ledger.jsonl");
-            let store = ExecutionLedgerStore::new(&path);
-            stage_prepared_append(&store, task_started(), omitted_suffix);
-
-            assert!(store.load().is_err());
-            assert!(store.load_verified().is_err());
-            assert!(store.verify_chain().is_err());
-            assert!(store.by_task_verified("task-1").is_err());
-            assert!(store.last_sequence_verified().is_err());
-            assert!(store.canonical_receipt_for_task_verified("task-1").is_err());
-            assert!(!store.append_if_new(task_started()).unwrap());
-            assert_eq!(store.load_verified().unwrap().len(), 1);
-            assert_eq!(store.by_task_verified("task-1").unwrap().len(), 1);
-            assert_eq!(store.last_sequence_verified().unwrap(), 1);
-        }
-    }
-
-    #[test]
-    fn pending_journal_without_ledger_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        fs::write(append_journal_path(&path), b"{}").unwrap();
-        let store = ExecutionLedgerStore::new(&path);
-
-        assert!(store.load().is_err());
-        assert!(store.load_verified().is_err());
-        assert!(store.verify_chain().is_err());
-        assert!(store.append(task_started()).is_err());
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn temporary_journal_is_hidden_then_cleaned_by_next_append() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        fs::write(append_journal_temp_path(&path), b"stale prepared bytes").unwrap();
-
-        assert!(store.load_verified().is_err());
-        assert!(!store.append_if_new(task_started()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 1);
-        assert!(!append_journal_temp_path(&path).exists());
-    }
-
-    #[test]
-    fn oversized_journal_is_rejected_without_ledger_mutation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let before = fs::read(&path).unwrap();
-        fs::write(
-            append_journal_path(&path),
-            vec![b' '; MAX_APPEND_JOURNAL_BYTES + 1],
-        )
-        .unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn journal_symlink_is_rejected_without_touching_target_or_ledger() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let target = directory.path().join("target");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let before = fs::read(&path).unwrap();
-        fs::write(&target, b"target-bytes").unwrap();
-        symlink(&target, append_journal_path(&path)).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-        assert_eq!(fs::read(&target).unwrap(), b"target-bytes");
-    }
-
-    #[test]
-    fn journal_publish_never_replaces_existing_destination() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        fs::write(append_journal_path(&path), b"existing").unwrap();
-
-        assert!(write_append_journal(&path, 0, &sha256(b""), "{}").is_err());
-        assert_eq!(fs::read(append_journal_path(&path)).unwrap(), b"existing");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn crash_after_journal_link_before_temp_unlink_recovers_prepared_state() {
-        use std::fs::hard_link;
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 7);
-        let journal = append_journal_path(&path);
-        let temporary = append_journal_temp_path(&path);
-        hard_link(&journal, &temporary).unwrap();
-
-        assert!(store.load_verified().is_err());
-        assert!(!store.append_if_new(plan_created()).unwrap());
-        assert_eq!(store.load_verified().unwrap().len(), 2);
-        assert!(!journal.exists());
-        assert!(!temporary.exists());
-    }
-
-    #[test]
-    fn journal_error_cleans_unpublished_temporary_only() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let journal = append_journal_path(&path);
-        let temporary = append_journal_temp_path(&path);
-        fs::write(&journal, b"existing").unwrap();
-
-        assert!(write_append_journal(&path, 0, &sha256(b""), "{}").is_err());
-        assert_eq!(fs::read(&journal).unwrap(), b"existing");
-        assert!(!temporary.exists());
-    }
-
-    #[test]
-    fn oversized_record_is_rejected_before_journal_or_ledger_write() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        let mut event = task_started();
-        if let ExecutionEvent::TaskStarted { envelope_ref, .. } = &mut event {
-            *envelope_ref = "x".repeat(MAX_LEDGER_RECORD_BYTES + 1);
-        }
-
-        assert!(store.append(event).is_err());
-        assert_eq!(fs::read(&path).unwrap(), Vec::<u8>::new());
-        assert!(!append_journal_path(&path).exists());
-        assert!(!append_journal_temp_path(&path).exists());
-    }
-
-    #[test]
-    fn oversized_prepared_record_is_rejected_before_recovery_mutation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        fs::write(&path, b"").unwrap();
-        let store = ExecutionLedgerStore::new(&path);
-        let mut event = task_started();
-        if let ExecutionEvent::TaskStarted { envelope_ref, .. } = &mut event {
-            *envelope_ref = "x".repeat(MAX_LEDGER_RECORD_BYTES + 1);
-        }
-        event.set_chain_fields(1, GENESIS.to_owned());
-        let entry_hash = hash_event(&event).unwrap();
-        event.set_entry_hash(entry_hash.clone());
-        let record = serde_json::to_string(&LedgerRecordV1 {
-            schema: LEDGER_RECORD_SCHEMA.to_owned(),
-            kind: LEDGER_RECORD_KIND.to_owned(),
-            event,
-            entry_hash,
-        })
-        .unwrap();
-        let journal = AppendJournalV1 {
-            schema: APPEND_JOURNAL_SCHEMA.to_owned(),
-            previous_len: 0,
-            previous_sha256: sha256(b""),
-            record_sha256: sha256(record.as_bytes()),
-            record,
-        };
-        fs::write(
-            append_journal_path(&path),
-            serde_json::to_vec(&journal).unwrap(),
-        )
-        .unwrap();
-
-        assert!(store.append(task_started()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), Vec::<u8>::new());
-    }
-
-    #[test]
-    fn oversized_on_disk_record_is_rejected() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        fs::write(&path, vec![b'x'; MAX_LEDGER_RECORD_BYTES + 2]).unwrap();
-        let store = ExecutionLedgerStore::new(&path);
-
-        assert!(store.load().is_err());
-    }
-
-    #[test]
-    fn corrupt_append_journal_remains_fail_closed() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        stage_prepared_append(&store, plan_created(), 7);
-        fs::write(append_journal_path(&path), b"{\"schema\":").unwrap();
-        let before = fs::read(&path).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert_eq!(fs::read(&path).unwrap(), before);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ledger_symlink_is_rejected_by_every_read_projection() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let target = directory.path().join("target.jsonl");
-        let path = directory.path().join("ledger.jsonl");
-        let target_store = ExecutionLedgerStore::new(&target);
-        target_store.append(task_started()).unwrap();
-        symlink(&target, &path).unwrap();
-        let store = ExecutionLedgerStore::new(&path);
-
-        assert!(store.load().is_err());
-        assert!(store.load_verified().is_err());
-        assert!(store.verify_chain().is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn parent_symlink_is_rejected_before_ledger_open() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let target_directory = tempfile::tempdir().unwrap();
-        let target = target_directory.path().join("ledger.jsonl");
-        let target_store = ExecutionLedgerStore::new(&target);
-        target_store.append(task_started()).unwrap();
-        let parent = directory.path().join("execution");
-        symlink(target_directory.path(), &parent).unwrap();
-        let store = ExecutionLedgerStore::new(parent.join("ledger.jsonl"));
-
-        assert!(store.load().is_err());
-        assert!(store.load_verified().is_err());
-        assert!(store.verify_chain().is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hardlink_alias_is_rejected_after_descriptor_identity_check() {
-        use std::fs::hard_link;
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let alias = directory.path().join("ledger-alias.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        hard_link(&path, &alias).unwrap();
-
-        assert!(store.load().is_err());
-        assert!(store.load_verified().is_err());
-        assert!(store.verify_chain().is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn opened_descriptor_is_not_redirected_by_path_swap() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let moved = directory.path().join("ledger-moved.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let (_, relative) = path_parts(&path).unwrap();
-        let operation = store.open_operation(false).unwrap();
-        let file = open_regular_nofollow_operation(&operation, &relative)
-            .unwrap()
-            .unwrap();
-
-        fs::rename(&path, &moved).unwrap();
-        assert!(read_events_from_file(&file).is_ok());
-        assert!(
-            validate_operation_file(&operation, &relative, &file, "execution ledger", true)
-                .is_err()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn opened_descriptor_rejects_parent_swap_after_acquisition() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let parent = directory.path().join("execution");
-        fs::create_dir(&parent).unwrap();
-        let path = parent.join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let (_, relative) = path_parts(&path).unwrap();
-        let operation = store.open_operation(false).unwrap();
-        let file = open_regular_nofollow_operation(&operation, &relative)
-            .unwrap()
-            .unwrap();
-
-        let moved = directory.path().join("execution-moved");
-        fs::rename(&parent, &moved).unwrap();
-        symlink(&moved, &parent).unwrap();
-        assert!(read_events_from_file(&file).is_ok());
-        assert!(
-            validate_operation_file(&operation, &relative, &file, "execution ledger", true)
-                .is_err()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hardlink_created_after_open_is_rejected_before_commit() {
-        use std::fs::hard_link;
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let alias = directory.path().join("ledger-race-alias.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-        store.append(task_started()).unwrap();
-        let operation = store.open_operation(false).unwrap();
-        let file = open_regular_nofollow_operation(&operation, Path::new("ledger.jsonl"))
-            .unwrap()
-            .unwrap();
-        hard_link(&path, &alias).unwrap();
-
-        assert!(
-            validate_operation_file(
-                &operation,
-                Path::new("ledger.jsonl"),
-                &file,
-                "execution ledger",
-                true,
-            )
-            .is_err()
-        );
-        assert!(store.append(plan_created()).is_err());
-    }
-
-    #[test]
-    fn verified_constructor_rejects_parent_traversal() {
-        let directory = tempfile::tempdir().unwrap();
-        assert!(
-            ExecutionLedgerStore::new_verified(
-                directory.path(),
-                Path::new("nested/../ledger.jsonl")
-            )
-            .is_err()
-        );
-        assert!(
-            ExecutionLedgerStore::new_verified(
-                directory.path(),
-                Path::new("/outside/ledger.jsonl")
-            )
-            .is_err()
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn verified_constructor_rejects_symlink_root() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let real_root = directory.path().join("real-root");
-        let alias_root = directory.path().join("alias-root");
-        fs::create_dir(&real_root).unwrap();
-        symlink(&real_root, &alias_root).unwrap();
-
-        assert!(ExecutionLedgerStore::new_verified(&alias_root, "ledger.jsonl").is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn verified_root_replacement_is_rejected_before_append_side_effect() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("root");
-        let moved = directory.path().join("root-moved");
-        fs::create_dir(&root).unwrap();
-        let store = ExecutionLedgerStore::new_verified(&root, "ledger.jsonl").unwrap();
-
-        fs::rename(&root, &moved).unwrap();
-        fs::create_dir(&root).unwrap();
-
-        assert!(store.append(task_started()).is_err());
-        assert!(!root.join("ledger.jsonl").exists());
-        assert!(!moved.join("ledger.jsonl").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn verified_parent_replacement_is_rejected_before_append_side_effect() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("root");
-        let parent = root.join("execution");
-        let moved = root.join("execution-moved");
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(&parent).unwrap();
-        let store = ExecutionLedgerStore::new_verified(&root, "execution/ledger.jsonl").unwrap();
-
-        fs::rename(&parent, &moved).unwrap();
-        fs::create_dir(&parent).unwrap();
-
-        assert!(store.append(task_started()).is_err());
-        assert!(!parent.join("ledger.jsonl").exists());
-        assert!(!moved.join("ledger.jsonl").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn created_parent_identity_is_pinned_for_later_operations() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("root");
-        let parent = root.join("execution");
-        let moved = root.join("execution-moved");
-        fs::create_dir(&root).unwrap();
-        let store = ExecutionLedgerStore::new_verified(&root, "execution/ledger.jsonl").unwrap();
-
-        store.append(task_started()).unwrap();
-        let before = fs::read(parent.join("ledger.jsonl")).unwrap();
-        fs::rename(&parent, &moved).unwrap();
-        fs::create_dir(&parent).unwrap();
-
-        assert!(store.append(plan_created()).is_err());
-        assert!(!parent.join("ledger.jsonl").exists());
-        assert_eq!(fs::read(moved.join("ledger.jsonl")).unwrap(), before);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn default_data_root_creation_is_descriptor_relative_and_private() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join("missing").join("data");
-
-        ensure_default_data_root(&root).unwrap();
-
-        assert!(root.is_dir());
-        assert_eq!(
-            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
-    }
-
-    #[test]
-    fn legacy_relative_constructor_resolves_current_directory() {
-        let store = ExecutionLedgerStore::new(Path::new("ledger.jsonl"));
-        assert!(store.path().is_absolute());
-        assert_eq!(
-            store.path().file_name(),
-            Some(std::ffi::OsStr::new("ledger.jsonl"))
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_ledger_fails_closed_before_reparse_or_path_side_effect() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ledger.jsonl");
-        let store = ExecutionLedgerStore::new(&path);
-
-        assert!(store.append(task_started()).is_err());
-        assert!(!path.exists());
-    }
-}
+mod tests;
