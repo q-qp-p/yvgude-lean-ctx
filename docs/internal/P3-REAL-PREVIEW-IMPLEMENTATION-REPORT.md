@@ -12,7 +12,7 @@ Date: 2026-08-24
 - P3 baseline: `8ebf61a21c063a1d0a86be33511588d27d7ca71e`.
 - P3 branch: `feat/p3-real-python-preview`.
 - P3 implementation candidate:
-  `87116a348dc85335354b2f30ab8703e931051962`.
+  `79e3888862659e5ac0623a8fa00e16155aa144da`.
 
 ## Transport and ownership decision
 
@@ -194,8 +194,8 @@ The package uninstall succeeded; `agents` remained importable at `0.19.4`;
 - Security/protocol-freeze/OCLA Python suite: PASS.
 - Python Preview suite in clean environment: `122 passed, 2 skipped`.
 - `git diff --check`: PASS.
-- Independent `gpt-5.6-luna`/max re-review of candidate
-  `87116a348dc85335354b2f30ab8703e931051962`: PASS, no blocking findings.
+- Independent `gpt-5.6-luna`/max re-review of candidate fixes:
+  PASS, no blocking findings.
 
 The unfiltered Rust library suite result is `10408 passed, 1 failed, 22
 ignored`. The sole failure is the previously established baseline/environment

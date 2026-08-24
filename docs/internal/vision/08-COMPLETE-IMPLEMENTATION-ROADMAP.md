@@ -153,7 +153,7 @@ trusting the producer; no universal performance or savings claim is needed.
 ### P3 — Supported SDK Preview vertical slice
 
 **Status (2026-08-24): exit candidate complete.** Candidate
-`87116a348dc85335354b2f30ab8703e931051962` proves the Python-owned Preview
+`79e3888862659e5ac0623a8fa00e16155aa144da` proves the Python-owned Preview
 lifecycle through a strict local Engine-operation transport, native Embed, the
 actual OpenAI Agents SDK, exact recovery, factual receipts and explicit
 degradation. P4 remains unentered pending explicit authorization.
