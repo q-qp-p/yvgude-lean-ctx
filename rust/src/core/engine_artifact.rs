@@ -73,6 +73,38 @@ pub(super) fn persist_content(
     persist_content_checked(directory, digest, extension, bytes, None, None)
 }
 
+/// Read one integrity-addressed artifact through descriptor/handle-relative,
+/// no-follow traversal of the configured Engine data root.
+pub(super) fn read_content(
+    directory: &str,
+    digest: &str,
+    extension: &str,
+) -> Result<Vec<u8>, String> {
+    validate_artifact_name(digest, extension)?;
+    let configured_root =
+        data_dir::lean_ctx_data_dir().map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
+
+    #[cfg(unix)]
+    let mut artifact = unix::read_content(&configured_root, directory, digest, extension)?;
+    #[cfg(windows)]
+    let mut artifact = windows::read_content(&configured_root, directory, digest, extension)?;
+
+    #[cfg(any(unix, windows))]
+    {
+        let mut bytes = Vec::new();
+        artifact
+            .read_to_end(&mut bytes)
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        Ok(bytes)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (configured_root, directory, digest, extension);
+        Err(ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned())
+    }
+}
+
 #[cfg(any(unix, windows))]
 pub(super) fn persist_content_with_test_barrier(
     directory: &str,
@@ -261,6 +293,36 @@ mod unix {
         )
     }
 
+    pub(super) fn read_content(
+        configured_root: &Path,
+        relative: &str,
+        digest: &str,
+        extension: &str,
+    ) -> Result<std::fs::File, String> {
+        let root = bind_existing_root(configured_root)?;
+        let directories = prepare_existing_directory(&root, relative)?;
+        let final_name = cstring(format!("{digest}.{extension}"))?;
+        read_existing_artifact(&directories.final_dir, &final_name, digest)
+    }
+
+    fn bind_existing_root(configured_root: &Path) -> Result<std::fs::File, String> {
+        if !configured_root.is_absolute() {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        let path = CString::new(configured_root.as_os_str().as_bytes())
+            .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
+        // SAFETY: path is NUL-terminated and File immediately owns a successful fd.
+        let fd = unsafe { libc::open(path.as_ptr(), ROOT_FLAGS) };
+        if fd < 0 {
+            return match errno() {
+                libc::ELOOP | libc::ENOTDIR => Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
+                _ => Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
+            };
+        }
+        // SAFETY: fd is a successful descriptor owned immediately by File.
+        Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+    }
+
     fn bind_root(configured_root: &Path) -> Result<std::fs::File, String> {
         if !configured_root.is_absolute() {
             return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
@@ -339,6 +401,44 @@ mod unix {
             parent = child;
         }
 
+        if !saw_component {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        Ok(ArtifactDirectory {
+            _root: root
+                .try_clone()
+                .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?,
+            final_dir: parent,
+        })
+    }
+
+    fn prepare_existing_directory(
+        root: &std::fs::File,
+        relative: &str,
+    ) -> Result<ArtifactDirectory, String> {
+        let mut parent = root
+            .try_clone()
+            .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
+        let mut saw_component = false;
+        for component in Path::new(relative).components() {
+            let Component::Normal(component) = component else {
+                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+            };
+            saw_component = true;
+            let name = CString::new(component.as_bytes())
+                .map_err(|_| ARTIFACT_BOUNDARY_REJECTED.to_owned())?;
+            // SAFETY: parent fd is held and name is NUL-terminated.
+            let child_fd =
+                unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), DIRECTORY_FLAGS) };
+            if child_fd < 0 {
+                return match errno() {
+                    libc::ELOOP | libc::ENOTDIR => Err(ARTIFACT_BOUNDARY_REJECTED.to_owned()),
+                    _ => Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned()),
+                };
+            }
+            // SAFETY: child_fd is a successful descriptor owned immediately.
+            parent = unsafe { std::fs::File::from_raw_fd(child_fd) };
+        }
         if !saw_component {
             return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
         }
@@ -594,6 +694,39 @@ mod unix {
         Ok(artifact)
     }
 
+    fn read_existing_artifact(
+        directory: &std::fs::File,
+        final_name: &CString,
+        digest: &str,
+    ) -> Result<std::fs::File, String> {
+        // SAFETY: directory fd is held and final_name is NUL-terminated.
+        let fd =
+            unsafe { libc::openat(directory.as_raw_fd(), final_name.as_ptr(), LEAF_READ_FLAGS) };
+        if fd < 0 {
+            return Err(ARTIFACT_LEAF_UNTRUSTED.to_owned());
+        }
+        // SAFETY: fd is a successful descriptor owned immediately.
+        let mut artifact = unsafe { std::fs::File::from_raw_fd(fd) };
+        if !artifact
+            .metadata()
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?
+            .is_file()
+        {
+            return Err(ARTIFACT_LEAF_UNTRUSTED.to_owned());
+        }
+        let mut bytes = Vec::new();
+        artifact
+            .read_to_end(&mut bytes)
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        if hex_sha256(&bytes) != digest {
+            return Err(ARTIFACT_DIGEST_MISMATCH.to_owned());
+        }
+        artifact
+            .rewind()
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        Ok(artifact)
+    }
+
     fn chmod_directory(fd: RawFd) -> Result<(), String> {
         // SAFETY: fd is a live directory descriptor owned by this function.
         if unsafe { libc::fchmod(fd, 0o700) } != 0 {
@@ -741,6 +874,53 @@ mod windows {
             return Err("engine_artifact_test_pre_publish_failure".to_owned());
         }
         publish_temp_artifact(&mut temp, &directories.final_dir, &final_name, digest)
+    }
+
+    pub(super) fn read_content(
+        configured_root: &Path,
+        relative: &str,
+        digest: &str,
+        extension: &str,
+    ) -> Result<std::fs::File, String> {
+        let root = bind_root_existing(configured_root)?;
+        let directories = prepare_existing_directory(&root, relative)?;
+        let final_name = wide_component(&format!("{digest}.{extension}"))?;
+        read_existing_artifact(&directories.final_dir, &final_name, digest)
+    }
+
+    fn bind_root_existing(configured_root: &Path) -> Result<std::fs::File, String> {
+        let (anchor, components) = split_windows_root(configured_root)?;
+        let name = wide_path(&anchor);
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                TRAVERSE_DIRECTORY_ACCESS,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            return Err(ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned());
+        }
+        // SAFETY: handle is successful and transferred immediately to File.
+        let mut root = unsafe { std::fs::File::from_raw_handle(handle) };
+        ensure_directory(&root)?;
+        ensure_opened_path(&root, &anchor)?;
+        let options = FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT;
+        for (index, name) in components.iter().enumerate() {
+            let access = if index + 1 == components.len() {
+                DIRECTORY_ACCESS
+            } else {
+                TRAVERSE_DIRECTORY_ACCESS
+            };
+            root = open_relative(&root, name, access, FILE_OPEN, options)
+                .map_err(map_directory_status)?;
+            ensure_directory(&root)?;
+        }
+        Ok(root)
     }
 
     fn bind_root(configured_root: &Path) -> Result<std::fs::File, String> {
@@ -932,6 +1112,42 @@ mod windows {
         })
     }
 
+    fn prepare_existing_directory(
+        root: &std::fs::File,
+        relative: &str,
+    ) -> Result<ArtifactDirectory, String> {
+        let mut parent = root
+            .try_clone()
+            .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?;
+        let mut saw_component = false;
+        for component in Path::new(relative).components() {
+            let Component::Normal(component) = component else {
+                return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+            };
+            saw_component = true;
+            let name = wide_os_component(component)?;
+            let child = open_relative(
+                &parent,
+                &name,
+                DIRECTORY_ACCESS,
+                FILE_OPEN,
+                FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+            )
+            .map_err(map_directory_status)?;
+            ensure_directory(&child)?;
+            parent = child;
+        }
+        if !saw_component {
+            return Err(ARTIFACT_BOUNDARY_REJECTED.to_owned());
+        }
+        Ok(ArtifactDirectory {
+            _root: root
+                .try_clone()
+                .map_err(|_| ARTIFACT_DIRECTORY_OPEN_FAILED.to_owned())?,
+            final_dir: parent,
+        })
+    }
+
     fn create_temp_artifact(
         directory: &std::fs::File,
         final_name: &[u16],
@@ -1042,6 +1258,36 @@ mod windows {
     }
 
     fn verify_existing_artifact(
+        directory: &std::fs::File,
+        final_name: &[u16],
+        digest: &str,
+    ) -> Result<std::fs::File, String> {
+        let mut artifact = open_relative(
+            directory,
+            final_name,
+            LEAF_ACCESS,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+        )
+        .map_err(|status| match status {
+            ArtifactStatus::Unsupported => ARTIFACT_BOUNDARY_UNSUPPORTED.to_owned(),
+            _ => ARTIFACT_LEAF_UNTRUSTED.to_owned(),
+        })?;
+        ensure_regular(&artifact).map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        let mut bytes = Vec::new();
+        artifact
+            .read_to_end(&mut bytes)
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        if hex_sha256(&bytes) != digest {
+            return Err(ARTIFACT_DIGEST_MISMATCH.to_owned());
+        }
+        artifact
+            .rewind()
+            .map_err(|_| ARTIFACT_LEAF_UNTRUSTED.to_owned())?;
+        Ok(artifact)
+    }
+
+    fn read_existing_artifact(
         directory: &std::fs::File,
         final_name: &[u16],
         digest: &str,

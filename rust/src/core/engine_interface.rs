@@ -12,7 +12,7 @@ use lean_ctx_protocol::{
     EngineValueClassificationV1, ProtocolReference, ReceiptId, ResolvedLocalEngineIdentityV1,
     SemanticVersion, Sha256Digest, V1_SCHEMA_VERSION,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::core::canonical;
@@ -180,12 +180,110 @@ pub(crate) struct NativeContextEngine {
 }
 
 /// Stored without a receipt link so its digest cannot self-reference.
-#[derive(Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EngineReceiptArtifactV1 {
+pub(crate) struct EngineReceiptArtifactV1 {
     schema_version: u32,
     invocation: EngineInvocationV1,
     observation: EngineObservationV1,
+}
+
+/// Receipt contents returned only after the on-disk artifact and both expected
+/// records have passed the local verification boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedEngineReceiptV1 {
+    artifact: EngineReceiptArtifactV1,
+    digest: Sha256Digest,
+}
+
+impl VerifiedEngineReceiptV1 {
+    pub(crate) fn invocation(&self) -> &EngineInvocationV1 {
+        &self.artifact.invocation
+    }
+
+    pub(crate) fn observation(&self) -> &EngineObservationV1 {
+        &self.artifact.observation
+    }
+
+    pub(crate) fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+}
+
+/// Build the exact canonical bytes persisted for one Engine receipt.
+pub(crate) fn canonical_engine_receipt_artifact_bytes(
+    invocation: &EngineInvocationV1,
+    observation: &EngineObservationV1,
+) -> Vec<u8> {
+    canonical::canonical_serialize(&EngineReceiptArtifactV1 {
+        schema_version: V1_SCHEMA_VERSION,
+        invocation: invocation.clone(),
+        observation: observation.clone(),
+    })
+}
+
+/// Read and verify one Engine receipt artifact against its expected records.
+pub(crate) fn read_verified_engine_receipt(
+    digest: &Sha256Digest,
+    expected_invocation: &EngineInvocationV1,
+    expected_observation_without_link: &EngineObservationV1,
+) -> Result<VerifiedEngineReceiptV1, String> {
+    if expected_observation_without_link.receipt_link.is_some() {
+        return Err("expected Engine observation must omit receipt_link".to_owned());
+    }
+    expected_invocation
+        .validate()
+        .map_err(|error| format!("invalid expected Engine invocation: {error}"))?;
+    expected_observation_without_link
+        .validate_for(expected_invocation)
+        .map_err(|error| format!("invalid expected Engine observation: {error}"))?;
+
+    let bytes = artifact_store::read_content(RECEIPT_DIRECTORY, digest.hex(), "json")?;
+    let actual_digest = sha256_digest(&bytes)?;
+    if actual_digest != *digest {
+        return Err("Engine receipt artifact digest mismatch".to_owned());
+    }
+    let artifact = decode_canonical_engine_receipt_artifact(&bytes)?;
+    if artifact.schema_version != V1_SCHEMA_VERSION {
+        return Err("Engine receipt artifact schema_version must be 1".to_owned());
+    }
+    if artifact.observation.receipt_link.is_some() {
+        return Err("Engine receipt artifact must omit receipt_link".to_owned());
+    }
+    artifact
+        .invocation
+        .validate()
+        .map_err(|error| format!("invalid Engine receipt invocation: {error}"))?;
+    artifact
+        .observation
+        .validate_for(&artifact.invocation)
+        .map_err(|error| format!("invalid Engine receipt observation: {error}"))?;
+    if artifact.invocation != *expected_invocation {
+        return Err("Engine receipt invocation does not match expectation".to_owned());
+    }
+    if artifact.observation != *expected_observation_without_link {
+        return Err("Engine receipt observation does not match expectation".to_owned());
+    }
+    Ok(VerifiedEngineReceiptV1 {
+        artifact,
+        digest: digest.clone(),
+    })
+}
+
+fn decode_canonical_engine_receipt_artifact(
+    bytes: &[u8],
+) -> Result<EngineReceiptArtifactV1, String> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let artifact = EngineReceiptArtifactV1::deserialize(&mut deserializer)
+        .map_err(|error| format!("decode Engine receipt artifact: {error}"))?;
+    deserializer
+        .end()
+        .map_err(|error| format!("trailing Engine receipt artifact data: {error}"))?;
+    if canonical_engine_receipt_artifact_bytes(&artifact.invocation, &artifact.observation) != bytes
+    {
+        return Err("Engine receipt artifact is not canonical JSON".to_owned());
+    }
+    Ok(artifact)
 }
 
 #[derive(Serialize)]
@@ -534,12 +632,7 @@ fn persist_receipt(
     invocation: &EngineInvocationV1,
     observation: &EngineObservationV1,
 ) -> Result<EngineReceiptLinkV1, String> {
-    let artifact = EngineReceiptArtifactV1 {
-        schema_version: V1_SCHEMA_VERSION,
-        invocation: invocation.clone(),
-        observation: observation.clone(),
-    };
-    let bytes = canonical::canonical_serialize(&artifact);
+    let bytes = canonical_engine_receipt_artifact_bytes(invocation, observation);
     let digest = sha256_digest(&bytes)?;
     persist_content(RECEIPT_DIRECTORY, digest.hex(), "json", &bytes)?;
     Ok(EngineReceiptLinkV1 {
@@ -623,6 +716,32 @@ mod tests {
         }
     }
 
+    fn receipt_fixture(input: &[u8]) -> (EngineInvocationV1, EngineObservationV1, Sha256Digest) {
+        let root = tempfile::tempdir().expect("native adapter root");
+        std::fs::write(root.path().join("fixture.md"), input).expect("fixture write");
+        let engine = NativeContextEngine::with_root(root.path()).expect("secure Engine root");
+        let (invocation, mut observation) = engine
+            .execute(request(
+                "fixture.md",
+                input,
+                EnginePolicyDecisionV1::Admitted,
+            ))
+            .expect("native Engine invocation");
+        let digest = observation
+            .receipt_link
+            .take()
+            .expect("receipt link")
+            .receipt_digest;
+        (invocation, observation, digest)
+    }
+
+    fn persist_raw_receipt(bytes: &[u8]) -> Sha256Digest {
+        let digest = digest(bytes);
+        persist_engine_artifact_content(RECEIPT_DIRECTORY, digest.hex(), "json", bytes)
+            .expect("raw receipt artifact");
+        digest
+    }
+
     #[test]
     fn rejected_receipt_matches_the_versioned_golden_fixture() {
         let input_ref = ProtocolReference::new("input:fixture").expect("input ref");
@@ -674,6 +793,145 @@ mod tests {
         assert_eq!(
             canonical::canonical_serialize(&artifact),
             canonical::canonical_serialize(&fixture)
+        );
+    }
+
+    #[test]
+    fn verified_engine_receipt_round_trip_returns_bound_token() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let (invocation, observation, digest) = receipt_fixture(b"verified receipt input");
+
+        let verified = read_verified_engine_receipt(&digest, &invocation, &observation)
+            .expect("receipt should verify");
+
+        assert_eq!(verified.invocation(), &invocation);
+        assert_eq!(verified.observation(), &observation);
+        assert_eq!(verified.digest(), &digest);
+    }
+
+    #[test]
+    fn verified_engine_receipt_rejects_mixed_records_and_receipt_link_expectations() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let (first_invocation, _, _) = receipt_fixture(b"first receipt input");
+        let (second_invocation, mut second_observation, second_digest) =
+            receipt_fixture(b"second receipt input");
+
+        assert_ne!(
+            first_invocation.input_digest,
+            second_invocation.input_digest
+        );
+        assert!(
+            read_verified_engine_receipt(&second_digest, &first_invocation, &second_observation)
+                .is_err(),
+            "mixed invocation and observation must fail exact binding"
+        );
+
+        second_observation.receipt_link = Some(EngineReceiptLinkV1 {
+            schema_version: V1_SCHEMA_VERSION,
+            receipt_id: ReceiptId::new("engine-receipt-test-link").expect("receipt id"),
+            receipt_ref: ProtocolReference::new("receipt:sha256:test").expect("receipt ref"),
+            receipt_digest: second_digest.clone(),
+            invocation_id: second_invocation.invocation_id.clone(),
+        });
+        assert!(
+            read_verified_engine_receipt(&second_digest, &second_invocation, &second_observation)
+                .is_err(),
+            "expected observation must omit receipt_link"
+        );
+    }
+
+    #[test]
+    fn verified_engine_receipt_rejects_noncanonical_duplicate_unknown_and_trailing_json() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let (invocation, observation, _) = receipt_fixture(b"strict receipt input");
+        let canonical = canonical_engine_receipt_artifact_bytes(&invocation, &observation);
+
+        let mut noncanonical = Vec::with_capacity(canonical.len() + 1);
+        noncanonical.push(b' ');
+        noncanonical.extend_from_slice(&canonical);
+        let digest = persist_raw_receipt(&noncanonical);
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "leading whitespace must fail canonical-byte equality"
+        );
+
+        let canonical_text = String::from_utf8(canonical.clone()).expect("canonical JSON");
+        let duplicate = canonical_text.replacen('{', "{\"schema_version\":1,", 1);
+        let digest = persist_raw_receipt(duplicate.as_bytes());
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "duplicate fields must fail canonical-byte equality"
+        );
+
+        let mut unknown = canonical.clone();
+        let end = unknown.len() - 1;
+        unknown.splice(end..end, b",\"unknown\":true".iter().copied());
+        let digest = persist_raw_receipt(&unknown);
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "unknown fields must be denied"
+        );
+
+        let mut trailing = canonical;
+        trailing.extend_from_slice(b"{}");
+        let digest = persist_raw_receipt(&trailing);
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "trailing JSON values must be denied"
+        );
+    }
+
+    #[test]
+    fn verified_engine_receipt_rejects_tampering_wrong_digest_and_path_prefixes() {
+        let _data_dir = data_dir::isolated_data_dir();
+        let (invocation, observation, digest) = receipt_fixture(b"tamper-resistant input");
+        let data_dir = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let receipt_path = data_dir
+            .join(RECEIPT_DIRECTORY)
+            .join(format!("{}.json", digest.hex()));
+        let mut tampered = std::fs::read(&receipt_path).expect("stored receipt");
+        tampered[0] = if tampered[0] == b'{' { b'[' } else { b'{' };
+        std::fs::write(&receipt_path, &tampered).expect("tamper receipt");
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "tampered bytes must fail the requested digest check"
+        );
+
+        let wrong_digest =
+            Sha256Digest::new(format!("sha256:{}", "0".repeat(64))).expect("wrong digest");
+        assert!(
+            read_verified_engine_receipt(&wrong_digest, &invocation, &observation).is_err(),
+            "wrong digest must not resolve a different artifact"
+        );
+        assert!(
+            artifact_store::read_content(RECEIPT_DIRECTORY, "../receipts", "json").is_err(),
+            "path prefixes must not escape the artifact namespace"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verified_engine_receipt_rejects_symlinked_leaf() {
+        use std::os::unix::fs::symlink;
+
+        let _data_dir = data_dir::isolated_data_dir();
+        let (invocation, observation, digest) = receipt_fixture(b"symlink-resistant input");
+        let data_dir = data_dir::lean_ctx_data_dir().expect("isolated data dir");
+        let receipt_path = data_dir
+            .join(RECEIPT_DIRECTORY)
+            .join(format!("{}.json", digest.hex()));
+        let outside = tempfile::NamedTempFile::new().expect("outside artifact");
+        std::fs::write(
+            outside.path(),
+            canonical_engine_receipt_artifact_bytes(&invocation, &observation),
+        )
+        .expect("outside receipt");
+        std::fs::remove_file(&receipt_path).expect("remove receipt");
+        symlink(outside.path(), &receipt_path).expect("symlink receipt");
+
+        assert!(
+            read_verified_engine_receipt(&digest, &invocation, &observation).is_err(),
+            "symlinked receipt leaf must be rejected"
         );
     }
 
