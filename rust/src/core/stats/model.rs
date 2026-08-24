@@ -67,16 +67,19 @@ impl CompressionTotals {
 }
 
 impl StatsStore {
-    /// Records one tool result at the provider turn that caused it. Advancing
-    /// turns prices every already-resident result as a cache re-read; results
-    /// emitted in the same turn are not spuriously re-billed against each other.
+    /// Records one tool result at the provider turn that caused it.
+    ///
+    /// #1283: this used to price every already-resident result as a re-read on
+    /// each turn advance (`reread += active * elapsed_turns`). Per session that
+    /// model is defensible — a compressed result resident in context saves its
+    /// delta on every later turn — but this store is *global and persistent*:
+    /// `active_tool_result_tokens_saved` accumulated across months and all
+    /// concurrent sessions (measured: 932M), and `last_tool_result_turn` mixed
+    /// unrelated per-session counters (measured: 36k). The product exploded
+    /// `reread_tokens_saved` to ~119 trillion — 50,000x every input token ever
+    /// processed. Persistent counters now hold measured savings only; re-read
+    /// savings come exclusively from the real cache-hit path (`record_reread`).
     pub(crate) fn record_tool_result_savings(&mut self, saved: u64, turn: u64) {
-        if turn > 0 && self.last_tool_result_turn > 0 && turn > self.last_tool_result_turn {
-            let elapsed = turn - self.last_tool_result_turn;
-            self.reread_tokens_saved = self
-                .reread_tokens_saved
-                .saturating_add(self.active_tool_result_tokens_saved.saturating_mul(elapsed));
-        }
         if turn > 0 {
             self.last_tool_result_turn = self.last_tool_result_turn.max(turn);
             self.active_tool_result_tokens_saved =
@@ -86,20 +89,15 @@ impl StatsStore {
         self.stream_tracked_results = self.stream_tracked_results.saturating_add(1);
     }
 
-    /// Stream totals through `observed_turn`, including re-reads since the last
-    /// tool result. Legacy stores fall back to measured compressible savings.
-    pub(crate) fn stream_savings(&self, observed_turn: u64) -> (u64, u64) {
+    /// Stream totals: measured first-inject savings and measured re-read
+    /// savings. Legacy stores fall back to measured compressible savings.
+    /// No turn-based extrapolation (#1283) — the parameter remains for call
+    /// sites that report the observation turn.
+    pub(crate) fn stream_savings(&self, _observed_turn: u64) -> (u64, u64) {
         if self.stream_tracked_results == 0 {
             return (self.compression_totals().saved_tokens(), 0);
         }
-        let pending_turns = observed_turn.saturating_sub(self.last_tool_result_turn);
-        let pending = self
-            .active_tool_result_tokens_saved
-            .saturating_mul(pending_turns);
-        (
-            self.first_inject_tokens_saved,
-            self.reread_tokens_saved.saturating_add(pending),
-        )
+        (self.first_inject_tokens_saved, self.reread_tokens_saved)
     }
 
     /// Computes effective compression from tagged command rows.
@@ -441,27 +439,31 @@ mod tests {
     }
 
     #[test]
-    fn next_turn_rereads_all_prior_results() {
+    fn turn_advance_never_extrapolates_rereads() {
+        // #1283: re-read savings are measured (record_reread), never derived
+        // from turn arithmetic on the lifetime-cumulative active set.
         let mut store = StatsStore::default();
         store.record_tool_result_savings(1_000, 7);
         store.record_tool_result_savings(500, 8);
-        assert_eq!(store.stream_savings(8), (1_500, 1_000));
+        assert_eq!(store.stream_savings(8), (1_500, 0));
+        assert_eq!(store.reread_tokens_saved, 0);
     }
 
     #[test]
-    fn parallel_results_on_same_turn_do_not_reread_each_other() {
+    fn measured_rereads_pass_through_unscaled() {
         let mut store = StatsStore::default();
         store.record_tool_result_savings(1_000, 7);
-        store.record_tool_result_savings(500, 7);
-        assert_eq!(store.stream_savings(7), (1_500, 0));
-        assert_eq!(store.stream_savings(8), (1_500, 1_500));
+        store.reread_tokens_saved = 300; // as recorded by the cache-hit path
+        assert_eq!(store.stream_savings(7), (1_000, 300));
+        // A later observation turn must not inflate the measured value.
+        assert_eq!(store.stream_savings(5_000), (1_000, 300));
     }
 
     #[test]
-    fn skipped_turns_multiply_resident_savings() {
+    fn skipped_turns_do_not_multiply_resident_savings() {
         let mut store = StatsStore::default();
         store.record_tool_result_savings(2_000, 3);
-        assert_eq!(store.stream_savings(6), (2_000, 6_000));
+        assert_eq!(store.stream_savings(6), (2_000, 0));
     }
 
     #[test]
@@ -492,6 +494,8 @@ mod tests {
         store.record_tool_result_savings(u64::MAX, 1);
         store.record_tool_result_savings(u64::MAX, u64::MAX);
         assert_eq!(store.first_inject_tokens_saved, u64::MAX);
-        assert_eq!(store.reread_tokens_saved, u64::MAX);
+        assert_eq!(store.active_tool_result_tokens_saved, u64::MAX);
+        // #1283: no extrapolation — reread stays at its measured value.
+        assert_eq!(store.reread_tokens_saved, 0);
     }
 }

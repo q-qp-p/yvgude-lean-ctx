@@ -674,15 +674,31 @@ fn run_inner(json: bool) -> u32 {
         board.info(lsp_check);
     }
 
-    // Shadow mode status
+    // Shadow mode status. #1280: the old single line claimed "native tools
+    // denied" wholesale, but that guarantee only covers Read/Grep/Glob — shell
+    // coverage depends on shell_hook_mode (rewrite hooks pass unknown commands
+    // through raw). Report the two surfaces separately so users audit against
+    // reality.
     let cfg = crate::core::config::Config::load();
+    let shell_mode = std::env::var("LEAN_CTX_SHELL_HOOK_MODE")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| cfg.shell_hook_mode.clone())
+        .unwrap_or_default();
+    let shell_desc = if shell_mode.trim().eq_ignore_ascii_case("deny") {
+        format!("{GREEN}deny{RST} {DIM}(all shell via ctx_shell){RST}")
+    } else {
+        format!(
+            "{YELLOW}rewrite{RST} {DIM}(unknown commands pass through raw — shell_hook_mode=deny closes this){RST}"
+        )
+    };
     let shadow_line = if cfg.shadow_mode {
         format!(
-            "{BOLD}Shadow mode{RST}  {GREEN}active{RST}  {DIM}(native tools denied → ctx_* mandatory){RST}"
+            "{BOLD}Shadow mode{RST}  {GREEN}active{RST}  {DIM}(Read/Grep/Glob denied → ctx_* mandatory){RST}  shell: {shell_desc}"
         )
     } else {
         format!(
-            "{BOLD}Shadow mode{RST}  {DIM}disabled{RST}  {DIM}(default: on — explicitly disabled via config){RST}"
+            "{BOLD}Shadow mode{RST}  {DIM}disabled{RST}  {DIM}(default: on — explicitly disabled via config){RST}  shell: {shell_desc}"
         )
     };
     if !json {

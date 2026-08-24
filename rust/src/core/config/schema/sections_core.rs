@@ -444,6 +444,19 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             ),
         );
     root.insert(
+        "shell_hook_mode".into(),
+        key_enum_with_env(
+            &["auto", "rewrite", "deny"],
+            "auto",
+            "How the PreToolUse shell hook treats native Bash/Shell calls (#1278). \
+             rewrite: rewrite known read/search/list commands, unknown commands pass \
+             through raw. deny: block native shell outright so every command goes \
+             through ctx_shell (fail-opens: lean-ctx disabled, MCP daemon dead, \
+             explicit shadow-only surface). auto (default): currently rewrite",
+            "LEAN_CTX_SHELL_HOOK_MODE",
+        ),
+    );
+    root.insert(
         "read_redirect".into(),
         key_enum_with_env(
             &["auto", "on", "off"],

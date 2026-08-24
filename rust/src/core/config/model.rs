@@ -417,12 +417,26 @@ pub struct Config {
     /// Override via LEAN_CTX_NO_HOOK env var.
     #[serde(default)]
     pub shell_hook_disabled: bool,
-    /// Shadow mode (default: true): denies native tools (Read/Grep/Shell) at
-    /// the permission level, forcing agents to use ctx_* MCP tools for maximum
+    /// Shadow mode (default: true): denies native Read/Grep/Glob at the
+    /// permission level, forcing agents to use ctx_* MCP tools for maximum
     /// compression. Without this, many harnesses silently prefer native tools,
     /// negating lean-ctx's token savings. Disable with `shadow_mode = false`.
+    /// Native Shell/Bash coverage is governed separately by `shell_hook_mode`.
     #[serde(default = "serde_defaults::default_true")]
     pub shadow_mode: bool,
+    /// Shell hook mode (#1278): how the PreToolUse shell hook treats native
+    /// Bash/Shell calls.
+    /// - `rewrite` (default): rewrite known read/search/list commands to
+    ///   lean-ctx equivalents; anything unrecognized passes through raw.
+    /// - `deny`: block native shell calls outright so every command goes
+    ///   through `ctx_shell` (same fail-opens as the deny hook: lean-ctx
+    ///   disabled, MCP daemon dead, explicit shadow-only tool surface).
+    /// - `auto`: currently equals `rewrite`; reserved for a future default flip.
+    ///
+    /// Env override: `LEAN_CTX_SHELL_HOOK_MODE`. Lives in config.toml, so the
+    /// choice survives reinstalls and updates.
+    #[serde(default)]
+    pub shell_hook_mode: Option<String>,
     /// Global hook mode override. When set, overrides the per-agent auto-detection.
     /// - `replace`: Native Read/Grep/Glob/Shell denied, lean-ctx MCP is the only path
     /// - `hybrid`: MCP + shell hooks for compression (legacy)

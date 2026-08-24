@@ -479,6 +479,14 @@ pub fn emit_agent_action(agent_id: &str, action: &str, tool: Option<&str>) {
 }
 
 pub fn emit_budget_warning(role: &str, dimension: &str, used: &str, limit: &str, percent: u8) {
+    // #1282: the post-dispatch budget guard calls this on EVERY tool call once
+    // a dimension is in Warning — measured 103 of 200 ring-buffer slots in
+    // 5 minutes, drowning the ToolCall events the Live view exists to show.
+    // Rate-limit per (role, dimension): emit only when the 10%-bucket moves
+    // or the last emission is older than 5 minutes.
+    if !budget_warning_due(role, dimension, percent) {
+        return;
+    }
     emit(EventKind::BudgetWarning {
         role: role.to_string(),
         dimension: dimension.to_string(),
@@ -486,6 +494,34 @@ pub fn emit_budget_warning(role: &str, dimension: &str, used: &str, limit: &str,
         limit: limit.to_string(),
         percent,
     });
+}
+
+/// Per-(role, dimension) rate limiter for budget warnings (#1282). In-process
+/// state is sufficient: the emitter lives in the long-running server, and a
+/// short-lived CLI process at worst emits one warning per dimension.
+fn budget_warning_due(role: &str, dimension: &str, percent: u8) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    const REPEAT_AFTER: Duration = Duration::from_mins(5);
+
+    type WarnState = HashMap<(String, String), (u8, Instant)>;
+    static LAST: Mutex<Option<WarnState>> = Mutex::new(None);
+
+    let mut guard = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = guard.get_or_insert_with(HashMap::new);
+    let key = (role.to_string(), dimension.to_string());
+    let bucket = percent / 10;
+    match map.get(&key) {
+        Some((last_bucket, at)) if *last_bucket == bucket && at.elapsed() < REPEAT_AFTER => false,
+        _ => {
+            map.insert(key, (bucket, Instant::now()));
+            true
+        }
+    }
 }
 
 pub fn emit_budget_exhausted(role: &str, dimension: &str, used: &str, limit: &str) {
@@ -572,6 +608,20 @@ mod tests {
         assert!(id > 0);
         let events = latest_events(100);
         assert!(events.iter().any(|e| e.id == id));
+    }
+
+    /// #1282: repeated warnings for an unchanged (role, dimension, bucket) are
+    /// suppressed; a bucket move re-arms immediately. Uses a unique role so
+    /// parallel tests never share limiter state.
+    #[test]
+    fn budget_warning_rate_limit_suppresses_repeats() {
+        let role = format!("test-role-{}", std::process::id());
+        assert!(budget_warning_due(&role, "tokens", 85));
+        assert!(!budget_warning_due(&role, "tokens", 85));
+        assert!(!budget_warning_due(&role, "tokens", 87)); // same 10%-bucket
+        assert!(budget_warning_due(&role, "tokens", 95)); // bucket moved
+        assert!(!budget_warning_due(&role, "tokens", 95));
+        assert!(budget_warning_due(&role, "cost", 85)); // other dimension independent
     }
 
     #[test]

@@ -82,6 +82,7 @@ Top-level configuration keys
 - `shell_allowlist_extra` (array, default `[]`) — Commands merged on top of shell_allowlist without replacing the defaults. Managed via `lean-ctx allow <cmd>`
 - `shell_heavy_timeout_secs` (u64?, default `null` — env `LEAN_CTX_SHELL_HEAVY_TIMEOUT_SECS`) — Shell command timeout (seconds) for heavy commands (cargo build/test, make, docker build, git commit/push). null = built-in 10-minute ceiling
 - `shell_hook_disabled` (bool, default `false` — env `LEAN_CTX_NO_HOOK`) — Disable shell hook injection
+- `shell_hook_mode` (enum: auto | rewrite | deny, default `auto` — env `LEAN_CTX_SHELL_HOOK_MODE`) — How the PreToolUse shell hook treats native Bash/Shell calls (#1278). rewrite: rewrite known read/search/list commands, unknown commands pass through raw. deny: block native shell outright so every command goes through ctx_shell (fail-opens: lean-ctx disabled, MCP daemon dead, explicit shadow-only surface). auto (default): currently rewrite
 - `shell_security` (string, default `enforce` — env `LEAN_CTX_SHELL_SECURITY`) — Shell command gating: enforce (default, secure), warn (log only, never block) or off (skip allowlist + hard blocks; compression stays active)
 - `shell_strict_mode` (bool, default `false`) — Block $(), backticks, <() in shell arguments. Default false = warn only.
 - `shell_timeout_secs` (u64?, default `null` — env `LEAN_CTX_SHELL_TIMEOUT_SECS`) — Shell command timeout (seconds) for normal commands. null = built-in 2-minute default. LEAN_CTX_SHELL_TIMEOUT_MS overrides both tiers (in ms)

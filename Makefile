@@ -17,7 +17,13 @@ install: ## Build release + install to ~/.local/bin
 dev: ## Quick debug build + copy to ~/.local/bin
 	cd rust && cargo build
 	@mkdir -p "$$HOME/.local/bin"
+	@# rm before cp: overwriting an existing Mach-O in place invalidates the
+	@# ad-hoc code signature on Apple Silicon — the copied binary dies with
+	@# SIGKILL (exit 137) on every exec. Removing first gives the new file a
+	@# fresh identity; re-sign ad hoc for good measure where codesign exists.
+	rm -f "$$HOME/.local/bin/lean-ctx"
 	cp rust/target/debug/lean-ctx "$$HOME/.local/bin/lean-ctx"
+	@command -v codesign >/dev/null 2>&1 && codesign -f -s - "$$HOME/.local/bin/lean-ctx" 2>/dev/null || true
 	@echo "Dev installed: $$(lean-ctx --version)"
 
 test: ## Run all Rust tests + clippy

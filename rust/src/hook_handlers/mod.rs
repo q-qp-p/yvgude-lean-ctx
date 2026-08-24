@@ -272,7 +272,29 @@ fn is_shell_tool(tool_name: &str) -> bool {
 }
 
 pub fn handle_rewrite() {
+    // #1278: `shell_hook_mode = "deny"` upgrades the shell hook from rewrite
+    // (best-effort, unknown commands pass through raw) to a hard deny with the
+    // deny hook's fail-opens. Routed here so existing installs — whose settings
+    // wire `hook rewrite` for Bash — pick the mode up from config alone,
+    // without rewriting user settings files.
+    if shell_deny_mode_active() {
+        deny::handle_deny();
+        return;
+    }
     emit_gating_decision(HOOK_GATING_TIMEOUT, file_rewrite::compute_rewrite);
+}
+
+/// Effective shell-hook mode is `deny` (#1278). Env wins over config so a
+/// single session can be forced either way without touching config.toml.
+fn shell_deny_mode_active() -> bool {
+    let mode = match std::env::var("LEAN_CTX_SHELL_HOOK_MODE") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => crate::core::config::Config::load()
+            .shell_hook_mode
+            .clone()
+            .unwrap_or_default(),
+    };
+    mode.trim().eq_ignore_ascii_case("deny")
 }
 
 pub fn handle_redirect() {
