@@ -12,15 +12,18 @@ the agent, model, provider, or task logic.
 
 ## Reference path: OpenAI Agents SDK
 
-Install the Preview package in a Python 3.10+ environment with the OpenAI Agents
-SDK, and configure a local LeanCTX Runtime first.
+Install the Preview package in a clean Python 3.10+ environment with the named
+OpenAI Agents extra. The Engine proof is credential-free; live provider calls
+remain a separate concern.
 
 ```bash
-pip install "lean-ctx-python[openai-agents]"
+python3 -m venv /tmp/leanctx-p3-venv
+/tmp/leanctx-p3-venv/bin/python -m pip install -e \
+  ".[openai-agents,test]"
 ```
 
 ```python
-from agents import Agent, Runner
+from agents import Agent
 from lean_ctx import LeanCTX
 
 agent = Agent(name="Assistant", instructions="Be concise and helpful.")
@@ -33,6 +36,54 @@ print(result.final_output)
 This is a **Preview reference wrapper**, not a claim that every agent shape or
 provider transport is supported. A live OpenAI run also requires the relevant
 provider credentials.
+
+## Local Engine Embed proof
+
+Embed is explicit host control: Python creates the task/session and plan, the
+local Engine creates the factual view, the host calls its agent, and the host
+explicitly records the outcome. The default executable is `lean-ctx`; set
+`engine_binary` to an explicit built binary for a credential-free integration
+test.
+
+```python
+from agents import Agent, Runner
+from lean_ctx import ContextSource, LeanCTX
+
+ctx = LeanCTX({"engine_binary": "lean-ctx"})
+session = ctx.embed("Review the deployment plan", project_root=".")
+plan = session.plan(ContextSource("README.md", project_root="."))
+view = plan.execute()
+# local_model implements agents.models.interface.Model; the deterministic,
+# provider-free implementation used for this proof is in tests/test_agents_sdk.py.
+agent = Agent(name="Reviewer", model=local_model)
+result = session.run_openai(agent)
+receipt = session.receipt
+assert result.final_output == "approved"
+assert receipt.verify()
+exact_source = view.recover()
+```
+
+The Engine command is the versioned local process boundary:
+
+```text
+lean-ctx engine context-view --project-root ROOT --json-file REQUEST
+lean-ctx engine recover --project-root ROOT --json-file REQUEST
+```
+
+Malformed observations, version or lineage mismatches, digest changes, policy
+rejection, and receipt-link failures are never silently treated as success.
+`fail_open=True` may continue only with an explicit degraded, unsealed Python
+receipt; `fail_open=False` raises before the host call. No local code infers
+usage, savings, coverage, or acceptance from text or delivery.
+
+Run the package proof with:
+
+```bash
+python -m pytest -q packages/python-lean-ctx/tests
+```
+
+The real-binary integration test is opt-in via `LEAN_CTX_ENGINE_BINARY` and is
+skipped when that variable is absent.
 
 ## Evidence boundary
 

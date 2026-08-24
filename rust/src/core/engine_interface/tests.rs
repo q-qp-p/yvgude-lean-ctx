@@ -999,3 +999,137 @@ fn interface_matches_the_native_capability_contract() {
         CAPABILITY_ID
     );
 }
+
+#[test]
+fn transport_context_view_and_recovery_are_deterministic_and_exact() {
+    let _data_dir = data_dir::isolated_data_dir();
+    let root = tempfile::tempdir().expect("transport root");
+    let source = root.path().join("fixture.rs");
+    let input = "fn fixture() { let stable = true; }\n";
+    std::fs::write(&source, input).expect("fixture write");
+
+    let first =
+        execute_transport_context_view(root.path(), "fixture.rs").expect("transport context view");
+    let second =
+        execute_transport_context_view(root.path(), "fixture.rs").expect("deterministic repeat");
+    assert_eq!(first, second);
+    assert_eq!(
+        first.recovery.recovery_ref,
+        first.invocation.as_ref().unwrap().input_ref.clone()
+    );
+    assert_eq!(first.recovery.source_digest, digest(input.as_bytes()));
+    assert_eq!(
+        first.view.output_digest,
+        first.observation.as_ref().unwrap().output_digest
+    );
+    first
+        .observation
+        .as_ref()
+        .unwrap()
+        .validate_for(first.invocation.as_ref().unwrap())
+        .expect("transport records validate");
+
+    let recovered = recover_transport_source(
+        root.path(),
+        "fixture.rs",
+        &first.recovery.recovery_ref,
+        &first.recovery.source_ref,
+        &first.recovery.source_digest,
+    )
+    .expect("exact recovery");
+    assert_eq!(recovered.view.text, input);
+    assert_eq!(
+        recovered.view.output_digest,
+        Some(first.recovery.source_digest.clone())
+    );
+}
+
+#[test]
+fn transport_recovery_fails_closed_for_malformed_changed_missing_and_outside_sources() {
+    let _data_dir = data_dir::isolated_data_dir();
+    let root = tempfile::tempdir().expect("transport root");
+    let source = root.path().join("fixture.txt");
+    std::fs::write(&source, "original").expect("fixture write");
+    let result =
+        execute_transport_context_view(root.path(), "fixture.txt").expect("transport context view");
+
+    let malformed = ProtocolReference::new("recovery:not-an-input-ref").expect("reference");
+    assert_eq!(
+        recover_transport_source(
+            root.path(),
+            "fixture.txt",
+            &malformed,
+            &result.recovery.source_ref,
+            &result.recovery.source_digest,
+        )
+        .expect_err("malformed recovery ref"),
+        EngineTransportError::MalformedRecoveryRef
+    );
+
+    std::fs::write(&source, "changed").expect("changed source");
+    assert_eq!(
+        recover_transport_source(
+            root.path(),
+            "fixture.txt",
+            &result.recovery.recovery_ref,
+            &result.recovery.source_ref,
+            &result.recovery.source_digest,
+        )
+        .expect_err("changed source"),
+        EngineTransportError::SourceChanged
+    );
+    std::fs::remove_file(&source).expect("remove source");
+    assert_eq!(
+        recover_transport_source(
+            root.path(),
+            "fixture.txt",
+            &result.recovery.recovery_ref,
+            &result.recovery.source_ref,
+            &result.recovery.source_digest,
+        )
+        .expect_err("missing source"),
+        EngineTransportError::SourceUnavailable
+    );
+
+    let outside = tempfile::tempdir().expect("outside root");
+    let outside_source = outside.path().join("outside.txt");
+    std::fs::write(&outside_source, "outside").expect("outside fixture");
+    assert_eq!(
+        execute_transport_context_view(root.path(), &outside_source.to_string_lossy())
+            .expect_err("outside source"),
+        EngineTransportError::SourceOutsideRoot
+    );
+    assert_eq!(
+        execute_transport_context_view(std::path::Path::new("/"), "fixture.txt")
+            .expect_err("unsafe root"),
+        EngineTransportError::UnsafeRoot
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn transport_rejects_a_symlinked_source_leaf() {
+    use std::os::unix::fs::symlink;
+
+    let _data_dir = data_dir::isolated_data_dir();
+    let root = tempfile::tempdir().expect("transport root");
+    let target = root.path().join("target.txt");
+    let link = root.path().join("link.txt");
+    std::fs::write(&target, "target").expect("target fixture");
+    symlink(&target, &link).expect("symlink fixture");
+
+    assert_eq!(
+        execute_transport_context_view(root.path(), "link.txt").expect_err("symlink source"),
+        EngineTransportError::SourceSymlink
+    );
+
+    let nested = root.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested directory");
+    let nested_link = nested.join("link");
+    symlink(".", &nested_link).expect("nested symlink fixture");
+    assert_eq!(
+        execute_transport_context_view(root.path(), "nested/link/../target.txt")
+            .expect_err("symlink source component"),
+        EngineTransportError::SourceSymlink
+    );
+}

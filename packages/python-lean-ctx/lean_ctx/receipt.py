@@ -158,6 +158,225 @@ class ExecutionReceipt:
             return False
 
 
+@dataclass(frozen=True)
+class ContextReceipt:
+    """Preview join of factual Engine evidence and an explicit host outcome.
+
+    ``host_result`` is intentionally retained as the exact object returned by
+    the host (for example an OpenAI Agents ``RunResult``).  Its presence never
+    changes ``outcome``: delivery defaults to ``unknown`` until the host calls
+    :meth:`ContextSession.complete` with an explicit outcome.
+    """
+
+    preview_version: str
+    schema_version: int
+    transport_version: Optional[str]
+    engine_interface_version: Optional[str]
+    session_id: Optional[str]
+    task_id: Optional[str]
+    run_id: Optional[str]
+    trace_id: Optional[str]
+    plan: object
+    view: object
+    outcome: str
+    integrity_status: str
+    degradations: Tuple[str, ...]
+    host_result: object = field(repr=False, compare=False, default=None)
+    host_output: object = field(repr=False, compare=False, default=None)
+    tool_results: object = field(repr=False, compare=False, default=None)
+    host_exception: Optional[BaseException] = field(repr=False, compare=False, default=None)
+    usage: object = field(repr=False, compare=False, default=None)
+
+    @classmethod
+    def from_session(
+        cls,
+        *,
+        session_id: Optional[str],
+        task_id: Optional[str],
+        run_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        plan: object,
+        view: object,
+        outcome: str,
+        host_result: object = None,
+        host_output: object = None,
+        tool_results: object = None,
+        host_exception: Optional[BaseException] = None,
+        usage: object = None,
+        degradations: Tuple[str, ...] = (),
+    ) -> "ContextReceipt":
+        if outcome not in {"unknown", "accepted", "rejected", "completed", "failed", "aborted"}:
+            raise ValueError("invalid Preview host outcome")
+        if usage is None:
+            usage = _factual_usage(host_result)
+        sealed = bool(
+            view is not None
+            and getattr(view, "receipt_link", None) is not None
+            and getattr(view, "integrity_status", "unsealed") == "sealed"
+            and not degradations
+        )
+        status = "sealed" if sealed else "unsealed"
+        return cls(
+            preview_version="1.0.0",
+            schema_version=1,
+            transport_version=None if view is None else view.transport_version,
+            engine_interface_version=None if view is None else view.engine_interface_version,
+            session_id=session_id,
+            task_id=task_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            plan=plan,
+            view=view,
+            outcome=outcome,
+            integrity_status=status,
+            degradations=tuple(degradations),
+            host_result=host_result,
+            host_output=host_output,
+            tool_results=tool_results,
+            host_exception=host_exception,
+            usage=usage,
+        )
+
+    @property
+    def sealed(self) -> bool:
+        return self.integrity_status == "sealed"
+
+    @property
+    def host_outcome(self) -> str:
+        return self.outcome
+
+    @property
+    def result(self):
+        return self.host_result
+
+    @property
+    def run_result(self):
+        return self.host_result
+
+    @property
+    def output(self):
+        return self.host_result if self.host_output is None else self.host_output
+
+    @property
+    def source(self):
+        return None if self.view is None else self.view.source
+
+    @property
+    def invocation(self):
+        return None if self.view is None else self.view.invocation
+
+    @property
+    def observation(self):
+        return None if self.view is None else self.view.observation
+
+    @property
+    def engine_invocation(self):
+        return self.invocation
+
+    @property
+    def engine_observation(self):
+        return self.observation
+
+    @property
+    def receipt_link(self):
+        return None if self.view is None else self.view.receipt_link
+
+    @property
+    def recovery_ref(self) -> Optional[str]:
+        return None if self.view is None else self.view.recovery_ref
+
+    @property
+    def output_digest(self) -> Optional[str]:
+        return None if self.view is None else self.view.output_digest
+
+    @property
+    def engine_version(self) -> Optional[str]:
+        return None if self.view is None else self.view.engine_version
+
+    @property
+    def measurements(self):
+        return () if self.view is None else self.view.measurements
+
+    @property
+    def failure(self):
+        return None if self.view is None else self.view.failure
+
+    @property
+    def status(self) -> Optional[str]:
+        return None if self.view is None else self.view.status
+
+    @property
+    def exception(self) -> Optional[BaseException]:
+        return self.host_exception
+
+    def verify(self) -> bool:
+        """Verify Engine evidence integrity without interpreting host outcome."""
+        if not self.sealed or self.view is None:
+            return False
+        link = self.view.receipt_link
+        if link is None or link.invocation_id != self.view.invocation_id:
+            return False
+        if self.view.status == "succeeded" and self.view.text is None:
+            return False
+        return True
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a payload-free, deterministic host projection."""
+        view = self.view
+        result: Dict[str, object] = {
+            "preview_version": self.preview_version,
+            "schema_version": self.schema_version,
+            "transport_version": self.transport_version,
+            "engine_interface_version": self.engine_interface_version,
+            "session_id": self.session_id,
+            "task_id": self.task_id,
+            "run_id": self.run_id,
+            "trace_id": self.trace_id,
+            "outcome": self.outcome,
+            "integrity_status": self.integrity_status,
+            "degradations": list(self.degradations),
+            "plan": None if self.plan is None else self.plan.to_dict(),
+            "engine": None,
+            "usage": self.usage,
+        }
+        if view is not None:
+            result["engine"] = {
+                "source_ref": view.source_ref,
+                "source_digest": view.source_digest,
+                "recovery_ref": view.recovery_ref,
+                "output_ref": view.output_ref,
+                "output_digest": view.output_digest,
+                "status": view.status,
+                "invocation": dict(view.invocation),
+                "observation": dict(view.observation),
+            }
+        if self.host_exception is not None:
+            result["host_exception"] = {
+                "type": f"{type(self.host_exception).__module__}.{type(self.host_exception).__name__}"
+            }
+        return result
+
+
+def _factual_usage(value: object) -> object:
+    """Project provider-reported usage only; never derive it from output text."""
+    if value is None:
+        return None
+    usage = getattr(value, "usage", None)
+    if usage is None and isinstance(value, Mapping):
+        usage = value.get("usage")
+    if usage is None:
+        return None
+    if isinstance(usage, Mapping):
+        return dict(usage)
+    fields = ("input_tokens", "output_tokens", "total_tokens", "cached_tokens", "reasoning_tokens")
+    projected = {}
+    for name in fields:
+        item = getattr(usage, name, None)
+        if item is not None:
+            projected[name] = item
+    return projected or None
+
+
 def _decode_bytes(value: object) -> Optional[bytes]:
     if not isinstance(value, str) or not value:
         return None

@@ -45,7 +45,11 @@ all = [
   "openai-agents>=0.19.4,<0.20.0",
   "cryptography>=42.0",
 ]
-test = ["pytest>=8.0", "cryptography>=42.0"]
+test = [
+  "pytest>=8.0",
+  "cryptography>=42.0",
+  "openai-agents>=0.19.4,<0.20.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["lean_ctx*"]
