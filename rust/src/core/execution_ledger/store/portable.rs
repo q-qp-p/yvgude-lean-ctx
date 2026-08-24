@@ -79,11 +79,28 @@ pub(super) fn append_if_new(
     mut event: ExecutionEvent,
 ) -> Result<bool> {
     validate_store_parent(store, true)?;
-    let mut file = secure_open_options()
-        .create(true)
+    let mut file = match secure_open_options()
         .read(true)
         .append(true)
-        .open(&store.path)?;
+        .open(&store.path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_no_pending_append(&store.path)?;
+            let file = secure_open_options()
+                .create_new(true)
+                .read(true)
+                .append(true)
+                .open(&store.path)?;
+            if let Err(error) = ensure_no_pending_append(&store.path) {
+                drop(file);
+                remove_checked(&store.path)?;
+                return Err(error);
+            }
+            file
+        }
+        Err(error) => return Err(error.into()),
+    };
     validate_regular_file(&store.path, &file, "execution ledger")?;
     file.lock_exclusive()?;
     let result = (|| {

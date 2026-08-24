@@ -251,7 +251,10 @@ mod tests {
             serde_json::from_str(OBSERVATION_JSON).expect("observation fixture");
         let binding_bytes =
             include_bytes!("../../../docs/contracts/invocation-context-binding/v1/valid.json");
-        let binding_bytes = binding_bytes.strip_suffix(b"\n").unwrap_or(binding_bytes);
+        let binding_bytes = binding_bytes
+            .strip_suffix(b"\r\n")
+            .or_else(|| binding_bytes.strip_suffix(b"\n"))
+            .unwrap_or(binding_bytes);
         let mut binding = InvocationContextBindingV1::from_canonical_bytes(binding_bytes)
             .expect("binding fixture");
         binding.invocation_ref =
