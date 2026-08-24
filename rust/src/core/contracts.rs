@@ -316,6 +316,21 @@ pub fn contract_docs() -> Vec<ContractDoc> {
             1,
             Stable,
         ),
+        // P2 protocol artifacts: additive contract surfaces with exact Rust and
+        // schema conformance tests; promotion to Frozen requires a hash snapshot.
+        doc(
+            "invocation-context-binding",
+            "invocation-context-binding-v1.md",
+            1,
+            Stable,
+        ),
+        doc(
+            "invocation-evidence-manifest",
+            "invocation-evidence-manifest-v1.md",
+            1,
+            Stable,
+        ),
+        doc("receipt-document", "receipt-document-v1.md", 1, Stable),
         doc(
             "native-engine-context-proof",
             "native-engine-context-proof-v1.md",

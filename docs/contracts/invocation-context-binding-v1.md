@@ -20,9 +20,10 @@ retain their protocol UTF-8 byte bounds and control-character rules.
 
 The `decision` is always `admitted`; rejected decisions are not represented by
 this sidecar. `source_bindings` contains exactly one `input` and any remaining
-`context` entries. `capability_bindings` contains at least one selected
-capability. The current V1 Engine operation is checked by a later adapter; this
-sidecar does not prescribe a fixed operation count.
+`context` entries. `capability_bindings` contains exactly one selected
+capability in V1. The current V1 Engine operation is checked by a later adapter
+and must match this binding; this sidecar does not perform capability-manifest
+resolution.
 
 Source bindings are strictly ordered by `source_ref`. Capability bindings are
 strictly ordered by `(capability_id, capability_version)`. This makes the

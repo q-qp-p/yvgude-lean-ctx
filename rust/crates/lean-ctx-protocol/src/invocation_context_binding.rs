@@ -142,7 +142,11 @@ impl InvocationContextBindingV1 {
 
     fn validate_unsigned(&self) -> Result<(), ValidationError> {
         validate_schema_version(self.schema_version)?;
+        reject_binding_feff(self.admission_id.as_str(), "admission_id")?;
         validate_bounded_opaque_identifier(self.admission_id.as_str(), "admission_id")?;
+        reject_binding_feff(self.task_id.as_str(), "task_id")?;
+        reject_binding_feff(self.plan_id.as_str(), "plan_id")?;
+        reject_binding_feff(self.invocation_id.as_str(), "invocation_id")?;
         validate_schema_digest(&self.session_identity_ref, "session_identity_ref")?;
         validate_schema_digest(&self.task_ref, "task_ref")?;
         validate_schema_digest(&self.plan_ref, "plan_ref")?;
@@ -177,11 +181,21 @@ fn validate_signer(signer: &InvocationContextBindingSignerV1) -> Result<(), Vali
             "InvocationContextBindingSignerV1 algorithm must be ed25519",
         ));
     }
+    reject_binding_feff(&signer.key_id, "key_id")?;
     validate_key_id(&signer.key_id)?;
     // Sha256Digest is exactly 32 bytes represented by 64 lowercase hex bytes;
     // retaining it as a typed field prevents embedding a public key or a
     // variable-length key digest in this metadata-only contract.
     validate_schema_digest(&signer.public_key_digest, "public_key_digest")
+}
+
+fn reject_binding_feff(value: &str, field: &str) -> Result<(), ValidationError> {
+    if value.contains('\u{feff}') {
+        return Err(ValidationError::new(format!(
+            "{field} must not contain U+FEFF"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_key_id(value: &str) -> Result<(), ValidationError> {
@@ -271,9 +285,9 @@ fn validate_source_bindings(bindings: &[InvocationSourceBindingV1]) -> Result<()
 fn validate_capability_bindings(
     bindings: &[InvocationCapabilityBindingV1],
 ) -> Result<(), ValidationError> {
-    if bindings.is_empty() || bindings.len() > MAX_INVOCATION_CONTEXT_BINDING_ITEMS {
+    if bindings.len() != 1 {
         return Err(ValidationError::new(format!(
-            "capability_bindings must contain 1..={MAX_INVOCATION_CONTEXT_BINDING_ITEMS} entries"
+            "capability_bindings must contain exactly one entry in V1 (maximum {MAX_INVOCATION_CONTEXT_BINDING_ITEMS})"
         )));
     }
     let mut keys = BTreeSet::new();
@@ -583,12 +597,29 @@ mod tests {
         );
         let signing = signing.strip_suffix(b"\n").unwrap_or(signing);
         assert_eq!(binding.unsigned_canonical_bytes().unwrap(), signing);
-        assert!(
-            binding
-                .signing_bytes()
-                .unwrap()
-                .starts_with(INVOCATION_CONTEXT_BINDING_SIGNATURE_DOMAIN)
+        let signing_bytes = binding.signing_bytes().unwrap();
+        assert!(signing_bytes.starts_with(INVOCATION_CONTEXT_BINDING_SIGNATURE_DOMAIN));
+        assert_eq!(
+            signing_bytes[INVOCATION_CONTEXT_BINDING_SIGNATURE_DOMAIN.len() - 1],
+            0
         );
+        let expected_hex = include_bytes!(
+            "../../../../docs/contracts/invocation-context-binding/v1/signing-bytes.hex"
+        );
+        let expected_hex = expected_hex.strip_suffix(b"\n").unwrap_or(expected_hex);
+        let expected_signing_bytes = decode_hex(expected_hex);
+        assert_eq!(signing_bytes, expected_signing_bytes);
+        let expected_hash = include_bytes!(
+            "../../../../docs/contracts/invocation-context-binding/v1/signing-bytes.sha256"
+        );
+        let expected_hash = expected_hash.strip_suffix(b"\n").unwrap_or(expected_hash);
+        let actual_hash = Sha256::digest(&signing_bytes);
+        let actual_hash = actual_hash.iter().fold(String::new(), |mut value, byte| {
+            use std::fmt::Write as _;
+            write!(value, "{byte:02x}").unwrap();
+            value
+        });
+        assert_eq!(actual_hash.as_bytes(), expected_hash);
         assert_ne!(
             binding.canonical_bytes().unwrap(),
             binding.unsigned_canonical_bytes().unwrap()
@@ -641,6 +672,37 @@ mod tests {
     }
 
     #[test]
+    fn bounded_ids_reject_feff_on_every_binding_identity_path() {
+        let mut binding = valid_binding();
+        binding.admission_id = DecisionId::new("admission:\u{feff}").unwrap();
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.task_id = TaskId::new("task:\u{feff}").unwrap();
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.plan_id = PlanId::new("plan:\u{feff}").unwrap();
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.invocation_id = EngineInvocationIdV1::new("invocation:\u{feff}").unwrap();
+        assert!(binding.validate().is_err());
+        let mut binding = valid_binding();
+        binding.signer.key_id = "key:\u{feff}".to_owned();
+        assert!(binding.validate().is_err());
+    }
+
+    #[test]
+    fn wrong_public_key_metadata_changes_coverage_without_trust_claim() {
+        let binding = valid_binding();
+        let expected = binding.signing_bytes().unwrap();
+        let mut wrong_key = binding.clone();
+        wrong_key.signer.public_key_digest = digest('3');
+        wrong_key.validate().unwrap();
+        assert_ne!(wrong_key.signing_bytes().unwrap(), expected);
+        // Key lookup and cryptographic verification intentionally remain a
+        // caller/runtime gate; protocol validation only checks metadata shape.
+    }
+
+    #[test]
     fn capability_order_and_duplicates_are_rejected() {
         let mut binding = valid_binding();
         binding
@@ -675,6 +737,10 @@ mod tests {
             "invalid-schema-version-float.json",
             "invalid-unknown-field.json",
             "invalid-signature-pad-bits.json",
+            "invalid-time-order.json",
+            "invalid-duplicate-source.json",
+            "invalid-capability-count.json",
+            "invalid-feff-task-id.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-duplicate-key.json" => include_bytes!(
@@ -689,6 +755,18 @@ mod tests {
                 "invalid-signature-pad-bits.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-context-binding/v1/invalid-signature-pad-bits.json"
                 ),
+                "invalid-time-order.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-context-binding/v1/invalid-time-order.json"
+                ),
+                "invalid-duplicate-source.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-context-binding/v1/invalid-duplicate-source.json"
+                ),
+                "invalid-capability-count.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-context-binding/v1/invalid-capability-count.json"
+                ),
+                "invalid-feff-task-id.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-context-binding/v1/invalid-feff-task-id.json"
+                ),
                 _ => unreachable!(),
             };
             assert!(
@@ -696,6 +774,20 @@ mod tests {
                 "fixture {name} must be rejected"
             );
         }
+    }
+
+    fn decode_hex(bytes: &[u8]) -> Vec<u8> {
+        fn nibble(byte: u8) -> u8 {
+            match byte {
+                b'0'..=b'9' => byte - b'0',
+                b'a'..=b'f' => byte - b'a' + 10,
+                _ => panic!("invalid hex fixture"),
+            }
+        }
+        bytes
+            .chunks_exact(2)
+            .map(|pair| (nibble(pair[0]) << 4) | nibble(pair[1]))
+            .collect()
     }
 
     #[test]
@@ -714,6 +806,8 @@ mod tests {
             true
         );
         assert_eq!(schema["x-conformance"]["signature"]["decoded_bytes"], 64);
+        assert_eq!(schema["properties"]["capability_bindings"]["minItems"], 1);
+        assert_eq!(schema["properties"]["capability_bindings"]["maxItems"], 1);
         let requirements = schema["x-conformance"]["stages"][2]["requirements"]
             .as_array()
             .unwrap();

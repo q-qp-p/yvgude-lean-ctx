@@ -100,9 +100,9 @@
     "capability_bindings": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 64,
+      "maxItems": 1,
       "items": { "$ref": "#/$defs/capabilityBinding" },
-      "description": "Semantic validation requires unique pairs/digests and capability_id/version ascending order."
+      "description": "V1 requires exactly one capability; semantic validation requires unique pair/digest and capability_id/version ordering."
     },
     "issued_at": { "$ref": "#/$defs/timestamp" },
     "not_before": { "$ref": "#/$defs/timestamp" },

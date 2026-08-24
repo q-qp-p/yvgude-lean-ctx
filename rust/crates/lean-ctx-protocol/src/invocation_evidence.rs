@@ -216,6 +216,8 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
     let mut digests = BTreeMap::new();
     let mut binding_keys = BTreeSet::new();
     let mut roles = BTreeSet::new();
+    let mut admission_ref = None;
+    let mut admission_digest = None;
     for binding in bindings {
         validate_manifest_reference(&binding.policy_ref, "policy_ref")?;
         if binding.policy_ref.as_str().trim().is_empty() {
@@ -236,6 +238,23 @@ fn validate_policy_bindings(bindings: &[InvocationPolicyBindingV1]) -> Result<()
         if !roles.insert(binding.role) {
             return Err(ValidationError::new(
                 "policy_bindings role values must be unique",
+            ));
+        }
+        if binding.role == InvocationPolicyRoleV1::InvocationAdmission {
+            if refs.contains_key(binding.policy_ref.as_str())
+                || digests.contains_key(binding.digest.as_str())
+            {
+                return Err(ValidationError::new(
+                    "invocation_admission must not alias another policy role",
+                ));
+            }
+            admission_ref = Some(binding.policy_ref.as_str());
+            admission_digest = Some(binding.digest.as_str());
+        } else if admission_ref == Some(binding.policy_ref.as_str())
+            || admission_digest == Some(binding.digest.as_str())
+        {
+            return Err(ValidationError::new(
+                "optional policy roles must not alias invocation_admission",
             ));
         }
         if refs
@@ -561,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_policy_alias_is_valid_across_distinct_roles() {
+    fn shared_policy_alias_is_valid_across_optional_roles_only() {
         let mut manifest = valid_manifest();
         let shared_ref = reference("policy:shared");
         let shared_digest = digest('a');
@@ -572,14 +591,23 @@ mod tests {
                 role: InvocationPolicyRoleV1::PlanDecision,
             },
             InvocationPolicyBindingV1 {
-                policy_ref: shared_ref,
-                digest: shared_digest,
+                policy_ref: reference("policy:task-model"),
+                digest: digest('b'),
+                role: InvocationPolicyRoleV1::TaskModel,
+            },
+            InvocationPolicyBindingV1 {
+                policy_ref: reference("policy:invocation-admission"),
+                digest: digest('c'),
                 role: InvocationPolicyRoleV1::InvocationAdmission,
             },
         ];
         manifest
             .validate()
-            .expect("one policy may serve two distinct roles");
+            .expect("one policy may serve two optional roles");
+
+        manifest.policy_bindings[2].policy_ref = shared_ref;
+        manifest.policy_bindings[2].digest = shared_digest;
+        assert!(manifest.validate().is_err());
     }
 
     #[test]
@@ -741,7 +769,7 @@ mod tests {
                 .any(|requirement| { requirement == "resolve_and_verify_policy_artifact_bytes" })
         );
         assert!(requirements.iter().any(|requirement| {
-            requirement == "policy_aliases_repeat_only_exact_ref_and_digest_across_distinct_roles"
+            requirement == "policy_aliases_repeat_only_exact_ref_and_digest_across_optional_roles"
         }));
         assert!(requirements.iter().any(|requirement| {
             requirement == "policy_conflicting_ref_digest_and_duplicate_role_bindings_rejected"
@@ -781,7 +809,7 @@ mod tests {
         let shared = shared.strip_suffix(b"\n").unwrap_or(shared);
         let shared_manifest = InvocationEvidenceManifestV1::from_canonical_bytes(shared)
             .expect("shared policy alias fixture should decode");
-        assert_eq!(shared_manifest.policy_bindings.len(), 2);
+        assert_eq!(shared_manifest.policy_bindings.len(), 3);
         let multibyte = include_bytes!(
             "../../../../docs/contracts/invocation-evidence-manifest/v1/valid-multibyte.json"
         );
@@ -866,6 +894,7 @@ mod tests {
             "invalid-schema-version-float.json",
             "invalid-policy-alias-conflicting-digest.json",
             "invalid-policy-alias-duplicate-role.json",
+            "invalid-policy-alias-admission.json",
         ] {
             let bytes: &[u8] = match name {
                 "invalid-unknown-field.json" => include_bytes!(
@@ -930,6 +959,9 @@ mod tests {
                 ),
                 "invalid-policy-alias-duplicate-role.json" => include_bytes!(
                     "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-policy-alias-duplicate-role.json"
+                ),
+                "invalid-policy-alias-admission.json" => include_bytes!(
+                    "../../../../docs/contracts/invocation-evidence-manifest/v1/invalid-policy-alias-admission.json"
                 ),
                 _ => unreachable!(),
             };

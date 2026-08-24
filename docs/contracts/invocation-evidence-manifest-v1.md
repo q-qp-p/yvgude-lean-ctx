@@ -55,9 +55,10 @@ has role `input`; all other bindings have role `context`.
 `policy_bindings` contains 1..=4 bindings and MUST contain exactly one
 `invocation_admission` role. `task_region`, `task_model`, and `plan_decision`
 roles are optional and each may occur at most once. The same exact
-`policy_ref` + digest may alias across distinct roles (for example,
-`plan_decision` and `invocation_admission`). Each policy reference maps to one
-digest and each digest maps to one policy reference; conflicting aliases,
+`policy_ref` + digest may alias across distinct optional roles (for example,
+`task_model` and `plan_decision`), but `invocation_admission` must be unique
+from every optional role. Each policy reference maps to one digest and each
+digest maps to one policy reference; conflicting aliases, admission aliases,
 duplicate roles, and duplicate identical bindings are invalid. A later
 cross-artifact verifier compares the present roles with refs actually present
 in the TaskEnvelope, Plan, and Invocation; producers MUST NOT fabricate

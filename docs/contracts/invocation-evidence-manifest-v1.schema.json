@@ -25,7 +25,8 @@
         "protocol_decoder_sufficient": false,
         "requirements": [
           "policy_role_set_matches_refs_present_in_task_plan_invocation",
-          "policy_aliases_repeat_only_exact_ref_and_digest_across_distinct_roles",
+          "policy_aliases_repeat_only_exact_ref_and_digest_across_optional_roles",
+          "invocation_admission_ref_and_digest_unique_from_optional_roles",
           "policy_conflicting_ref_digest_and_duplicate_role_bindings_rejected",
           "policy_duplicate_identical_bindings_rejected",
           "exact_proof_requires_signed_InvocationContextBindingV1_sidecar",
@@ -72,7 +73,7 @@
       "minItems": 1,
       "maxItems": 4,
       "items": { "$ref": "#/$defs/policyBinding" },
-      "description": "Rust validation requires exactly one invocation_admission, permits one exact policy_ref+digest alias across distinct roles, and rejects conflicting aliases, duplicate roles, or duplicate identical bindings; a later verifier compares present roles to TaskEnvelope/Plan/Invocation refs without fabricating bindings. The invocation_admission digest resolves signed InvocationContextBindingV1 bytes, whose embedded policy_digest resolves the signed admission-policy bytes."
+      "description": "Rust validation requires exactly one invocation_admission, permits one exact policy_ref+digest alias only across optional roles, and rejects admission aliases, conflicting aliases, duplicate roles, or duplicate identical bindings; a later verifier compares present roles to TaskEnvelope/Plan/Invocation refs without fabricating bindings. The invocation_admission digest resolves signed InvocationContextBindingV1 bytes, whose embedded policy_digest resolves the signed admission-policy bytes."
     },
     "capability_bindings": {
       "type": "array",
