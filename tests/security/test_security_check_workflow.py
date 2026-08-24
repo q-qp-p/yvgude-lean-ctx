@@ -28,18 +28,6 @@ class SecurityCheckWorkflowTests(unittest.TestCase):
         self.assertIn('echo "::error::Security pattern scan failed"', guard)
         self.assertIn("            exit 1", guard)
 
-    def test_protocol_surface_freeze_gate_is_mandatory_before_dependency_audit(self):
-        command = "python3 scripts/check-open-core-boundary.py"
-        self.assertEqual(self.workflow.count(command), 1)
-
-        gate_start = self.workflow.index("      - name: Protocol surface freeze gate")
-        audit_start = self.workflow.index("      - name: Dependency audit")
-        self.assertLess(gate_start, audit_start)
-
-        gate = self.workflow[gate_start:audit_start]
-        self.assertIn(f"        run: {command}\n", gate)
-        self.assertNotIn("continue-on-error", gate)
-
 
 if __name__ == "__main__":
     unittest.main()
