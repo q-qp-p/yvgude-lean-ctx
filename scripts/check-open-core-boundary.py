@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 """Check the public Rust tree against the documented open-core boundary.
 
-GitLab CI integration TODO:
-
-    boundary-check:
-      script: python3 scripts/check-open-core-boundary.py
-      rules:
-        - changes: ["rust/**", "docs/contracts/**"]
-
-The classification document is intentionally optional during the staged
-rollout.  Import and strategic-data checks still run when it is absent.
+The classification document is optional during staged rollout. Import,
+protocol-freeze, source-injection, and strategic-data checks still run when it
+is absent.
 """
 
 from __future__ import annotations
@@ -30,20 +24,74 @@ ROOT = Path(__file__).resolve().parents[1]
 CLASSIFICATION_PATH = ROOT / "docs/internal/architecture/MODULE_CLASSIFICATION.md"
 RUST_SOURCE_ROOT = ROOT / "rust/src"
 RUST_CRATES_ROOT = ROOT / "rust/crates"
+MAX_RUST_FILES = 10_000
+MAX_RUST_ENTRIES = 100_000
+MAX_RUST_SOURCE_BYTES = 4 * 1024 * 1024
+MAX_RUST_TOTAL_BYTES = 128 * 1024 * 1024
+MAX_RUST_MACROS = 2_048
+MAX_MACRO_ARGUMENT_BYTES = 8_192
+MAX_RUST_USE_BYTES = 8_192
+# Treat every non-ASCII code point as a possible Rust XID continuation. This
+# deliberately over-approximates Unicode identifier syntax so boundaries can
+# never split a valid identifier merely because Python and Rust use different
+# Unicode table versions.
+RUST_IDENTIFIER_CONTINUE = r"\w\u0080-\U0010ffff"
+RUST_IDENTIFIER_LEFT = r"(?<![" + RUST_IDENTIFIER_CONTINUE + r"])"
+RUST_IDENTIFIER_RIGHT = r"(?![" + RUST_IDENTIFIER_CONTINUE + r"])"
+RUST_PATH_LEFT = r"(?<![" + RUST_IDENTIFIER_CONTINUE + r":])"
+RUST_IDENTIFIER = (
+    r"(?:r#)?[^\W\d]"
+    r"(?:\w|[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f])*"
+)
 
 CLASS_TOKEN = re.compile(
     r"\b(?:class|classification)\s*[:=\-]?\s*([A-E])\b", re.IGNORECASE
 )
 INLINE_PATH = re.compile(r"(?:^|\s)(rust/(?:src|crates)/[^\s|)`]+)")
 PRIVATE_IMPORT = re.compile(
-    r"(?:^|::)(?:"
-    r"lean[_-]?ctx[_-]?(?:enterprise|private)|"
-    r"leanctx[_-]?(?:enterprise|private)|"
-    r"private|proprietary|commercial|strategic_data|"
-    r"enterprise::(?:control_plane|scheduler|economics|knowledge_hub|fleet)"
-    r")(?:$|::)",
+    RUST_IDENTIFIER_LEFT
+    + r"(?:"
+    r"(?:r#)?lean[_-]?ctx[_-]?(?:cloud|enterprise|private)|"
+    r"(?:r#)?leanctx[_-]?(?:cloud|enterprise|private)|"
+    r"(?:r#)?(?:private|enterprise|proprietary|commercial|strategic_data)"
+    r")(?:$|::|\s+as\b)",
     re.IGNORECASE,
 )
+PRIVATE_QUALIFIED = re.compile(
+    RUST_IDENTIFIER_LEFT
+    + r"(?:::)?(?:"
+    r"(?:r#)?lean[_-]?ctx[_-]?(?:cloud|enterprise|private)|"
+    r"(?:r#)?leanctx[_-]?(?:cloud|enterprise|private)"
+    r")(?:::|" + RUST_IDENTIFIER_RIGHT + r")",
+    re.IGNORECASE,
+)
+PRIVATE_LOCAL_QUALIFIED = re.compile(
+    RUST_IDENTIFIER_LEFT
+    + r"(?:r#)?(?:private|enterprise|proprietary|commercial|strategic_data)\s*::",
+    re.IGNORECASE,
+)
+PRIVATE_EXTERN = re.compile(
+    RUST_IDENTIFIER_LEFT
+    + r"extern\s+crate\s+(?:"
+    r"(?:r#)?lean[_-]?ctx[_-]?(?:cloud|enterprise|private)|"
+    r"(?:r#)?leanctx[_-]?(?:cloud|enterprise|private)|"
+    r"(?:r#)?(?:private|enterprise|proprietary|commercial|strategic_data)"
+    r")"
+    + RUST_IDENTIFIER_RIGHT
+    + (r"(?:\s+as\s+%s)?" % RUST_IDENTIFIER),
+    re.IGNORECASE,
+)
+PRIVATE_USE_ALIAS = re.compile(
+    RUST_IDENTIFIER_LEFT
+    + r"use\s+(?:r#)?"
+    r"(?:private|enterprise|proprietary|commercial|strategic_data)"
+    r"(?:\s*::|\s+as\b)",
+    re.IGNORECASE,
+)
+APPROVED_OSS_ENTERPRISE_IMPORTS = {
+    "rust/src/cli/mod.rs": {"pub(crate) use enterprise::cmd_enterprise;"},
+    "rust/src/core/config/mod.rs": {"pub use enterprise::EnterpriseConfig;"},
+}
 
 BENCHMARK_CORPUS_PATH = re.compile(
     r"(?:^|/)(?:benchmark[_-]?(?:corpus|dataset)|"
@@ -308,7 +356,9 @@ MANIFEST_SCHEMA = "leanctx.public-protocol-surface-freeze/v1"
 FROZEN_SURFACES = ("auto_routing", "control_plane", "fleet_control", "rollout", "value_share")
 MANIFEST_BYTES = 256 * 1024
 RELEASE_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+)*$")
-RUST_USE = re.compile(r"(?ms)^[ \t]*(?:(?:pub(?:\([^)]*\))?[ \t]+)?use\s+[^;]+;)")
+RUST_USE = re.compile(
+    r"(?s)" + RUST_IDENTIFIER_LEFT + r"(?:pub(?:\([^)]*\))?\s+)?use\s+[^;]+;"
+)
 RUST_RAW_STRING = re.compile(r'(?:br|cr|r)(#+)?"')
 RUST_PUBLIC_ITEM = re.compile(
     r"^pub\s+(?:(?:async|unsafe)\s+)?(struct|enum|trait|fn|type|const|static|mod)\s+"
@@ -487,14 +537,14 @@ def load_manifest(path: Path) -> dict:
     except ManifestError:
         raise
     except (OSError, UnicodeError) as error:
-        raise ManifestError("cannot read manifest: %s" % error) from error
+        raise ManifestError("cannot read manifest") from error
     if len(raw) > MANIFEST_BYTES:
         raise ManifestError("manifest exceeds byte bound")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
     except ManifestError:
         raise
-    except (UnicodeDecodeError, TypeError, ValueError) as error:
+    except (UnicodeDecodeError, TypeError, ValueError, RecursionError) as error:
         raise ManifestError("manifest is not valid UTF-8 JSON: %s" % error) from error
     return _validate_manifest(value)
 
@@ -511,8 +561,8 @@ def _root_path(root: Path, relative: str, label: str) -> Path:
         metadata = os.lstat(candidate)
     except ManifestError:
         raise
-    except OSError as error:
-        raise ManifestError("%s is unavailable: %s" % (label, error)) from error
+    except (OSError, ValueError) as error:
+        raise ManifestError("%s is unavailable" % label) from error
     if not stat.S_ISREG(metadata.st_mode):
         raise ManifestError("%s is not a regular file" % label)
     return candidate
@@ -522,24 +572,83 @@ def _relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def _rust_files(root: Path) -> List[Path]:
+def _rust_files_unchecked(root: Path) -> List[Path]:
     paths = []
-    for source_root in (root / "rust/src", root / "rust/crates"):
-        if source_root.is_dir():
-            for path in source_root.rglob("*.rs"):
-                metadata = os.lstat(path)
+    source_roots = []
+    entry_count = 0
+    source_root = root / "rust/src"
+    crates_root = root / "rust/crates"
+    for candidate in (root / "rust", source_root, crates_root):
+        if os.path.lexists(candidate):
+            metadata = os.lstat(candidate)
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ManifestError("Rust source root uses a symlink path: %s" % _relative(root, candidate))
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ManifestError("Rust source root is not a directory: %s" % _relative(root, candidate))
+    if os.path.lexists(source_root):
+        source_roots.append(source_root)
+    if os.path.lexists(crates_root):
+        with os.scandir(crates_root) as entries:
+            crate_entries = sorted(entries, key=lambda entry: entry.name)
+        for entry in crate_entries:
+            entry_count += 1
+            if entry_count > MAX_RUST_ENTRIES:
+                raise ManifestError("Rust source entry count exceeds limit")
+            if not entry.name.startswith("lean-ctx-"):
+                continue
+            candidate = Path(entry.path)
+            metadata = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ManifestError("Rust source uses a symlink path: %s" % _relative(root, candidate))
+            if stat.S_ISDIR(metadata.st_mode):
+                source_roots.append(candidate)
+    for source_root in source_roots:
+        pending = [source_root]
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                children = sorted(entries, key=lambda entry: entry.name)
+            for entry in children:
+                entry_count += 1
+                if entry_count > MAX_RUST_ENTRIES:
+                    raise ManifestError("Rust source entry count exceeds limit")
+                path = Path(entry.path)
+                metadata = entry.stat(follow_symlinks=False)
                 if stat.S_ISLNK(metadata.st_mode):
                     raise ManifestError("Rust source uses a symlink path: %s" % _relative(root, path))
-                if stat.S_ISREG(metadata.st_mode):
+                if stat.S_ISDIR(metadata.st_mode):
+                    pending.append(path)
+                elif path.suffix == ".rs" and stat.S_ISREG(metadata.st_mode):
                     paths.append(path)
+                    if len(paths) > MAX_RUST_FILES:
+                        raise ManifestError("Rust source file count exceeds limit")
     return sorted(paths, key=lambda path: _relative(root, path))
+
+
+def _rust_files(root: Path) -> List[Path]:
+    try:
+        return _rust_files_unchecked(root)
+    except ManifestError:
+        raise
+    except OSError as error:
+        raise ManifestError("cannot enumerate Rust source tree") from error
 
 
 def _read_source(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8")
+        metadata = os.lstat(path)
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            raise ManifestError("Rust source is not a regular file: %s" % path.name)
+        if metadata.st_size > MAX_RUST_SOURCE_BYTES:
+            raise ManifestError("Rust source exceeds size limit: %s" % path.name)
+        raw = path.read_bytes()
+        if len(raw) > MAX_RUST_SOURCE_BYTES:
+            raise ManifestError("Rust source exceeds size limit: %s" % path.name)
+        return raw.decode("utf-8")
+    except ManifestError:
+        raise
     except (OSError, UnicodeError) as error:
-        raise ManifestError("cannot read %s: %s" % (path, error)) from error
+        raise ManifestError("cannot read Rust source: %s" % path.name) from error
 
 
 def _normalize_statement(statement: str) -> str:
@@ -629,6 +738,11 @@ def _rust_views(source: str) -> Tuple[List[Tuple[int, str]], str]:
 
     masked = _mask_rust_non_code(source)
     matches = list(RUST_USE.finditer(masked))
+    if any(
+        len(source[match.start() : match.end()].encode("utf-8")) > MAX_RUST_USE_BYTES
+        for match in matches
+    ):
+        raise ManifestError("Rust use declaration exceeds size limit")
     statements = [
         (
             source.count("\n", 0, match.start()) + 1,
@@ -683,53 +797,112 @@ def _top_level_use_items(value: str) -> List[str]:
     return [item for item in items if item]
 
 
+def _use_target(statement: str) -> str:
+    target = statement.split("use ", 1)[1].removesuffix(";").strip()
+    return _normalize_statement(_mask_rust_non_code(target))
+
+
+def _expand_use_tree(value: str, prefix: str = "") -> List[str]:
+    """Expand Rust use-tree groups into independent paths."""
+
+    value = value.strip()
+    if value.startswith("{") and value.endswith("}"):
+        return [
+            leaf
+            for item in _top_level_use_items(value[1:-1])
+            for leaf in _expand_use_tree(item, prefix)
+        ]
+
+    depth = 0
+    group_start = None
+    for index, character in enumerate(value):
+        if character == "{" and depth == 0:
+            group_start = index
+            break
+        if character in "([":
+            depth += 1
+        elif character in ")]":
+            depth = max(0, depth - 1)
+    if group_start is not None:
+        depth = 0
+        group_end = None
+        for index in range(group_start, len(value)):
+            if value[index] == "{":
+                depth += 1
+            elif value[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    group_end = index
+                    break
+        if group_end is not None and not value[group_end + 1 :].strip():
+            base = value[:group_start].strip().removesuffix("::").strip()
+            joined = "::".join(part for part in (prefix, base) if part)
+            return [
+                leaf
+                for item in _top_level_use_items(value[group_start + 1 : group_end])
+                for leaf in _expand_use_tree(item, joined)
+            ]
+    return ["::".join(part for part in (prefix, value) if part)]
+
+
+def _use_leaves(statement: str) -> List[str]:
+    return _expand_use_tree(_use_target(statement))
+
+
+def _identifier(value: str) -> Optional[str]:
+    candidate = value.strip().removeprefix("r#")
+    if not candidate or candidate.startswith("$"):
+        return None
+    return candidate
+
+
+def _use_leaf(leaf: str) -> Tuple[List[str], Optional[str], bool]:
+    alias = None
+    match = re.search(r"\s+as\s+([^\s,;{}]+)\s*$", leaf)
+    if match:
+        alias = _identifier(match.group(1))
+        leaf = leaf[: match.start()].strip()
+    compact = re.sub(r"\s+", "", leaf).removeprefix("::")
+    raw_components = compact.split("::") if compact else []
+    glob = bool(raw_components and raw_components[-1] == "*")
+    components = [
+        identifier
+        for component in raw_components
+        if component != "*"
+        for identifier in [_identifier(component)]
+        if identifier is not None
+    ]
+    return components, alias, glob
+
+
+def _exact_name(value: str, name: str) -> bool:
+    return bool(
+        re.search(
+            RUST_IDENTIFIER_LEFT
+            + r"(?:r#)?%s" % re.escape(name)
+            + RUST_IDENTIFIER_RIGHT,
+            value,
+        )
+    )
+
+
 def _surface_import(
     statement: str,
     surface: str,
     root_symbols: Sequence[str] = (),
-    same_protocol_crate: bool = False,
 ) -> bool:
     if "use " not in statement:
         return False
-    target = _mask_rust_non_code(statement.split("use ", 1)[1].removesuffix(";").strip())
-    alias = r"(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)"
-    if re.fullmatch(r"(?:::)?lean_ctx_protocol" + alias, target):
-        return True
-    if same_protocol_crate and re.fullmatch(r"crate" + alias, target):
-        return True
-    surface_path = re.escape(surface)
-    if re.search(
-        r"(?:^|[^A-Za-z0-9_])(?:crate|self|super|lean_ctx_protocol)::\s*"
-        r"(?:\{\s*)?%s(?:::|(?=[\s,};]|$))" % surface_path,
-        target,
-    ):
-        return True
-    if re.match(r"%s(?:::|(?=[\s,};]|$))" % surface_path, target):
-        return True
-    qualified = re.match(
-        r"(?:::)?(?:crate|self|super|lean_ctx_protocol)::(.+)$",
-        target,
-    )
-    if qualified and qualified.group(1).lstrip().startswith("{"):
-        remainder = qualified.group(1).strip()
-        if remainder.endswith("}"):
-            for item in _top_level_use_items(remainder[1:-1]):
-                if re.match(r"%s(?:::|(?=[\s,};]|$))" % surface_path, item):
-                    return True
-
-    root = re.match(r"(?:::)?(?:crate|lean_ctx_protocol)::(.+)$", target)
-    if not root or not root_symbols:
-        return False
-    remainder = root.group(1).strip()
-    if remainder in {"*", "{*}"}:
-        return True
-    if remainder.startswith("{") and remainder.endswith("}"):
-        for item in _top_level_use_items(remainder[1:-1]):
-            if any(re.match(r"%s(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?$" % re.escape(symbol), item) for symbol in root_symbols):
-                return True
-    else:
-        first = re.match(r"[A-Za-z_][A-Za-z0-9_]*", remainder)
-        if first and first.group(0) in root_symbols:
+    roots = {"crate", "self", "super", "lean_ctx_protocol"}
+    for leaf in _use_leaves(statement):
+        components, _, glob = _use_leaf(leaf)
+        if not components or components[0] not in roots:
+            continue
+        if components == ["lean_ctx_protocol"]:
+            return True
+        if surface in components or (len(components) > 1 and components[1] in root_symbols):
+            return True
+        if glob and len(components) == 1 and components[0] in {"crate", "lean_ctx_protocol"}:
             return True
     return False
 
@@ -761,29 +934,307 @@ def _surface_references(
     surface: str,
     root_symbols: Sequence[str],
     code: Optional[str] = None,
+    same_protocol_crate: bool = False,
 ) -> List[Tuple[int, str]]:
     """Find qualified frozen paths outside import declarations."""
 
-    components = r"[A-Za-z_][A-Za-z0-9_]*"
-    module_path = re.escape(surface) + r"(?:::%s)*" % components
-    alternatives = [
-        r"(?:crate|self|super|lean_ctx_protocol)::%s" % module_path,
-        r"extern\s+crate\s+lean_ctx_protocol(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?",
-    ]
-    if root_symbols:
-        alternatives.append(
-            r"(?:crate|lean_ctx_protocol)::(?:%s)"
-            % "|".join(re.escape(symbol) for symbol in root_symbols)
-        )
-    pattern = re.compile(
-        r"(?<![A-Za-z0-9_:])(?:%s)(?![A-Za-z0-9_])" % "|".join(alternatives)
-    )
     if code is None:
         code = _code_without_use_statements(source)
-    return [
+    findings = []
+    qualified = re.compile(
+        RUST_IDENTIFIER_LEFT
+        + r"(?:::)?(?:crate|self|super|(?:r#)?lean_ctx_protocol)"
+        r"(?P<tail>(?:\s*::\s*(?:r#)?[^:\s<>,;(){}\[\]=!]+)+)"
+    )
+    for match in qualified.finditer(code):
+        components, _, _ = _use_leaf(match.group("tail").lstrip(": "))
+        if surface in components or (components and components[0] in root_symbols):
+            findings.append((source.count("\n", 0, match.start()) + 1, match.group(0)))
+    external_target = r"(?:r#)?lean_ctx_protocol"
+    if same_protocol_crate:
+        external_target = r"(?:%s|self)" % external_target
+    external = re.compile(
+        (
+            RUST_IDENTIFIER_LEFT
+            + r"extern\s+crate\s+%s"
+            + RUST_IDENTIFIER_RIGHT
+            + r"(?:\s+as\s+%s)?"
+        )
+        % (external_target, RUST_IDENTIFIER)
+    )
+    findings.extend(
         (source.count("\n", 0, match.start()) + 1, match.group(0))
-        for match in pattern.finditer(code)
+        for match in external.finditer(code)
+    )
+    return sorted(findings, key=lambda item: (item[0], item[1]))
+
+
+def _alias_surface_references(
+    source: str,
+    statements: Sequence[Tuple[int, str]],
+    surface: str,
+    root_symbols: Sequence[str],
+    code: str,
+    same_protocol_crate: bool = False,
+    broad_context: bool = True,
+) -> List[Tuple[int, str]]:
+    roots = {"crate", "self", "super", "lean_ctx_protocol"}
+    parsed = [
+        (line, statement, _use_leaf(leaf))
+        for line, statement in statements
+        for leaf in _use_leaves(statement)
     ]
+    aliases = {}
+    rooted_globs = set()
+    for _ in range(len(parsed) + 1):
+        changed = False
+        for line, statement, (components, alias, glob) in parsed:
+            if not components:
+                continue
+            if components[0] in roots:
+                canonicals = {tuple(components)}
+            elif components[0] in aliases:
+                canonicals = {
+                    prefix + tuple(components[1:])
+                    for prefix in aliases[components[0]]
+                }
+            else:
+                continue
+            if glob and broad_context:
+                rooted_globs.update(
+                    (line, statement, canonical) for canonical in canonicals
+                )
+            binding = alias
+            if binding is None and not glob and len(components) > 1:
+                binding = components[-1]
+            if binding and binding != "_":
+                existing = aliases.setdefault(binding, set())
+                additions = canonicals - existing
+                if additions:
+                    existing.update(additions)
+                    changed = True
+        if not changed:
+            break
+    else:
+        raise ManifestError("Rust use alias resolution exceeds limit")
+
+    findings = []
+    for alias in sorted(aliases):
+        pattern = re.compile(
+            RUST_IDENTIFIER_LEFT
+            + r"(?:r#)?%s"
+            r"(?P<tail>(?:\s*::\s*(?:r#)?[^:\s<>,;(){}\[\]=!]+)+)"
+            % re.escape(alias)
+        )
+        for match in pattern.finditer(code):
+            components, _, _ = _use_leaf(match.group("tail").lstrip(": "))
+            if surface in components or (components and components[0] in root_symbols):
+                findings.append((source.count("\n", 0, match.start()) + 1, match.group(0)))
+
+    for line, statement, (components, _, _) in parsed:
+        if not components or components[0] not in aliases:
+            continue
+        if surface in components[1:] or (len(components) > 1 and components[1] in root_symbols):
+            findings.append((line, statement))
+
+    for _, statement, canonical in rooted_globs:
+        external_glob = canonical == ("lean_ctx_protocol",)
+        protocol_glob = same_protocol_crate and canonical in {
+            ("crate",),
+            ("self",),
+            ("super",),
+        }
+        if not (external_glob or protocol_glob or len(canonical) > 1):
+            continue
+        surface_pattern = (
+            RUST_PATH_LEFT
+            + r"(?:r#)?%s" % re.escape(surface)
+            + RUST_IDENTIFIER_RIGHT
+            + r"\s*::"
+        )
+        for match in re.finditer(surface_pattern, code):
+            findings.append((source.count("\n", 0, match.start()) + 1, match.group(0)))
+        if external_glob or protocol_glob:
+            for name in root_symbols:
+                pattern = (
+                    RUST_PATH_LEFT
+                    + r"(?:r#)?%s" % re.escape(name)
+                    + RUST_IDENTIFIER_RIGHT
+                )
+                for match in re.finditer(pattern, code):
+                    findings.append((source.count("\n", 0, match.start()) + 1, match.group(0)))
+
+    return findings
+
+
+def _matching_delimiter(
+    value: str,
+    start: int,
+    opening: str,
+    closing: str,
+    max_length: Optional[int] = None,
+) -> Optional[int]:
+    depth = 0
+    stop = len(value) if max_length is None else min(len(value), start + max_length + 1)
+    for index in range(start, stop):
+        if value[index] == opening:
+            depth += 1
+        elif value[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _macro_surface_references(
+    source: str,
+    surface: str,
+    root_symbols: Sequence[str],
+    masked: Optional[str] = None,
+) -> List[Tuple[int, str]]:
+    """Resolve local macro metavariables only at matching invocations."""
+
+    if masked is None:
+        masked = _mask_rust_non_code(source)
+    findings = []
+    header = re.compile(
+        RUST_IDENTIFIER_LEFT + r"macro_rules!\s*(?:r#)?([^\s{]+)\s*\{"
+    )
+    variable = re.compile(
+        r"(?:\b(?:crate|self|super|(?:r#)?lean_ctx_protocol)\s*::\s*"
+        r"\$([^\s:;,(){}\[\]]+)|"
+        r"\$([^\s:;,(){}\[\]]+)\s*::)"
+    )
+    definitions = list(header.finditer(masked))
+    if len(definitions) > MAX_RUST_MACROS:
+        raise ManifestError("Rust macro definition count exceeds limit")
+    resolved = {}
+    for definition in definitions:
+        body_end = _matching_delimiter(masked, definition.end() - 1, "{", "}")
+        if body_end is None:
+            continue
+        body = masked[definition.end() : body_end]
+        variables = {
+            name
+            for match in variable.finditer(body)
+            for name in match.groups()
+            if name
+        }
+        if not variables:
+            continue
+        resolved.setdefault(definition.group(1), []).append(body_end)
+    if not resolved:
+        return []
+
+    invocation = re.compile(
+        RUST_IDENTIFIER_LEFT + r"(?:r#)?([^\s!({\[]+)\s*!\s*([({\[])"
+    )
+    calls = list(invocation.finditer(masked))
+    if len(calls) > MAX_RUST_MACROS:
+        raise ManifestError("Rust macro invocation count exceeds limit")
+    for call in calls:
+        candidates = [end for end in resolved.get(call.group(1), []) if end < call.start()]
+        if not candidates:
+            continue
+        opening = call.group(2)
+        closing = {"(": ")", "{": "}", "[": "]"}[opening]
+        arguments_end = _matching_delimiter(
+            masked,
+            call.end() - 1,
+            opening,
+            closing,
+            MAX_MACRO_ARGUMENT_BYTES,
+        )
+        if arguments_end is None:
+            raise ManifestError("Rust macro invocation exceeds size limit")
+        arguments = masked[call.end() : arguments_end]
+        if any(_exact_name(arguments, name) for name in [surface, *root_symbols]):
+            findings.append(
+                (
+                    source.count("\n", 0, call.start()) + 1,
+                    source[call.start() : arguments_end + 1],
+                )
+            )
+    return findings
+
+
+def _glob_root_symbol_references(
+    source: str,
+    statements: Sequence[Tuple[int, str]],
+    root_symbols: Sequence[str],
+    code: str,
+) -> List[Tuple[int, str]]:
+    if not any(
+        re.fullmatch(
+            r"(?:pub(?:\s*\([^)]*\))?\s+)?use\s+super\s*::\s*"
+            r"(?:\*|\{\s*\*\s*\})\s*;",
+            statement,
+        )
+        for _, statement in statements
+    ):
+        return []
+    findings = []
+    for symbol in root_symbols:
+        pattern = re.compile(
+            RUST_PATH_LEFT + re.escape(symbol) + RUST_IDENTIFIER_RIGHT
+        )
+        findings.extend(
+            (source.count("\n", 0, match.start()) + 1, match.group(0))
+            for match in pattern.finditer(code)
+        )
+    return findings
+
+
+def _source_injection_findings(
+    root: Path,
+    files: Sequence[Path],
+    source_cache: dict,
+    masked_cache: Optional[dict] = None,
+) -> List[str]:
+    """Reject Rust source injection that is not already in the audited file set."""
+
+    audited = {path.resolve() for path in files}
+    findings = []
+    token_patterns = (
+        ("include", re.compile(r"\binclude\s*!")),
+        ("path", re.compile(r"#\s*\[\s*path\s*=")),
+    )
+    literal_patterns = {
+        "include": re.compile(r'\binclude\s*!\s*\(\s*"([^"\\]*)"\s*\)'),
+        "path": re.compile(r'#\s*\[\s*path\s*=\s*"([^"\\]*)"\s*\]'),
+    }
+    for path in files:
+        source = source_cache[path]
+        if not re.search(r"\binclude\s*!|#\s*\[\s*path\s*=", source):
+            continue
+        masked = masked_cache[path] if masked_cache is not None else _mask_rust_non_code(source)
+        for kind, token_pattern in token_patterns:
+            for token in token_pattern.finditer(masked):
+                snippet = source[token.start() : token.start() + 1024]
+                literal = literal_patterns[kind].match(snippet)
+                line = source.count("\n", 0, token.start()) + 1
+                if literal is None:
+                    findings.append(
+                        "[source-injection] %s:%d uses non-literal %s source"
+                        % (_relative(root, path), line, kind)
+                    )
+                    continue
+                target = path.parent / literal.group(1)
+                try:
+                    relative = target.resolve().relative_to(root.resolve()).as_posix()
+                    resolved = _root_path(root, relative, "%s source" % kind).resolve()
+                except (ManifestError, OSError, ValueError):
+                    findings.append(
+                        "[source-injection] %s:%d has unsafe %s source"
+                        % (_relative(root, path), line, kind)
+                    )
+                    continue
+                if resolved not in audited:
+                    findings.append(
+                        "[source-injection] %s:%d %s source is outside audited Rust files: %s"
+                        % (_relative(root, path), line, kind, relative)
+                    )
+    return findings
 
 
 def _shape_mapping(
@@ -875,6 +1326,7 @@ def _consumer_findings(
     source_cache: Optional[dict] = None,
     use_cache: Optional[dict] = None,
     code_cache: Optional[dict] = None,
+    masked_cache: Optional[dict] = None,
 ) -> List[str]:
     approved = {}
     for item in spec["approved_consumers"]:
@@ -883,6 +1335,10 @@ def _consumer_findings(
         approved[path] = {_normalize_statement(statement) for statement in item["statements"]}
     module_path = _safe_relative(spec["module_path"], "%s.module_path" % surface)
     root_symbols = _root_reexport_symbols(surface, spec)
+    lexical_allowlist = set(approved)
+    lexical_allowlist.add(module_path)
+    lexical_allowlist.update(item["path"] for item in spec["module_roots"])
+    lexical_allowlist.update(item["path"] for item in spec["root_reexports"])
     actual = {}
     findings = []
     for path in files:
@@ -902,11 +1358,34 @@ def _consumer_findings(
                 statement,
                 surface,
                 root_symbols,
-                relative.startswith("rust/crates/lean-ctx-protocol/"),
             ):
                 actual.setdefault(relative, []).append((line, statement))
         code = code_cache[path] if code_cache is not None else None
-        for line, reference in _surface_references(source, surface, root_symbols, code):
+        same_protocol_crate = relative.startswith("rust/crates/lean-ctx-protocol/")
+        references = _surface_references(
+            source, surface, root_symbols, code, same_protocol_crate
+        )
+        references.extend(
+            _alias_surface_references(
+                source,
+                statements,
+                surface,
+                root_symbols,
+                code or "",
+                same_protocol_crate,
+                relative not in lexical_allowlist,
+            )
+        )
+        if same_protocol_crate and relative not in approved:
+            references.extend(
+                _glob_root_symbol_references(source, statements, root_symbols, code or "")
+            )
+        if relative not in lexical_allowlist:
+            masked = masked_cache[path] if masked_cache is not None else None
+            references.extend(
+                _macro_surface_references(source, surface, root_symbols, masked)
+            )
+        for line, reference in references:
             findings.append(
                 "[new-consumer] %s %s:%d references frozen surface: %s"
                 % (surface, relative, line, reference)
@@ -932,16 +1411,35 @@ def _private_import_findings(
     root: Path,
     files: Sequence[Path],
     use_cache: Optional[dict] = None,
+    code_cache: Optional[dict] = None,
 ) -> List[str]:
     findings = []
     for path in files:
         statements = use_cache[path] if use_cache is not None else _use_statements(_read_source(path))
         for line, statement in statements:
-            target = statement.split("use ", 1)[1].removesuffix(";").strip()
+            target = _mask_rust_non_code(
+                statement.split("use ", 1)[1].removesuffix(";").strip()
+            )
             if PRIVATE_IMPORT.search(target):
+                if statement in APPROVED_OSS_ENTERPRISE_IMPORTS.get(_relative(root, path), set()):
+                    continue
                 findings.append(
                     "[private-import] %s:%d imports private namespace: %s"
                     % (_relative(root, path), line, target)
+                )
+        source = _read_source(path)
+        code = code_cache.get(path) if code_cache is not None else _code_without_use_statements(source)
+        for pattern in (
+            PRIVATE_QUALIFIED,
+            PRIVATE_LOCAL_QUALIFIED,
+            PRIVATE_EXTERN,
+            PRIVATE_USE_ALIAS,
+        ):
+            for match in pattern.finditer(code):
+                line = source.count("\n", 0, match.start()) + 1
+                findings.append(
+                    "[private-import] %s:%d references private namespace: %s"
+                    % (_relative(root, path), line, match.group(0))
                 )
     return findings
 
@@ -956,11 +1454,22 @@ def _needs_consumer_scan(source: str, manifest: dict) -> bool:
     }
     if any(symbol in source for symbol in symbols):
         return True
+    if re.search(
+        r"\buse\s+(?:::)?(?:crate|self|super|(?:r#)?lean_ctx_protocol)"
+        r"(?:\s|/\*[\s\S]{0,256}?\*/)+as\b",
+        source,
+    ):
+        return True
     lowered = source.lower()
     needles = FROZEN_SURFACES + (
-        "use crate",
-        "use lean_ctx_protocol",
-        "use ::lean_ctx_protocol",
+        "lean_ctx_protocol",
+        "extern crate",
+        "lean_ctx_cloud",
+        "leanctx_cloud",
+        "lean_ctx_enterprise",
+        "leanctx_enterprise",
+        "lean_ctx_private",
+        "leanctx_private",
         "enterprise",
         "private",
         "proprietary",
@@ -975,9 +1484,12 @@ def _manifest_path(root: Path, manifest_path: Optional[Path]) -> Path:
     if not candidate.is_absolute():
         candidate = root / candidate
     try:
-        candidate.resolve().relative_to(root.resolve())
-        return candidate
-    except ValueError as error:
+        candidate = Path(os.path.abspath(candidate))
+        relative = candidate.relative_to(root).as_posix()
+        return _root_path(root, relative, "manifest")
+    except ManifestError:
+        raise
+    except (OSError, ValueError) as error:
         raise ManifestError("manifest path escapes repository root") from error
 
 
@@ -998,14 +1510,30 @@ def check_repo(root: Path = ROOT, manifest_path: Optional[Path] = None) -> List[
         ]
         if not files:
             raise ManifestError("no Rust source files found")
+        if sum(os.lstat(path).st_size for path in files) > MAX_RUST_TOTAL_BYTES:
+            raise ManifestError("Rust source total size exceeds limit")
         source_cache = {}
         use_cache = {}
         code_cache = {}
+        masked_cache = {}
+        actual_source_bytes = 0
         for path in files:
             relative = _relative(root, path)
             source = _read_source(path)
+            actual_source_bytes += len(source.encode("utf-8"))
+            if actual_source_bytes > MAX_RUST_TOTAL_BYTES:
+                raise ManifestError("Rust source total size exceeds limit")
             source_cache[path] = source
-            if _needs_consumer_scan(source, manifest):
+            needs_scan = _needs_consumer_scan(source, manifest)
+            needs_injection_scan = bool(
+                re.search(r"\binclude\s*!|#\s*\[\s*path\s*=", source)
+            )
+            masked_cache[path] = (
+                _mask_rust_non_code(source)
+                if needs_scan or needs_injection_scan
+                else ""
+            )
+            if needs_scan:
                 statements, code = _rust_views(source)
             else:
                 statements, code = [], ""
@@ -1013,15 +1541,25 @@ def check_repo(root: Path = ROOT, manifest_path: Optional[Path] = None) -> List[
             if relative.startswith("rust/src/") or relative.startswith("rust/crates/lean-ctx-"):
                 code_cache[path] = code
         findings = []
+        findings.extend(_source_injection_findings(root, files, source_cache, masked_cache))
         for surface in FROZEN_SURFACES:
             spec = manifest["surfaces"][surface]
             findings.extend(
                 _shape_findings(root, files, surface, spec, use_cache, source_cache)
             )
             findings.extend(
-                _consumer_findings(root, files, surface, spec, source_cache, use_cache, code_cache)
+                _consumer_findings(
+                    root,
+                    files,
+                    surface,
+                    spec,
+                    source_cache,
+                    use_cache,
+                    code_cache,
+                    masked_cache,
+                )
             )
-        findings.extend(_private_import_findings(root, files, use_cache))
+        findings.extend(_private_import_findings(root, files, use_cache, code_cache))
         if root == ROOT:
             findings.extend(check_classifications(rust_modules()))
             findings.extend(check_strategic_data())
