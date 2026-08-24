@@ -50,7 +50,41 @@ fn is_owned_rules_file(content: &str) -> bool {
         // CursorMdc has YAML frontmatter before the header.
         || (content.trim_start().starts_with("---")
             && content.contains(crate::core::rules_canonical::START_MARK));
-    starts_with_header && content.contains("<!-- version:")
+    if starts_with_header && content.contains("<!-- version:") {
+        return true;
+    }
+    is_owned_legacy_rules_file(content)
+}
+
+/// #1289: older installs wrote dedicated rule files with versioned markers
+/// (`<!-- lean-ctx-rules-v9 -->`) and no `<!-- version: N -->` line. Those
+/// files never matched the canonical ownership test above, so stale guidance
+/// (e.g. "Write, Delete, Glob → use normally" contradicting the shadow-mode
+/// Glob deny) survived every update and dedup run. A legacy file counts as
+/// owned when lean-ctx plausibly wrote all of it: a legacy rules marker sits
+/// in the first few lines and nothing but whitespace follows the last closing
+/// lean-ctx marker — user-extended files keep getting the Report instead.
+fn is_owned_legacy_rules_file(content: &str) -> bool {
+    let mut lines = content.trim_start().lines();
+    // Legacy files start with a `# lean-ctx …` heading (marker on the next
+    // line) or with the marker itself — a marker merely mentioned mid-text
+    // does not make a file lean-ctx-owned.
+    let first = lines.next().unwrap_or_default().trim();
+    let marker_line = if first.starts_with("# lean-ctx") {
+        lines.next().unwrap_or_default().trim()
+    } else {
+        first
+    };
+    if !marker_line.starts_with(crate::core::rules_canonical::RULES_MARKER_PREFIX) {
+        return false;
+    }
+    let Some(idx) = content.rfind("<!-- /lean-ctx") else {
+        return false;
+    };
+    let Some(end) = content[idx..].find("-->") else {
+        return false;
+    };
+    content[idx + end + 3..].trim().is_empty()
 }
 
 /// Line-based marker pair detection (GL #1158): prose mentions of a marker
@@ -385,6 +419,26 @@ mod tests {
     fn strip_of_pure_block_file_yields_empty() {
         let content = format!("{BLOCK_START}\nonly ours\n{BLOCK_END}\n");
         assert_eq!(strip_lean_ctx_blocks(&content), "");
+    }
+
+    /// #1289: legacy versioned-marker files (rules-v9 era, no `<!-- version:`)
+    /// are owned when wholly lean-ctx-written; user-extended copies are not.
+    #[test]
+    fn legacy_marker_files_owned_only_when_wholly_lean_ctx() {
+        let pristine = "# lean-ctx — Context Engineering Layer\n\
+             <!-- lean-ctx-rules-v9 -->\n\n\
+             PREFER lean-ctx MCP tools.\n\
+             Write, Delete, Glob → use normally.\n\
+             <!-- /lean-ctx -->\n";
+        assert!(is_owned_rules_file(pristine));
+
+        let user_extended = format!("{pristine}\n## My own precedence rules\nkeep me\n");
+        assert!(!is_owned_rules_file(&user_extended));
+
+        // A user file that merely mentions the marker mid-text is not owned.
+        assert!(!is_owned_rules_file(
+            "my notes\nabout <!-- lean-ctx-rules-v9 --> markers\n<!-- /lean-ctx -->\n"
+        ));
     }
 
     #[test]

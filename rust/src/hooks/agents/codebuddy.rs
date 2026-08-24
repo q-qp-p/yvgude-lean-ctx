@@ -172,7 +172,7 @@ const CODEBUDDY_MD_BLOCK_CONTENT_REPLACE: &str = "\
 ## lean-ctx — Replace Mode (native Grep/Glob/Bash denied by policy)
 
 Native Grep/Glob/Bash are denied by policy. Prefer `ctx_*` MCP tools for project work:
-- `ctx_read` for exploration reads (cached, 10 modes, re-reads ~13 tokens)
+- `ctx_read` for exploration reads (cached, 10 modes, unchanged full/auto re-reads ~13 tokens)
 - `ctx_shell` for shell commands (95+ compression patterns)
 - `ctx_search` instead of Grep/rg (compact results)
 - `ctx_tree` instead of ls/find (compact directory maps)
@@ -193,7 +193,7 @@ const CODEBUDDY_MD_BLOCK_CONTENT_MCP: &str = "\
 ## lean-ctx — Context Runtime
 
 When the `ctx_*` MCP tools are listed in this session, prefer them over native equivalents:
-- `ctx_read` instead of `Read` / `cat` for exploration (cached, 10 modes, re-reads ~13 tokens)
+- `ctx_read` instead of `Read` / `cat` for exploration (cached, 10 modes, unchanged full/auto re-reads ~13 tokens)
 - `ctx_shell` instead of `bash` / `Shell` (95+ compression patterns)
 - `ctx_search` instead of `Grep` / `rg` (compact results)
 - `ctx_tree` instead of `ls` / `find` (compact directory maps)

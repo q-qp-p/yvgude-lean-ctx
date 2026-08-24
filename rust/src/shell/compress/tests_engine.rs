@@ -1,5 +1,47 @@
 #[allow(unused_imports)]
 use super::*;
+
+/// #1286: `ls -la` long-format output must reach the structural ls compressor
+/// (name + size per entry) instead of degrading to the generic terse fallback.
+/// Regression guard for two independent breakages: the zsh spawn preamble
+/// leaking into the classified command, and the terse stage displacing a
+/// smaller pattern result.
+#[cfg(test)]
+mod ls_structural_compression {
+    #[test]
+    fn ls_long_listing_compresses_structurally() {
+        let mut output = String::from("total 11168\n");
+        for i in 0..400 {
+            output.push_str(&format!(
+                "-rw-r--r--@   1 yvesgugger  staff  {} Aug  9 21:51 file_{i}.rs\n",
+                1000 + i
+            ));
+        }
+        for i in 0..60 {
+            output.push_str(&format!(
+                "drwxr-xr-x@   5 yvesgugger  staff  160 Aug  9 21:51 dir_{i}\n"
+            ));
+        }
+        let compressed =
+            super::super::engine::compress_if_beneficial("ls -la rust/src/core", &output);
+        assert!(
+            compressed.len() < output.len() / 2,
+            "structural ls compression must at least halve the payload \
+             ({} -> {} bytes)",
+            output.len(),
+            compressed.len()
+        );
+        assert!(
+            compressed.contains("400 files, 60 dirs"),
+            "summary line from the ls compressor must be present"
+        );
+        assert!(
+            compressed.contains("file_0.rs"),
+            "every entry name must survive"
+        );
+    }
+}
+
 /// #342: already-compact TOON output must be preserved verbatim (not recompressed)
 /// regardless of the command, because re-compressing it destroys the exact
 /// line/field shape agents use to validate CLI output contracts.

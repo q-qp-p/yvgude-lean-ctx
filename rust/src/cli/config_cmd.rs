@@ -886,7 +886,11 @@ pub fn cmd_stats(args: &[String]) {
             println!("Commands:    {}", store.total_commands);
             println!("Input:       {} tokens", store.total_input_tokens);
             println!("Output:      {} tokens", store.total_output_tokens);
-            println!("Saved:       {input_saved} tokens ({pct:.1}%)");
+            // #1284: scope the headline honestly — this ratio covers volume
+            // that flowed THROUGH lean-ctx. Native tool calls that bypassed
+            // lean-ctx are not in the denominator (they are counted separately
+            // as native_shell_passthrough in metering).
+            println!("Saved:       {input_saved} tokens ({pct:.1}% of metered lean-ctx volume)");
             println!();
             println!("CEP sessions:  {}", store.cep.sessions);
             println!(

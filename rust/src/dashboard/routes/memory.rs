@@ -18,6 +18,62 @@ pub(super) fn handle(
     }
 }
 
+/// #1284: today's (UTC) totals from metering.jsonl — input tokens, saved
+/// tokens, and native_shell_passthrough call count. Unlike the savings ledger,
+/// metering records EVERY ctx_* call including zero-saving ones, so this is
+/// the honest denominator. Cached on file length: the Live view polls every
+/// few seconds and the file is append-only.
+fn today_metering_summary() -> (u64, u64, u64) {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(u64, (u64, u64, u64))>> = Mutex::new(None);
+
+    let Ok(store) = crate::core::metering::MeterStore::from_data_dir() else {
+        return (0, 0, 0);
+    };
+    let len = std::fs::metadata(store.path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if let Ok(guard) = CACHE.lock()
+        && let Some((cached_len, result)) = *guard
+        && cached_len == len
+    {
+        return result;
+    }
+
+    let today = Utc::now().format("%Y-%m-%d").to_string();
+    let mut input = 0u64;
+    let mut saved = 0u64;
+    let mut passthrough = 0u64;
+    if let Ok(content) = std::fs::read_to_string(store.path()) {
+        // Append-only and chronological: walk from the end, stop at yesterday.
+        for line in content.lines().rev() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let ts = v.get("timestamp").and_then(|t| t.as_str()).unwrap_or("");
+            if !ts.starts_with(&today) {
+                break;
+            }
+            input += v
+                .get("input_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            saved += v
+                .get("savings_tokens")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if v.get("tool_name").and_then(|t| t.as_str()) == Some("native_shell_passthrough") {
+                passthrough += 1;
+            }
+        }
+    }
+    let result = (input, saved, passthrough);
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((len, result));
+    }
+    result
+}
+
 fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str, String)> {
     match path {
         "/api/episodes" => {
@@ -121,6 +177,12 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
                 .find(|(d, ..)| d == &today)
                 .map(|(_, s, u, b)| (*s, *u, *b))
                 .unwrap_or((0, 0.0, 0));
+            // #1284: the ledger only records calls that saved something, so its
+            // percentage is "of compression events", not "of everything the
+            // agent did". Ship the metering view (ALL metered ctx_* calls,
+            // zero-saving ones included) and the native-passthrough count next
+            // to it so the panel can label the denominator honestly.
+            let (metered_input, metered_saved, native_passthrough) = today_metering_summary();
             let compression_session = serde_json::json!({
                 "savings_tokens": today_saved,
                 "total_raw": today_baseline,
@@ -129,6 +191,14 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
                     today_saved as f64 * 100.0 / today_baseline as f64
                 } else { 0.0 },
                 "savings_usd": today_usd,
+                // #1284 honesty fields (today, UTC):
+                "scope": "savings ledger — compression events only; metered_* covers every metered ctx_* call incl. zero-saving ones",
+                "metered_input_tokens": metered_input,
+                "metered_saved_tokens": metered_saved,
+                "savings_percent_of_metered": if metered_input > 0 {
+                    metered_saved as f64 * 100.0 / metered_input as f64
+                } else { 0.0 },
+                "native_passthrough_calls": native_passthrough,
             });
 
             let global = crate::core::stats::load_for_display();

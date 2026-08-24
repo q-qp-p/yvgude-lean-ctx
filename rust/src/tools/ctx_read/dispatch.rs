@@ -538,14 +538,7 @@ pub(crate) fn try_stub_hit_readonly_scoped(
     path: &str,
     current_conversation: Option<&str>,
 ) -> Option<ReadOutput> {
-    let no_deg = crate::core::config::Config::load().no_degrade_effective();
-    let prof = crate::core::profiles::active_profile();
-    let force_full = no_deg
-        || (prof.read.default_mode_effective() == "full"
-            && prof.compression.crp_mode_effective() == "off");
-    let policy_allows_stub =
-        crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full;
-    if !policy_allows_stub {
+    if !stub_policy_allows() {
         return None;
     }
 
@@ -607,6 +600,18 @@ pub(crate) fn try_stub_hit_readonly_scoped(
     Some(render_unchanged_stub(&rec.file_ref, path, rec.line_count))
 }
 
+/// Whether the cache policy and active profile allow serving `[unchanged …]`
+/// stubs at all. Shared by the full-content stub path and the #1287 variant
+/// stub path so the two can never diverge.
+pub(crate) fn stub_policy_allows() -> bool {
+    let no_deg = crate::core::config::Config::load().no_degrade_effective();
+    let prof = crate::core::profiles::active_profile();
+    let force_full = no_deg
+        || (prof.read.default_mode_effective() == "full"
+            && prof.compression.crp_mode_effective() == "off");
+    crate::server::compaction_sync::effective_cache_policy() != "safe" && !force_full
+}
+
 /// Renders the `[unchanged …]` stub body shared by the warm and cold stub paths.
 ///
 /// #498 determinism: the stub is a pure function of (file_ref, path, line_count),
@@ -628,6 +633,30 @@ fn render_unchanged_stub(file_ref: &str, path: &str, line_count: usize) -> ReadO
     ReadOutput {
         content: out,
         resolved_mode: "full".into(),
+        output_tokens: sent,
+        is_cache_hit: true,
+    }
+}
+
+/// #1287: renders the `[unchanged <mode> view]` stub for a compressed-variant
+/// re-read — same conversation, unchanged file, same mode key. Mirrors
+/// [`render_unchanged_stub`]'s #498 determinism contract: a pure function of
+/// (file_ref, path, mode), so identical re-reads stay byte-stable and the
+/// static `fresh=true` escape survives non-meta mode.
+pub(crate) fn render_unchanged_variant_stub(file_ref: &str, path: &str, mode: &str) -> ReadOutput {
+    let short = protocol::shorten_path(path);
+    let out = if crate::core::protocol::meta_visible() {
+        format!(
+            "{file_ref}={short} [unchanged {mode} view]\nSame {mode} output you already received. Use fresh=true to re-emit.",
+        )
+    } else {
+        format!("{file_ref}={short} [unchanged {mode} view · fresh=true to re-emit]")
+    };
+    let out = crate::core::redaction::redact_text_if_enabled(&out);
+    let sent = count_tokens(&out);
+    ReadOutput {
+        content: out,
+        resolved_mode: mode.to_string(),
         output_tokens: sent,
         is_cache_hit: true,
     }

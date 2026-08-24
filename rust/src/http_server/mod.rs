@@ -660,7 +660,7 @@ async fn mcp_server_card() -> impl IntoResponse {
         ],
         "features": {
             "compression": "deterministic AST-based, 40-70% token reduction",
-            "caching": "session-scoped with zstd, re-reads ~13 tokens",
+            "caching": "session-scoped with zstd, unchanged full/auto re-reads ~13 tokens",
             "audit_trail": "SHA-256 chained JSONL",
             "rbac": "5 built-in roles with capability-based access",
             "sandboxing": "Level 0 (subprocess) + Level 1 (OS-level)",

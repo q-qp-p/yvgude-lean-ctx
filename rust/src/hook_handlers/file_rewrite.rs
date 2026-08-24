@@ -86,6 +86,22 @@ pub(super) fn compute_rewrite() -> String {
                 &cmd,
                 rewrite_skip_reason(&cmd),
             );
+            // #1285: native passthrough was structurally invisible — only
+            // ctx_* calls reach metering.jsonl, so a session leaking reads
+            // through raw Bash showed a clean savings rate. Count every
+            // passthrough (token volumes are unknown pre-exec, so zeros) so
+            // the dashboard's per-tool table shows the leak as a call count.
+            // Synchronous append: hooks are plain CLI processes without a
+            // Tokio reactor, so `append_best_effort` (spawn_blocking) is
+            // unavailable here.
+            if let Ok(store) = crate::core::metering::MeterStore::from_data_dir() {
+                let _ = store.append(&crate::core::metering::MeterEntry::new(
+                    "native_shell_passthrough",
+                    0,
+                    0,
+                    0,
+                ));
+            }
             build_dual_allow_output()
         }
     })
@@ -284,7 +300,10 @@ pub(super) fn rewrite_file_read_command(cmd: &str, binary: &str) -> Option<Strin
     // Unix file-read commands come from the central registry; PowerShell-native
     // cmdlets (Get-Content/gc) are detected here so they are not added to the POSIX
     // shell-alias/registry surface (#561).
-    if !rewrite_registry::is_file_read_command(cmd) && !is_powershell_file_read(cmd) {
+    if !rewrite_registry::is_file_read_command(cmd)
+        && !is_powershell_file_read(cmd)
+        && !is_sed_or_awk_line_read(cmd)
+    {
         return None;
     }
 
@@ -305,12 +324,22 @@ pub(super) fn rewrite_file_read_command(cmd: &str, binary: &str) -> Option<Strin
 
     match parts[0].as_str() {
         "cat" => {
-            let path = parts[1..].join(" ");
-            if is_outside_project_path(&path) {
+            // #1279: only a single flag-free path maps faithfully onto `read`.
+            // `cat a.md b.md` used to collapse into `read "a.md b.md"` (one
+            // bogus path) and `cat -n f` into `read "-n f"`. Decline those —
+            // the wrap/passthrough paths own them. A quoted path containing
+            // spaces is one token after shell_tokenize, so it still matches.
+            if parts.len() != 2 || parts[1].starts_with('-') {
                 return None;
             }
-            Some(format!("{binary} read {}", shell_quote(&path)))
+            let path = parts[1].as_str();
+            if is_outside_project_path(path) {
+                return None;
+            }
+            Some(format!("{binary} read {}", shell_quote(path)))
         }
+        "sed" => rewrite_sed_range_print(&parts, binary),
+        "awk" => rewrite_awk_line_range(&parts, binary),
         "head" => {
             let refs: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
             let (n, path) = parse_head_tail_args(&refs);
@@ -343,6 +372,81 @@ pub(super) fn rewrite_file_read_command(cmd: &str, binary: &str) -> Option<Strin
 /// True if the command is a PowerShell-native file-read cmdlet (`Get-Content`/`gc`).
 fn is_powershell_file_read(cmd: &str) -> bool {
     matches!(cmd.split_whitespace().next(), Some("Get-Content" | "gc"))
+}
+
+/// True if the command starts with sed/awk — candidates for the line-range
+/// read rewrites (#1279). Detected here rather than in the registry so plain
+/// sed/awk stay off the generic rewrite surface.
+fn is_sed_or_awk_line_read(cmd: &str) -> bool {
+    matches!(cmd.split_whitespace().next(), Some("sed" | "awk"))
+}
+
+/// #1279: `sed -n 'N,Mp' file` / `sed -n 'Np' file` are line-range reads —
+/// the exact form agent auto-modes recommend for reading files, and until now
+/// a silent passthrough that bypassed lean-ctx entirely. Map them to
+/// `read -m lines:N-M`; every other sed invocation passes through untouched.
+fn rewrite_sed_range_print(parts: &[String], binary: &str) -> Option<String> {
+    if parts.len() != 4 || parts[1] != "-n" {
+        return None;
+    }
+    let (start, end) = parse_line_print_expr(&parts[2])?;
+    let path = parts[3].as_str();
+    if path.starts_with('-') || is_outside_project_path(path) {
+        return None;
+    }
+    Some(format!(
+        "{binary} read {} -m lines:{start}-{end}",
+        shell_quote(path)
+    ))
+}
+
+/// Parses a sed print expression `N,Mp` or `Np` (quotes already stripped by
+/// shell_tokenize). Returns the inclusive 1-based line range.
+fn parse_line_print_expr(expr: &str) -> Option<(u64, u64)> {
+    let body = expr.strip_suffix('p')?;
+    let (a, b) = match body.split_once(',') {
+        Some((a, b)) => (a, b),
+        None => (body, body),
+    };
+    let start: u64 = a.parse().ok()?;
+    let end: u64 = b.parse().ok()?;
+    (start >= 1 && end >= start).then_some((start, end))
+}
+
+/// #1279: `awk 'NR<=N' file` (plus `NR<N`, `NR==N`) are line-limited reads.
+/// Anything beyond a bare NR comparison (actions, field refs, `&&`) declines.
+fn rewrite_awk_line_range(parts: &[String], binary: &str) -> Option<String> {
+    if parts.len() != 3 {
+        return None;
+    }
+    let (start, end) = parse_awk_nr_expr(&parts[1])?;
+    let path = parts[2].as_str();
+    if path.starts_with('-') || is_outside_project_path(path) {
+        return None;
+    }
+    Some(format!(
+        "{binary} read {} -m lines:{start}-{end}",
+        shell_quote(path)
+    ))
+}
+
+/// Parses a bare awk NR comparison (`NR<=N` / `NR<N` / `NR==N`) into an
+/// inclusive line range.
+fn parse_awk_nr_expr(expr: &str) -> Option<(u64, u64)> {
+    let rest = expr.strip_prefix("NR")?;
+    if let Some(n) = rest.strip_prefix("<=") {
+        let n: u64 = n.parse().ok()?;
+        return (n >= 1).then_some((1, n));
+    }
+    if let Some(n) = rest.strip_prefix("==") {
+        let n: u64 = n.parse().ok()?;
+        return (n >= 1).then_some((n, n));
+    }
+    if let Some(n) = rest.strip_prefix('<') {
+        let n: u64 = n.parse().ok()?;
+        return (n >= 2).then_some((1, n - 1));
+    }
+    None
 }
 
 /// Maps `Get-Content`/`gc` to `lean-ctx read`, honoring `-Path`/`-LiteralPath`, the
@@ -499,20 +603,60 @@ pub(super) fn build_rewrite_compound(cmd: &str, binary: &str) -> Option<String> 
         return None;
     }
 
-    // Nothing lean-ctx could compress/redirect → leave it to the native shell.
-    if !commands.iter().any(|c| is_rewritable(c)) {
-        return None;
+    // Wrap-whole when a registry-rewritable segment exists AND the compound
+    // passes the allowlist gate (compression), OR when security is active and
+    // the compound violates the allowlist (#1408: enforcement). The #589 "no
+    // new block" concern only applies when the user has shell_security = off —
+    // in that case lean-ctx -c won't enforce anyway.
+    if commands.iter().any(|c| is_rewritable(c))
+        && (crate::core::shell_allowlist::passes_enforced(cmd) || needs_enforcement_wrap(cmd))
+    {
+        return Some(wrap_single_command(cmd, binary));
     }
 
-    // Wrap-whole when the compound passes the allowlist gate (compression), OR
-    // when security is active and the compound violates the allowlist (#1408:
-    // enforcement). The #589 "no new block" concern only applies when the user
-    // has shell_security = off — in that case lean-ctx -c won't enforce anyway.
-    if crate::core::shell_allowlist::passes_enforced(cmd) || needs_enforcement_wrap(cmd) {
-        Some(wrap_single_command(cmd, binary))
-    } else {
-        None
+    // #1279: segment-wise fallback. `echo hi && cat f` used to escape whole —
+    // wrap-whole declined (lead segment not allowlist-relevant) and the
+    // rewritable tail stayed native. For `&&`/`||`/`;` chains without pipes,
+    // rewrite each directly-mappable file-read segment in place and keep the
+    // rest native.
+    rewrite_segments_in_place(&segments, binary)
+}
+
+/// Rewrites file-read segments of a `&&`/`||`/`;` chain in place (#1279).
+/// Declines whole when the chain contains a pipe: a rewritten left side would
+/// feed different bytes into the consumer on the right.
+pub(super) fn rewrite_segments_in_place(
+    segments: &[compound_lexer::Segment],
+    binary: &str,
+) -> Option<String> {
+    use compound_lexer::Segment;
+    if segments
+        .iter()
+        .any(|s| matches!(s, Segment::Operator(op) if op == "|"))
+    {
+        return None;
     }
+    let mut out = String::new();
+    let mut rewrote = false;
+    for seg in segments {
+        match seg {
+            Segment::Operator(op) => {
+                out.push(' ');
+                out.push_str(op);
+                out.push(' ');
+            }
+            Segment::Command(c) => {
+                let c = c.trim();
+                if let Some(r) = rewrite_file_read_command(c, binary) {
+                    out.push_str(&r);
+                    rewrote = true;
+                } else {
+                    out.push_str(c);
+                }
+            }
+        }
+    }
+    rewrote.then_some(out)
 }
 
 /// Package-manager install/add/remove commands produce interactive progress

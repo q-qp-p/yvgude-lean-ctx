@@ -162,7 +162,13 @@ pub async fn start(
     // services). When explicitly disabled, run token-less: cross-origin/CSRF and
     // DNS-rebinding attacks are blocked by `no_auth_request_ok` instead.
     let token = if auth_required {
-        let t = requested_token.unwrap_or_else(generate_token);
+        // #1281: reuse the persisted token across restarts. Rotating on every
+        // start silently 401'd any open dashboard tab — the Live view polls
+        // /api/* and just stayed empty. Precedence: --auth-token > env >
+        // saved dashboard.token (0600) > freshly generated.
+        let t = requested_token
+            .or_else(|| load_saved_token().filter(|s| !s.is_empty()))
+            .unwrap_or_else(generate_token);
         Some(Arc::new(t))
     } else {
         if requested_token.is_some() {

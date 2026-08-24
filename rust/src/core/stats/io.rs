@@ -18,7 +18,7 @@ pub(super) fn load_from_disk() -> StatsStore {
 
     match std::fs::read_to_string(&path) {
         Ok(content) => match serde_json::from_str(&content) {
-            Ok(store) => store,
+            Ok(store) => sanitize_extrapolated_rereads(store),
             // Corrupt display cache (#706): NEVER silently reset — the next
             // flush would overwrite the good file with an empty store and the
             // whole history would be gone. Quarantine the corrupt bytes so
@@ -30,6 +30,28 @@ pub(super) fn load_from_disk() -> StatsStore {
         },
         Err(_) => StatsStore::default(),
     }
+}
+
+/// One-time sanitation (#1283). Stores written before the extrapolation fix
+/// can carry `reread_tokens_saved` values thousands of times larger than every
+/// input token ever processed (measured: ~119 trillion vs 2.4B input). Those
+/// values are products of turn arithmetic, not measurements, and cannot be
+/// decomposed retroactively — reset with a loud log. Legitimate measured
+/// values sit well under the total input volume and pass through untouched.
+fn sanitize_extrapolated_rereads(mut store: StatsStore) -> StatsStore {
+    let plausible_cap = store.total_input_tokens.saturating_mul(100).max(1_000_000);
+    if store.reread_tokens_saved > plausible_cap {
+        tracing::warn!(
+            "reread_tokens_saved={} exceeds plausibility cap {} (total input {}) — \
+             value stems from the pre-#1283 turn extrapolation and is reset; \
+             future re-read savings are measured from real cache hits",
+            store.reread_tokens_saved,
+            plausible_cap,
+            store.total_input_tokens
+        );
+        store.reread_tokens_saved = 0;
+    }
+    store
 }
 
 /// Moves an unparseable `stats.json` aside to `stats.json.corrupt` (#706)

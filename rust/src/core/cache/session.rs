@@ -9,6 +9,18 @@ use super::entry::{
 use super::validation::{compute_md5, is_cache_entry_stale_verified};
 use crate::core::tokens::count_tokens;
 
+/// #1287: delivery state of one compressed render variant. `Absent` = no such
+/// variant cached; `UnknownConversation` = stored without a resolvable
+/// conversation id (the variant stub must not be served — unknown delivery is
+/// never treated as "stub allowed"); `Conversation` = provably delivered to
+/// that conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariantDelivery {
+    Absent,
+    UnknownConversation,
+    Conversation(String),
+}
+
 pub(crate) const DEFAULT_FULL_DEGRADATION_THRESHOLD: u32 = 2;
 
 pub(crate) fn full_degradation_threshold() -> u32 {
@@ -396,6 +408,21 @@ impl SessionCache {
     /// Removes a file from the cache, forcing a fresh read on next access.
     pub fn invalidate(&mut self, path: &str) -> bool {
         self.entries.remove(&normalize_key(path)).is_some()
+    }
+
+    /// #1287: which conversation first received the given compressed variant,
+    /// WITHOUT recording hit statistics — the caller decides between stub and
+    /// payload delivery and records accordingly.
+    pub fn compressed_delivered_conversation(&self, path: &str, mode_key: &str) -> VariantDelivery {
+        match self
+            .entries
+            .get(&normalize_key(path))
+            .and_then(|entry| entry.compressed_delivered_conversation(mode_key))
+        {
+            None => VariantDelivery::Absent,
+            Some(None) => VariantDelivery::UnknownConversation,
+            Some(Some(conversation)) => VariantDelivery::Conversation(conversation.to_string()),
+        }
     }
 
     /// Returns a cached compressed output for a given file and mode key.
