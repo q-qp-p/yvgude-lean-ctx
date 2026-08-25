@@ -1,7 +1,7 @@
 # P3 Real Python Preview implementation report
 
-Status: exit candidate complete
-Date: 2026-08-24
+Status: P3 COMPLETE/INTEGRATED
+Date: 2026-08-25
 
 ## Immutable identities
 
@@ -13,6 +13,12 @@ Date: 2026-08-24
 - P3 branch: `feat/p3-real-python-preview`.
 - P3 implementation candidate:
   `79e3888862659e5ac0623a8fa00e16155aa144da`.
+- P3 integrated merge:
+  `e47cb432f2e9e2d7ecf13e3c85a0d1cc4fa68f96`.
+- P3 exact-baseline evidence: CI `32778481164`, Security `32778481373`,
+  CodeQL `32778481121`; all passed.
+- Phase state: P3 COMPLETE/INTEGRATED; P4 ACTIVE; P5/Cloud NOT BEGUN.
+- `LIVE PROVIDER SMOKE: UNVERIFIED`.
 
 ## Transport and ownership decision
 
@@ -227,9 +233,11 @@ selection, Cloud, or Production SDK claim is made.
   truthful.
 - OSS coding-agent workflows remain available and covered by preservation
   tests.
-- No blocker remains for P3 candidate integration.
-- P4, SDK repository extraction, Engine decommission, Workspace, and Cloud did
-  not begin.
+- P3 is COMPLETE/INTEGRATED on the accepted Engine main merge.
+- P4 ACTIVE governance and production-SDK preparation follow the integrated
+  seam; SDK repository extraction, Engine decommission and implementation have
+  not begun.
+- P5/Cloud NOT BEGUN: Workspace, package, handoff and Cloud work remain closed.
 
 Architectural answers:
 
