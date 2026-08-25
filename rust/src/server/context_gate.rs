@@ -524,10 +524,24 @@ fn try_load_graph(project_root: &str) -> Option<crate::core::graph_provider::Ope
 }
 
 /// Determines the output-filtering aggressiveness from a task profile.
+///
+/// Fail-safe ladder (community reports on 3.9.19, "triage always level 2"):
+/// the old ladder inverted fail-safety — the empty-query fallback profile
+/// (confidence exactly 300, context_need 0) landed on the MOST aggressive
+/// level, and per-tool-call profiles almost always report context_need < 300
+/// (a single tool call classifies as SingleFile, base 250). Level 2 now
+/// requires real classification confidence (>= 600); uncertainty degrades
+/// toward passthrough, never toward harder filtering.
 pub fn triage_filter_level(profile: &crate::core::triage::profile::TaskProfileLocal) -> u8 {
     if profile.confidence_milli < 300 {
-        0
-    } else if profile.context_need_milli < 300 {
+        return 0;
+    }
+    // Low-confidence band (incl. the exact-300 fallback profile): at most the
+    // lossless-ish boilerplate strip, never line-level deletion.
+    if profile.confidence_milli < 600 {
+        return u8::from(profile.context_need_milli < 600);
+    }
+    if profile.context_need_milli < 300 {
         2
     } else {
         u8::from(profile.context_need_milli < 600)
@@ -578,16 +592,18 @@ pub fn apply_triage_filter(
             if crate::core::triage::markdown::looks_like_markdown(&lines) {
                 crate::core::triage::markdown::keep_indices(&lines, &keywords)
             } else {
+                // Community report (3.9.19, "abridged into something that
+                // still looks right"): the structural+keyword keep-set is
+                // provably unsafe for source code — plain `let` bindings
+                // vanished from a Rust fn while the survivors still parsed
+                // (21 of 36 lines dropped, output looked complete, bindings
+                // became undeclared). Line-level lossy triage is therefore
+                // markdown-only; every other content shape gets at most the
+                // level-1 boilerplate strip.
                 lines
                     .iter()
                     .enumerate()
-                    .filter(|(_, line)| {
-                        let trimmed = line.trim();
-                        is_structural_line(trimmed) || {
-                            let lowercase = trimmed.to_lowercase();
-                            keywords.iter().any(|keyword| lowercase.contains(keyword))
-                        }
-                    })
+                    .filter(|(_, line)| !is_boilerplate_line(line.trim_start()))
                     .map(|(i, _)| i)
                     .collect()
             }
@@ -606,9 +622,9 @@ pub fn apply_triage_filter(
     if keep.is_empty() {
         return (output.to_string(), 0);
     }
-    // Heading-only markdown is the same failure mode: ATX titles match
-    // is_structural_line (`#…`) so keep is non-empty, but every body
-    // paragraph is gone. Pass through instead of returning a TOC.
+    // Heading-only markdown is the same failure mode: ATX titles survive the
+    // markdown keep-set so `keep` is non-empty, but every body paragraph is
+    // gone. Pass through instead of returning a TOC.
     if crate::core::triage::markdown::is_heading_only_collapse(&lines, &keep) {
         return (output.to_string(), 0);
     }
@@ -634,7 +650,7 @@ pub fn apply_triage_filter(
         ));
     }
     result.push_str(&format!(
-        "[lean-ctx: {removed} lines filtered by triage (level {level})]"
+        "[lean-ctx: {removed} lines filtered by triage (level {level}) — rerun with raw=true for the unfiltered output]"
     ));
     (result, removed)
 }
@@ -656,18 +672,6 @@ fn is_boilerplate_line(line: &str) -> bool {
         && !line.contains("TODO")
         && !line.contains("FIXME")
         && !line.contains("SAFETY")
-}
-
-fn is_structural_line(line: &str) -> bool {
-    line.contains('{')
-        || line.contains('}')
-        || line.starts_with("pub")
-        || line.starts_with("fn")
-        || line.starts_with("struct")
-        || line.starts_with("impl")
-        || line.starts_with("use")
-        || line.starts_with("mod")
-        || line.starts_with('#')
 }
 
 #[cfg(test)]
@@ -1168,12 +1172,24 @@ mod tests {
 
     #[test]
     fn triage_filter_level_selects_expected_level() {
-        for (confidence, context_need, expected) in
-            [(200, 200, 0), (500, 200, 2), (500, 450, 1), (500, 700, 0)]
-        {
+        for (confidence, context_need, expected) in [
+            (200, 200, 0),
+            // Fail-safe ladder: the mid-confidence band (300..600) — which
+            // includes the empty-query fallback profile at exactly 300 —
+            // never reaches the lossy level 2.
+            (300, 0, 1),
+            (500, 200, 1),
+            (500, 450, 1),
+            (500, 700, 0),
+            // Level 2 requires real classification confidence.
+            (700, 200, 2),
+            (700, 450, 1),
+            (700, 700, 0),
+        ] {
             assert_eq!(
                 triage_filter_level(&test_profile(confidence, context_need)),
-                expected
+                expected,
+                "confidence={confidence} context_need={context_need}"
             );
         }
     }
@@ -1202,8 +1218,36 @@ mod tests {
         assert!(filtered.contains("// TODO: keep this"));
         assert!(filtered.contains("// FIXME: keep this"));
         assert!(filtered.contains("// SAFETY: keep this"));
-        assert!(filtered.contains("[lean-ctx: 30 lines filtered by triage (level 1)]"));
+        assert!(
+            filtered
+                .contains("[lean-ctx: 30 lines filtered by triage (level 1) — rerun with raw=true")
+        );
         assert_eq!(removed, 30);
+    }
+
+    /// Community regression (3.9.19 "abridged into something that still looks
+    /// right"): level 2 on NON-markdown content must never delete a
+    /// non-comment line — plain `let` bindings used to vanish from source
+    /// files while the survivors still parsed.
+    #[test]
+    fn apply_triage_filter_level_two_never_drops_code_lines() {
+        let profile = test_profile(700, 200);
+        let output = "// boilerplate noise\n".repeat(20)
+            + "pub fn read_identity() -> Identity {\n"
+            + "    let serial = read_serial();\n"
+            + "    let model = read_model();\n"
+            + "    Identity { serial, model }\n"
+            + "}\n";
+        let (filtered, removed) = apply_triage_filter(&output, &profile, 2);
+        // Every code line survives — especially the plain `let` bindings that
+        // carry neither braces, keywords, nor task keywords.
+        assert!(filtered.contains("let serial = read_serial();"));
+        assert!(filtered.contains("let model = read_model();"));
+        assert!(filtered.contains("Identity { serial, model }"));
+        // Only the boilerplate comments were stripped, and the footer names
+        // the escape hatch.
+        assert_eq!(removed, 20);
+        assert!(filtered.contains("rerun with raw=true"));
     }
 
     #[test]

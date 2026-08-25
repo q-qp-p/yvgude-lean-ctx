@@ -998,7 +998,7 @@ pub(in crate::server) async fn dispatch_and_post_process(
 /// `ctx_read` already owns mode selection and edit-safety guarantees. Running a
 /// second lossy pass after it resolved `auto` to `full` would hide content the
 /// caller must see (#1511), so every read result bypasses post-dispatch triage.
-fn triage_bypass_requested(
+pub(super) fn triage_bypass_requested(
     name: &str,
     args: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
