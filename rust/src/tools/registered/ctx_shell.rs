@@ -5,9 +5,12 @@ use serde_json::{Map, Value, json};
 use crate::core::ocla::cache_types::{CacheKeyBuilder, ShellCommandKey};
 
 use crate::server::tool_trait::{
-    McpTool, ShellOutcome, ToolContext, ToolOutput, get_bool, get_int, get_str,
+    BackgroundJobState, BackgroundShellOutcome, McpTool, ShellOutcome, ToolContext, ToolOutput,
+    get_bool, get_int, get_str,
 };
 use crate::tool_defs::tool_def;
+
+use super::ctx_shell_background::{format_background_state, redact_shell_output_secrets};
 
 pub struct CtxShellTool;
 
@@ -40,7 +43,7 @@ impl McpTool for CtxShellTool {
                     "timeout_ms": { "type": "integer", "description": "Job lifetime in ms (max 3600000) — NOT the inline wait. A command still running at the ~110s foreground cap detaches to a pollable shell_* job and keeps running up to timeout_ms. Overridden by LEAN_CTX_SHELL_TIMEOUT_MS." },
                     "env": { "type": "object", "description": "Extra env vars", "additionalProperties": { "type": "string" } },
                     "run_in_background": { "type": "boolean", "description": "Detach immediately and return a job id. The command keeps timeout_ms; poll or cancel with background_action and job_id." },
-                    "background_action": { "type": "string", "enum": ["status", "cancel"], "description": "Inspect or cancel a background ctx_shell job." },
+                    "background_action": { "type": "string", "enum": ["status", "cancel"], "description": "Inspect or cancel a background ctx_shell job. Evicted/expired jobs return a structured lookup error." },
                     "job_id": { "type": "string", "description": "Job id returned by run_in_background." }
                 }
             }),
@@ -75,9 +78,9 @@ impl McpTool for CtxShellTool {
                     ));
                 }
             };
-            let (text, exit_code) = format_background_state(&id, is_cancel, state);
+            let (text, outcome) = format_background_state(&id, is_cancel, state);
             return Ok(ToolOutput {
-                shell_outcome: Some(ShellOutcome::Exit(exit_code)),
+                shell_outcome: Some(outcome),
                 content_blocks: None,
                 ..ToolOutput::simple(text)
             });
@@ -336,7 +339,18 @@ impl McpTool for CtxShellTool {
                     "background"
                 };
                 return Ok(ToolOutput {
-                    shell_outcome: Some(ShellOutcome::Exit(0)),
+                    shell_outcome: Some(ShellOutcome::Background(BackgroundShellOutcome {
+                        state: BackgroundJobState::Running,
+                        exit_code: None,
+                        job_id: job_id.clone(),
+                        archive_id: None,
+                        archive_truncated: None,
+                        captured_chars: None,
+                        archived_chars: None,
+                        summary: format!("{mode} job started"),
+                        is_error: false,
+                        display: None,
+                    })),
                     content_blocks: None,
                     ..ToolOutput::simple(format!(
                         "[{mode}:{job_id} started — use ctx_shell(background_action=\"status\", job_id=\"{job_id}\") to poll or background_action=\"cancel\" to stop it]"
@@ -391,7 +405,18 @@ impl McpTool for CtxShellTool {
                     } => (output, exit_code),
                     crate::server::background_shell::ForegroundResult::Detached { job_id } => {
                         return Ok(ToolOutput {
-                            shell_outcome: Some(ShellOutcome::Exit(0)),
+                            shell_outcome: Some(ShellOutcome::Background(BackgroundShellOutcome {
+                                state: BackgroundJobState::Running,
+                                exit_code: None,
+                                job_id: job_id.clone(),
+                                archive_id: None,
+                                archive_truncated: None,
+                                captured_chars: None,
+                                archived_chars: None,
+                                summary: "auto-detached job is still running".to_string(),
+                                is_error: false,
+                                display: None,
+                            })),
                             content_blocks: None,
                             // #1173: a detach is not a failure — the command is
                             // alive and its output is recoverable, so say so
@@ -754,90 +779,6 @@ fn warn_shell_secret_paths(command: &str) {
             }
         }
     }
-}
-
-/// Render a `background_action` result.
-///
-/// #1246: a caller-requested cancel is a success, not a tool failure. The
-/// process's own SIGINT exit (130) used to be reported as the tool's exit code,
-/// which tripped the client's failure hook and told the agent to fix something
-/// it had deliberately done. A cancel therefore never reports a non-zero exit,
-/// and is idempotent: cancelling an already-cancelled, already-finished or
-/// already-pruned job is equally benign. The first cancel also gets its own
-/// wording so it cannot be mistaken for a status poll that did nothing.
-fn format_background_state(
-    id: &str,
-    is_cancel: bool,
-    state: Option<crate::server::background_shell::JobState>,
-) -> (String, i32) {
-    use crate::server::background_shell::JobState;
-    let Some(state) = state else {
-        return if is_cancel {
-            (
-                format!("[background:{id} not found — already finished or cancelled]"),
-                0,
-            )
-        } else {
-            (format!("[background:{id} not found]"), 1)
-        };
-    };
-    match state {
-        JobState::Running { output } => {
-            // #1217: show the captured-so-far output so a poll of a
-            // long-running job reflects progress instead of a bare
-            // "running" with no signal of whether it is advancing.
-            let body = redact_shell_output_secrets(&output);
-            let head = if is_cancel {
-                format!(
-                    "[background:{id} cancel requested — job is stopping; poll status for the final output]"
-                )
-            } else {
-                format!("[background:{id} running]")
-            };
-            if body.trim().is_empty() {
-                (head, 0)
-            } else {
-                (format!("{head}\n{body}"), 0)
-            }
-        }
-        JobState::Completed { output, exit_code } => (
-            format!(
-                "[background:{id} completed]\n{}{}",
-                redact_shell_output_secrets(&output),
-                if exit_code == 0 {
-                    String::new()
-                } else {
-                    format!("\n[exit:{exit_code}]")
-                }
-            ),
-            if is_cancel { 0 } else { exit_code },
-        ),
-        JobState::Cancelled { output } => (
-            format!(
-                "[background:{id} cancelled]\n{}\n[cancelled: {id}, exit 130]",
-                redact_shell_output_secrets(&output)
-            ),
-            0,
-        ),
-    }
-}
-
-fn redact_shell_output_secrets(output: &str) -> String {
-    let cfg = crate::core::config::Config::load();
-    if !cfg.secret_detection.enabled {
-        return output.to_string();
-    }
-    let (redacted, matches) =
-        crate::core::secret_detection::scan_and_redact(output, &cfg.secret_detection);
-    if !matches.is_empty() {
-        let names: Vec<&str> = matches.iter().map(|m| m.pattern_name).collect();
-        tracing::warn!(
-            "[SHELL SECRET REDACTION] {} secret(s) redacted from shell output: {}",
-            matches.len(),
-            names.join(", ")
-        );
-    }
-    redacted
 }
 
 /// The Codex MCP client abandons a tool call after five minutes. A Cargo test
@@ -1210,7 +1151,16 @@ mod tests {
         resolve_effective_cwd, shell_access_denial, should_auto_background,
     };
     use crate::server::background_shell::JobState;
-    use crate::server::tool_trait::{McpTool, ShellOutcome, ToolContext};
+    use crate::server::tool_trait::{
+        BackgroundJobState, BackgroundShellOutcome, McpTool, ShellOutcome, ToolContext,
+    };
+
+    fn background(outcome: ShellOutcome) -> BackgroundShellOutcome {
+        let ShellOutcome::Background(outcome) = outcome else {
+            panic!("expected a background outcome");
+        };
+        outcome
+    }
 
     /// #1246: a cancel must never come back as a tool error, and must not read
     /// like a status poll that did nothing.
@@ -1219,41 +1169,81 @@ mod tests {
         let running = JobState::Running {
             output: String::new(),
         };
-        let (text, exit) = format_background_state("shell_x", true, Some(running.clone()));
-        assert_eq!(exit, 0);
-        assert!(text.contains("cancel requested"), "{text}");
+        let (text, outcome) = format_background_state("shell_x", true, Some(running.clone()));
+        let outcome = background(outcome);
+        assert!(!outcome.is_error);
+        assert_eq!(outcome.state, BackgroundJobState::Running);
+        assert_eq!(outcome.exit_code, None);
+        assert!(text.is_empty());
+        assert!(
+            outcome
+                .display
+                .as_ref()
+                .is_some_and(|display| display.header.contains("cancel requested"))
+        );
 
         // A status poll of the same state keeps the old wording.
-        let (text, exit) = format_background_state("shell_x", false, Some(running));
-        assert_eq!(exit, 0);
-        assert!(text.contains("[background:shell_x running]"), "{text}");
+        let (text, outcome) = format_background_state("shell_x", false, Some(running));
+        let outcome = background(outcome);
+        assert!(!outcome.is_error);
+        assert_eq!(outcome.state, BackgroundJobState::Running);
+        assert!(text.is_empty());
+        assert!(
+            outcome
+                .display
+                .as_ref()
+                .is_some_and(|display| display.header == "[background:shell_x running]")
+        );
 
-        // The terminal state is data, not an error — no exit 130 leaks out.
-        let (text, exit) = format_background_state(
+        // The terminal child code is data; the requested cancel remains a
+        // successful tool action even though structuredContent keeps 130.
+        let (text, outcome) = format_background_state(
             "shell_x",
             true,
             Some(JobState::Cancelled {
                 output: "[cancelled: command stopped on request]".to_string(),
             }),
         );
-        assert_eq!(exit, 0);
-        assert!(text.contains("[cancelled: shell_x, exit 130]"), "{text}");
+        let outcome = background(outcome);
+        assert!(!outcome.is_error);
+        assert_eq!(outcome.state, BackgroundJobState::Cancelled);
+        assert_eq!(outcome.exit_code, Some(130));
+        assert!(text.contains("[cancelled: command stopped on request]"));
+        assert!(
+            outcome
+                .display
+                .as_ref()
+                .and_then(|display| display.footer.as_deref())
+                .is_some_and(|footer| footer == "[cancelled: shell_x, exit 130]")
+        );
 
         // Idempotent: already finished, or finished and pruned.
         let finished = JobState::Completed {
             output: "boom".to_string(),
             exit_code: 1,
         };
-        assert_eq!(
-            format_background_state("shell_x", true, Some(finished.clone())).1,
-            0
-        );
-        assert_eq!(
-            format_background_state("shell_x", false, Some(finished)).1,
-            1
-        );
-        assert_eq!(format_background_state("shell_x", true, None).1, 0);
-        assert_eq!(format_background_state("shell_x", false, None).1, 1);
+        let cancelled_finished =
+            background(format_background_state("shell_x", true, Some(finished.clone())).1);
+        assert!(!cancelled_finished.is_error);
+        assert_eq!(cancelled_finished.state, BackgroundJobState::Failed);
+        assert_eq!(cancelled_finished.exit_code, Some(1));
+
+        let polled_finished =
+            background(format_background_state("shell_x", false, Some(finished)).1);
+        assert!(polled_finished.is_error);
+        assert_eq!(polled_finished.state, BackgroundJobState::Failed);
+        assert_eq!(polled_finished.exit_code, Some(1));
+
+        let missing_cancel = format_background_state("shell_x", true, None).1;
+        assert!(!missing_cancel.is_error());
+        assert_eq!(missing_cancel, ShellOutcome::Exit(0));
+
+        let missing_status = format_background_state("shell_x", false, None).1;
+        assert!(missing_status.is_error());
+        assert!(matches!(
+            missing_status,
+            ShellOutcome::BackgroundLookupError(_)
+        ));
     }
 
     #[test]
