@@ -33,13 +33,19 @@ pub(super) fn load_from_disk() -> StatsStore {
 }
 
 /// One-time sanitation (#1283). Stores written before the extrapolation fix
-/// can carry `reread_tokens_saved` values thousands of times larger than every
-/// input token ever processed (measured: ~119 trillion vs 2.4B input). Those
-/// values are products of turn arithmetic, not measurements, and cannot be
-/// decomposed retroactively — reset with a loud log. Legitimate measured
-/// values sit well under the total input volume and pass through untouched.
+/// can carry `reread_tokens_saved` values orders of magnitude larger than
+/// every input token ever processed (measured: ~119 trillion vs 2.4B input).
+/// Those values are products of turn arithmetic, not measurements, and cannot
+/// be decomposed retroactively — reset with a loud log.
+///
+/// Cap = 1x total input (was 100x): during the mixed-version window a still-
+/// running pre-fix server keeps re-inflating the store between sanitations,
+/// sawtoothing anywhere below the cap — measured live at 59.8B (~24x input),
+/// which rendered as ~$18k "cost saved" on the dashboard. Measured cache-hit
+/// savings sit around 8% of daily input, so 1x is still generous; kept as a
+/// floor of 1M tokens for young stores.
 fn sanitize_extrapolated_rereads(mut store: StatsStore) -> StatsStore {
-    let plausible_cap = store.total_input_tokens.saturating_mul(100).max(1_000_000);
+    let plausible_cap = store.total_input_tokens.max(1_000_000);
     if store.reread_tokens_saved > plausible_cap {
         tracing::warn!(
             "reread_tokens_saved={} exceeds plausibility cap {} (total input {}) — \
@@ -349,5 +355,48 @@ fn merge_cep(merged: &mut CepStats, current: &CepStats, baseline: &CepStats) {
         merged.last_session_compressed = current.last_session_compressed;
         merged.last_session_cache_hits = current.last_session_cache_hits;
         merged.last_session_cache_reads = current.last_session_cache_reads;
+    }
+}
+
+#[cfg(test)]
+mod sanitation_tests {
+    use super::*;
+
+    /// #1283 mixed-version window: a still-running pre-fix server sawtooths
+    /// the persisted value anywhere above real measurements (live: 59.8B at
+    /// 2.5B total input rendered as ~$18k "cost saved"). The cap is 1x total
+    /// input; plausible measured values pass through untouched.
+    #[test]
+    fn sanitation_resets_above_total_input_and_keeps_plausible_values() {
+        let inflated = StatsStore {
+            total_input_tokens: 2_500_000_000,
+            reread_tokens_saved: 59_800_000_000, // 24x input — sawtooth
+            ..Default::default()
+        };
+        assert_eq!(
+            sanitize_extrapolated_rereads(inflated).reread_tokens_saved,
+            0
+        );
+
+        let plausible = StatsStore {
+            total_input_tokens: 2_500_000_000,
+            reread_tokens_saved: 200_000_000, // 8% of input — measured scale
+            ..Default::default()
+        };
+        assert_eq!(
+            sanitize_extrapolated_rereads(plausible).reread_tokens_saved,
+            200_000_000
+        );
+
+        // Young stores keep the 1M floor so tiny installs are never reset.
+        let young = StatsStore {
+            total_input_tokens: 10_000,
+            reread_tokens_saved: 900_000,
+            ..Default::default()
+        };
+        assert_eq!(
+            sanitize_extrapolated_rereads(young).reread_tokens_saved,
+            900_000
+        );
     }
 }

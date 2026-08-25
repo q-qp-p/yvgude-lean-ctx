@@ -62,7 +62,7 @@ impl DecisionLoopRuntime {
     pub fn on_tool_start(
         &self,
         tool_name: &str,
-        query: &str,
+        query: Option<&str>,
         session_id: &str,
         agent_id: &str,
     ) -> TaskContext {
@@ -83,20 +83,21 @@ impl DecisionLoopRuntime {
     fn on_tool_start_inner(
         &self,
         tool_name: &str,
-        query: &str,
+        query: Option<&str>,
         session_id: &str,
         agent_id: &str,
     ) -> TaskContext {
         let profile = self
             .triage
             .analyze(&TaskAnalysisInput {
-                query: format!("{tool_name}: {query}"),
+                query: query.map_or_else(String::new, |text| format!("{tool_name}: {text}")),
                 ..Default::default()
             })
             .map(|hypothesis| hypothesis.profile)
             .unwrap_or_default();
         self.remember_profile(session_id, profile.clone());
-        let mut envelope = TaskSpine::create_envelope(query, session_id, agent_id);
+        let mut envelope =
+            TaskSpine::create_envelope(query.unwrap_or(tool_name), session_id, agent_id);
         TaskSpine::enrich_from_triage(&mut envelope, &protocol_profile(&profile));
         TaskContext {
             task_id: envelope.task_id.as_str().to_owned(),

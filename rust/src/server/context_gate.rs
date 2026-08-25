@@ -525,27 +525,28 @@ fn try_load_graph(project_root: &str) -> Option<crate::core::graph_provider::Ope
 
 /// Determines the output-filtering aggressiveness from a task profile.
 ///
-/// Fail-safe ladder (community reports on 3.9.19, "triage always level 2"):
-/// the old ladder inverted fail-safety — the empty-query fallback profile
-/// (confidence exactly 300, context_need 0) landed on the MOST aggressive
-/// level, and per-tool-call profiles almost always report context_need < 300
-/// (a single tool call classifies as SingleFile, base 250). Level 2 now
-/// requires real classification confidence (>= 600); uncertainty degrades
-/// toward passthrough, never toward harder filtering.
+/// Fail-safe by construction (community reports on 3.9.19, "triage always
+/// level 2"): the original ladder inverted fail-safety — the empty-query
+/// fallback profile landed on the MOST aggressive level, and per-tool-call
+/// profiles almost always report a low context need (a single tool call
+/// classifies as SingleFile, base 250). A rules-derived profile can now
+/// select at most level 1; uncertainty degrades toward passthrough, never
+/// toward harder filtering.
 pub fn triage_filter_level(profile: &crate::core::triage::profile::TaskProfileLocal) -> u8 {
-    if profile.confidence_milli < 300 {
+    use crate::core::triage::confidence::ACTIONABLE_FLOOR_MILLI;
+    // An unset context need means "unknown", never "needs no context".
+    if profile.confidence_milli < ACTIONABLE_FLOOR_MILLI || profile.context_need_milli == 0 {
         return 0;
     }
-    // Low-confidence band (incl. the exact-300 fallback profile): at most the
-    // lossless-ish boilerplate strip, never line-level deletion.
-    if profile.confidence_milli < 600 {
-        return u8::from(profile.context_need_milli < 600);
-    }
-    if profile.context_need_milli < 300 {
-        2
-    } else {
-        u8::from(profile.context_need_milli < 600)
-    }
+    // Level 2 removes declarations and leaves output that parses but no longer
+    // means what it says (#1484). Nothing in a rules-derived profile is precise
+    // enough to justify that: `confidence_milli` measures how sure the intent
+    // classification is, not how much information loss the output tolerates.
+    // The level stays reachable through `apply_triage_filter` for callers that
+    // ask for it — where it is additionally markdown-only, so source code and
+    // logs never lose non-comment lines — and should return here again only
+    // once a model backend can supply that prediction.
+    u8::from(profile.context_need_milli < 600)
 }
 
 /// Filters output according to the task profile and selected triage level.
@@ -1174,17 +1175,19 @@ mod tests {
     fn triage_filter_level_selects_expected_level() {
         for (confidence, context_need, expected) in [
             (200, 200, 0),
-            // Fail-safe ladder: the mid-confidence band (300..600) — which
-            // includes the empty-query fallback profile at exactly 300 —
-            // never reaches the lossy level 2.
-            (300, 0, 1),
+            // context_need == 0 means "unknown", never "needs no context" —
+            // the fallback profile must pass through untouched.
+            (300, 0, 0),
+            (500, 0, 0),
             (500, 200, 1),
             (500, 450, 1),
             (500, 700, 0),
-            // Level 2 requires real classification confidence.
-            (700, 200, 2),
+            // A rules-derived profile never selects the lossy level 2, no
+            // matter how confident the intent classification is.
+            (700, 200, 1),
             (700, 450, 1),
             (700, 700, 0),
+            (1000, 100, 1),
         ] {
             assert_eq!(
                 triage_filter_level(&test_profile(confidence, context_need)),
@@ -1192,6 +1195,17 @@ mod tests {
                 "confidence={confidence} context_need={context_need}"
             );
         }
+    }
+
+    #[test]
+    fn no_model_installed_means_passthrough() {
+        use crate::core::triage::{TaskAnalysisInput, TaskAnalyzer, rules::RuleTriageBackend};
+
+        let profile = RuleTriageBackend
+            .analyze(&TaskAnalysisInput::default())
+            .unwrap()
+            .profile;
+        assert_eq!(triage_filter_level(&profile), 0);
     }
 
     #[test]
