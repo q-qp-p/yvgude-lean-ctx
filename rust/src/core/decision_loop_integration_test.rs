@@ -151,6 +151,25 @@ async fn decision_loop_integration_simple_read() {
     .await;
     assert_completed_task(&server, &task_id, "ctx_read").await;
 
+    // #1484: `ctx_read` carries neither `query` nor `task`, so the ingress must
+    // hand the triage no task text at all. Classifying the tool name instead
+    // ("ctx_read: ctx_read") yields a confident SingleFile profile and filter
+    // level 2 — the regression this binds shut.
+    let session_id = server.session.read().await.id.clone();
+    let profile = DecisionLoopRuntime::get_or_init()
+        .profile_for_session(&session_id)
+        .expect("a tool call must record a triage profile for its session");
+    assert_eq!(
+        profile.confidence_milli,
+        crate::core::triage::confidence::RULES_FALLBACK_MILLI,
+        "a call without a task text must reach rules::fallback(), not a classification"
+    );
+    assert_eq!(
+        crate::server::context_gate::triage_filter_level(&profile),
+        0,
+        "a task-text-less profile must pass output through unfiltered"
+    );
+
     // SAFETY: test_env_lock serializes process-wide data directory changes.
     unsafe { std::env::remove_var("LEAN_CTX_DATA_DIR") };
 }

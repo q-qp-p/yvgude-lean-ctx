@@ -1,6 +1,6 @@
 use super::{
     ProfileHypothesis, TaskAnalysisInput, TaskAnalyzer, TriageBackendLocal,
-    confidence::clamp_milli,
+    confidence::{RULES_FALLBACK_MILLI, clamp_milli},
     profile::{TaskProfileLocal, TaskScopeLocal},
 };
 use crate::core::{
@@ -60,12 +60,12 @@ fn fallback() -> ProfileHypothesis {
     let profile = TaskProfileLocal {
         task_class: "coding".into(),
         intent: "explore".into(),
-        confidence_milli: 300,
+        confidence_milli: RULES_FALLBACK_MILLI,
         ..Default::default()
     };
     ProfileHypothesis {
         profile,
-        confidence_milli: 300,
+        confidence_milli: RULES_FALLBACK_MILLI,
         backend: TriageBackendLocal::Rules,
     }
 }
@@ -73,7 +73,10 @@ fn milli(value: f64) -> u16 {
     if value.is_finite() {
         clamp_milli((value.clamp(0.0, 1.0) * 1000.0).round() as u16)
     } else {
-        300
+        // A non-finite confidence is an absent signal, not a middling one — it
+        // reports the same guess-level confidence as `fallback()` so it stays
+        // below `ACTIONABLE_FLOOR_MILLI` (#1484).
+        RULES_FALLBACK_MILLI
     }
 }
 fn intent_name(t: TaskType) -> &'static str {
@@ -134,7 +137,18 @@ mod tests {
                 .analyze(&TaskAnalysisInput::default())
                 .unwrap()
                 .confidence_milli,
-            300
+            RULES_FALLBACK_MILLI
         );
+    }
+    #[test]
+    fn non_finite_confidence_stays_below_the_actionable_floor() {
+        use crate::core::triage::confidence::ACTIONABLE_FLOOR_MILLI;
+
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                milli(value) < ACTIONABLE_FLOOR_MILLI,
+                "a non-finite confidence is an absent signal, not an actionable one"
+            );
+        }
     }
 }

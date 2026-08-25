@@ -28,7 +28,7 @@ fn test_runtime_init() {
 fn test_on_tool_start() {
     let context = DecisionLoopRuntime::get_or_init().on_tool_start(
         "ctx_read",
-        "read lib.rs",
+        Some("read lib.rs"),
         "runtime-test",
         "agent",
     );
@@ -39,7 +39,7 @@ fn test_on_tool_start() {
 #[test]
 fn test_on_tool_end_success() {
     let runtime = DecisionLoopRuntime::with_triage(TriageEngine::default());
-    let context = runtime.on_tool_start("ctx_read", "read", "runtime-test", "agent");
+    let context = runtime.on_tool_start("ctx_read", Some("read"), "runtime-test", "agent");
     runtime.on_tool_end(&context, 1, 1, "gpt-4o", true);
     assert_eq!(runtime.latest_assessment_accepted(), Some(true));
 }
@@ -47,7 +47,7 @@ fn test_on_tool_end_success() {
 #[test]
 fn test_on_tool_end_failure() {
     let runtime = DecisionLoopRuntime::with_triage(TriageEngine::default());
-    let context = runtime.on_tool_start("ctx_read", "read", "runtime-test", "agent");
+    let context = runtime.on_tool_start("ctx_read", Some("read"), "runtime-test", "agent");
     runtime.on_tool_end(&context, 1, 1, "gpt-4o", false);
     assert_eq!(runtime.latest_assessment_accepted(), Some(false));
 }
@@ -58,8 +58,22 @@ fn test_error_does_not_block() {
         DecisionLoopRuntime::with_triage(TriageEngine::new(vec![Box::new(FailingAnalyzer)]));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.on_tool_start("ctx_read", "", "test", "agent")
+            runtime.on_tool_start("ctx_read", None, "test", "agent")
         }))
         .is_ok()
     );
+}
+
+#[test]
+fn missing_task_text_yields_passthrough_profile() {
+    use crate::core::triage::confidence::ACTIONABLE_FLOOR_MILLI;
+    use crate::server::context_gate::triage_filter_level;
+
+    let runtime = DecisionLoopRuntime::with_triage(TriageEngine::default());
+    let context = runtime.on_tool_start("ctx_read", None, "no-task-text", "agent");
+
+    assert_eq!(context.profile_intent, "explore");
+    let profile = runtime.profile_for_session("no-task-text").unwrap();
+    assert!(profile.confidence_milli < ACTIONABLE_FLOOR_MILLI);
+    assert_eq!(triage_filter_level(&profile), 0);
 }

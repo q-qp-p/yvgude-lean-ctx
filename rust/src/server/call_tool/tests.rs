@@ -828,7 +828,7 @@ mod shell_outcome_tests {
         let context = crate::core::decision_loop_runtime::DecisionLoopRuntime::get_or_init()
             .on_tool_start(
                 "ctx_shell",
-                "fix a coding bug in one file",
+                Some("fix a coding bug in one file"),
                 &session_id,
                 "mes1609-triage-test",
             );
