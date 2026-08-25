@@ -691,6 +691,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn codex_docs_steer_to_reliable_mcp_path_without_false_hook_claim() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-desktop-note");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -727,6 +732,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn install_codex_docs_preserves_existing_user_instructions() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-preserve");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -761,6 +771,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn install_codex_docs_updates_only_marked_block() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-marked");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
