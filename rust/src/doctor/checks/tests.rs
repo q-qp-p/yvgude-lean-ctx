@@ -246,3 +246,33 @@ fn standard_data_pin_is_not_flagged_as_divergent() {
     assert!(!standard_diverges, "standard XDG data pin must not diverge");
     assert!(custom_diverges, "a custom data pin diverges config");
 }
+
+// --- #1534: output-triage visibility ---
+// The 3.9.19 filter dropped tool output while doctor reported all checks
+// green; its state must be on the board in both directions.
+
+#[test]
+fn output_triage_off_names_the_key_and_reads_off() {
+    let out = environment::output_triage_outcome_for(0);
+    assert!(out.ok);
+    assert!(out.line.contains("Output triage"), "{}", out.line);
+    assert!(
+        out.line.contains("decision_loop.max_filter_level"),
+        "{}",
+        out.line
+    );
+    assert!(out.line.contains("off"), "{}", out.line);
+}
+
+#[test]
+fn output_triage_active_states_level_and_disable_command() {
+    let out = environment::output_triage_outcome_for(2);
+    assert!(out.ok, "active filtering is configuration, not a failure");
+    assert!(out.line.contains("active (max level 2)"), "{}", out.line);
+    assert!(
+        out.line
+            .contains("lean-ctx config set decision_loop.max_filter_level 0"),
+        "the line must name the command that turns it off: {}",
+        out.line
+    );
+}
