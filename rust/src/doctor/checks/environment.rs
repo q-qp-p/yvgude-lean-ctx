@@ -47,6 +47,35 @@ pub(crate) fn compact_format_passthrough_outcome() -> Outcome {
         ),
     }
 }
+
+/// Surfaces the post-dispatch output-triage filter state (#1534): the 3.9.19
+/// filter dropped MCP tool output while `doctor` reported every check green.
+/// From 3.9.20 the filter is opt-in (`decision_loop.max_filter_level`,
+/// default 0) and this line keeps its state on the board either way.
+pub(crate) fn output_triage_outcome() -> Outcome {
+    output_triage_outcome_for(
+        crate::core::config::Config::load()
+            .decision_loop
+            .max_filter_level,
+    )
+}
+
+pub(super) fn output_triage_outcome_for(max_filter_level: u8) -> Outcome {
+    if max_filter_level == 0 {
+        return Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Output triage{RST}  {GREEN}off{RST}  {DIM}(decision_loop.max_filter_level = 0 — tool output is never dropped){RST}"
+            ),
+        };
+    }
+    Outcome {
+        ok: true,
+        line: format!(
+            "{BOLD}Output triage{RST}  {YELLOW}active (max level {max_filter_level}){RST}  {DIM}(lossy; disable: lean-ctx config set decision_loop.max_filter_level 0){RST}"
+        ),
+    }
+}
 pub(crate) fn shell_aliases_outcome() -> Outcome {
     let Some(home) = dirs::home_dir() else {
         return Outcome {

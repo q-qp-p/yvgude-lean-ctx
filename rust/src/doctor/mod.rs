@@ -425,6 +425,11 @@ fn run_inner(json: bool) -> u32 {
     let skill = skill_files_outcome();
     board.check(&skill);
 
+    // 9b) Output triage (#1534): the 3.9.19 filter ran invisibly while doctor
+    // reported all green — its state stays on the board whether on or off.
+    let output_triage = output_triage_outcome();
+    board.check(&output_triage);
+
     // 10) Port
     let port = port_3333_outcome();
     board.check(&port);
