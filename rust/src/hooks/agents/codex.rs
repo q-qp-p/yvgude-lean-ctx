@@ -34,6 +34,30 @@ pub fn install_codex_hook() {
 
 fn install_codex_solution_rules(codex_dir: &std::path::Path) -> bool {
     let rules_path = codex_dir.join("instructions.md");
+    // GH #1526: `rules_injection = off` must not write the instructions.md
+    // rules block — and it strips the block a prior install left behind.
+    if crate::core::config::Config::load().rules_injection_effective()
+        == crate::core::config::RulesInjection::Off
+    {
+        if rules_path.exists()
+            && std::fs::read_to_string(&rules_path).is_ok_and(|c| {
+                crate::marked_block::contains_marker_line(
+                    &c,
+                    crate::core::rules_canonical::START_MARK,
+                )
+            })
+        {
+            crate::marked_block::remove_from_file(
+                &rules_path,
+                crate::core::rules_canonical::START_MARK,
+                crate::core::rules_canonical::END_MARK,
+                true,
+                "Codex rules",
+            );
+            return true;
+        }
+        return false;
+    }
     let block = solution_aware_rules_block(crate::rules_inject::canonical_rules_block());
     upsert_solution_rules(&rules_path, &block)
 }
@@ -430,6 +454,71 @@ mod tests {
     };
     use serde_json::json;
 
+    /// GH #1526: `rules_injection = off` must not write ANY Codex steering
+    /// file (instructions.md rules block, AGENTS.md block, LEAN-CTX.md) — and
+    /// it removes what a prior install left behind.
+    #[test]
+    fn rules_injection_off_writes_no_codex_steering_files() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let tmp = tempfile::tempdir().expect("temp codex dir");
+        let codex_dir = tmp.path();
+
+        // Simulate a prior shared install's artifacts.
+        std::fs::write(
+            codex_dir.join("LEAN-CTX.md"),
+            "old lean-ctx steering content",
+        )
+        .expect("seed LEAN-CTX.md");
+        std::fs::write(
+            codex_dir.join("AGENTS.md"),
+            format!(
+                "# Global Agent Instructions\n\n{}\nlean-ctx block\n{}\n",
+                crate::core::rules_canonical::AGENTS_BLOCK_START,
+                crate::core::rules_canonical::AGENTS_BLOCK_END
+            ),
+        )
+        .expect("seed AGENTS.md");
+        std::fs::write(
+            codex_dir.join("instructions.md"),
+            format!(
+                "{}\nold rules\n{}\n",
+                crate::core::rules_canonical::START_MARK,
+                crate::core::rules_canonical::END_MARK
+            ),
+        )
+        .expect("seed instructions.md");
+
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "off");
+        let docs_changed = crate::hooks::install_codex_instruction_docs(codex_dir);
+        let rules_changed = super::install_codex_solution_rules(codex_dir);
+        crate::test_env::remove_var("LEAN_CTX_RULES_INJECTION");
+
+        assert!(docs_changed, "stale steering artifacts must be removed");
+        assert!(rules_changed, "stale instructions block must be removed");
+        assert!(
+            !codex_dir.join("LEAN-CTX.md").exists(),
+            "off must remove the lean-ctx-owned LEAN-CTX.md"
+        );
+        let agents = std::fs::read_to_string(codex_dir.join("AGENTS.md")).unwrap_or_default();
+        assert!(
+            !agents.contains(crate::core::rules_canonical::AGENTS_BLOCK_START),
+            "off must strip the AGENTS.md lean-ctx block: {agents}"
+        );
+        let instructions =
+            std::fs::read_to_string(codex_dir.join("instructions.md")).unwrap_or_default();
+        assert!(
+            !instructions.contains(crate::core::rules_canonical::START_MARK),
+            "off must strip the instructions.md rules block: {instructions}"
+        );
+
+        // Idempotent: a second run on the cleaned directory writes nothing.
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "off");
+        let docs_again = crate::hooks::install_codex_instruction_docs(codex_dir);
+        let rules_again = super::install_codex_solution_rules(codex_dir);
+        crate::test_env::remove_var("LEAN_CTX_RULES_INJECTION");
+        assert!(!docs_again && !rules_again, "off must be idempotent");
+    }
+
     /// Minimal env block (data dir only) for the config-rewrite tests that do
     /// not exercise project-root/extra-roots propagation.
     fn data_dir_pairs() -> Vec<(String, String)> {
@@ -602,6 +691,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn codex_docs_steer_to_reliable_mcp_path_without_false_hook_claim() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-desktop-note");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -638,6 +732,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn install_codex_docs_preserves_existing_user_instructions() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-preserve");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -672,6 +771,11 @@ command = \"lean-ctx\"
 
     #[test]
     fn install_codex_docs_updates_only_marked_block() {
+        // GH #1526 follow-up: install_codex_instruction_docs branches on
+        // rules_injection now — pin Shared under the env lock so the
+        // off-mode regression test cannot poison this one in parallel.
+        let _lock = crate::core::data_dir::test_env_lock();
+        crate::test_env::set_var("LEAN_CTX_RULES_INJECTION", "shared");
         let tmp = std::env::temp_dir().join("lean-ctx-test-codex-marked");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();

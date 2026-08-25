@@ -101,9 +101,37 @@ const CODEX_AGENTS_BLOCK_END: &str = crate::core::rules_canonical::AGENTS_BLOCK_
 pub(super) fn install_codex_instruction_docs(codex_dir: &Path) -> bool {
     let agents_path = codex_dir.join("AGENTS.md");
     let lean_ctx_md = codex_dir.join("LEAN-CTX.md");
-    let lean_ctx_content = codex_instruction_doc_content();
 
     let mut changed = false;
+
+    // GH #1526: `rules_injection = off` must not write ANY steering file — the
+    // Codex path previously only special-cased Dedicated, so Off fell through
+    // to the Shared branch and wrote AGENTS.md + LEAN-CTX.md anyway. Off now
+    // removes the lean-ctx-owned artifacts a prior install left behind.
+    if crate::core::config::Config::load().rules_injection_effective()
+        == crate::core::config::RulesInjection::Off
+    {
+        if lean_ctx_md.exists() && std::fs::remove_file(&lean_ctx_md).is_ok() {
+            changed = true;
+        }
+        if agents_path.exists()
+            && std::fs::read_to_string(&agents_path).is_ok_and(|c| {
+                crate::marked_block::contains_marker_line(&c, CODEX_AGENTS_BLOCK_START)
+            })
+        {
+            crate::marked_block::remove_from_file(
+                &agents_path,
+                CODEX_AGENTS_BLOCK_START,
+                CODEX_AGENTS_BLOCK_END,
+                true,
+                "Codex AGENTS.md lean-ctx block",
+            );
+            changed = true;
+        }
+        return changed;
+    }
+
+    let lean_ctx_content = codex_instruction_doc_content();
 
     // LEAN-CTX.md (full rules) is lean-ctx-owned and fully removable — written in
     // both modes, never the user's AGENTS.md.

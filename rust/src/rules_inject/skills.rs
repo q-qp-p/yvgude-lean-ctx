@@ -96,6 +96,16 @@ fn is_skill_agent_detected(agent_key: &str, home: &std::path::Path) -> bool {
 
 /// Install SKILL.md for a specific agent. Returns the installed path.
 pub fn install_skill_for_agent(home: &std::path::Path, agent_key: &str) -> Result<PathBuf, String> {
+    // GH #1526: `rules_injection = off` opts out of every lean-ctx-authored
+    // steering file. `install_all_skills` already honors this (GH #361); the
+    // single-agent path used by `init --agent`/`setup` missed the same guard.
+    if crate::core::config::Config::load().rules_injection_effective()
+        == crate::core::config::RulesInjection::Off
+    {
+        return Err(format!(
+            "rules_injection=off — skill install skipped for '{agent_key}'"
+        ));
+    }
     let targets = build_skill_targets(home);
     let target = targets
         .into_iter()
