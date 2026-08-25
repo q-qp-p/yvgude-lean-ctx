@@ -101,6 +101,15 @@ pub const HYBRID_AGENTS: &[&str] = &[
     "verdent",
 ];
 
+/// True when `agent` is integrated via `init --agent` / `setup` (hooks, rules,
+/// MCP registration). GH #1520: used by `wrap`'s error path to point users of
+/// a supported-but-not-proxy-wrappable agent (e.g. opencode) at the working
+/// command instead of a bare "unsupported agent".
+pub fn is_supported_agent(agent: &str) -> bool {
+    let key = agent.to_ascii_lowercase();
+    REPLACE_AGENTS.contains(&key.as_str()) || HYBRID_AGENTS.contains(&key.as_str())
+}
+
 /// Auto-detect the best hook mode for a given agent key.
 ///
 /// Priority: disabled/shadow_mode cap > config override > Replace > Hybrid > Mcp

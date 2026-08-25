@@ -86,6 +86,14 @@ impl FromStr for WrapAgent {
             "grok" => Ok(Self::Grok),
             "aider" => Ok(Self::Aider),
             "copilot" | "copilot-cli" => Ok(Self::Copilot),
+            // GH #1520: agents that ARE fully supported via `init`/`setup` but
+            // have no proxy-wrap profile must point users at the working path
+            // instead of a bare "unsupported agent".
+            other if crate::hooks::is_supported_agent(other) => Err(format!(
+                "'{value}' has no proxy wrap profile, but it IS supported — run:\n  \
+                 lean-ctx init --agent {value}\n\
+                 (installs MCP server, hooks and rules for {value})"
+            )),
             _ => Err(format!("unsupported agent '{value}'")),
         }
     }
@@ -697,6 +705,21 @@ mod tests {
         assert_eq!(parsed.agent, WrapAgent::Codex);
         assert_eq!(parsed.port, DEFAULT_PROXY_PORT);
         assert!(!parsed.unwrap);
+    }
+
+    /// GH #1520: a supported-but-not-wrappable agent (opencode et al.) must be
+    /// pointed at `init --agent`, not dismissed as "unsupported agent".
+    #[test]
+    fn supported_non_wrap_agent_points_at_init() {
+        let err = WrapAgent::from_str("opencode").expect_err("opencode has no wrap profile");
+        assert!(
+            err.contains("lean-ctx init --agent opencode"),
+            "error must name the working command: {err}"
+        );
+        assert!(!err.starts_with("unsupported agent"));
+        // Genuinely unknown agents keep the plain error.
+        let unknown = WrapAgent::from_str("nonexistent-agent-xyz").expect_err("unknown agent");
+        assert!(unknown.contains("unsupported agent"));
     }
 
     #[test]
