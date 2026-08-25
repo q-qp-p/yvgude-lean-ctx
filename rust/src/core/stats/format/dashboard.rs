@@ -367,23 +367,26 @@ fn render_gain_dashboard_for_store(
     let c3 = t.warning.fg();
     let c4 = t.accent.fg();
 
-    let kw = 16;
-    let v1 = theme::pad_right(&format!("{c1}{bold}{tok_val}{rst}"), kw);
-    let v2 = theme::pad_right(&format!("{c2}{bold}{pct_val}{rst}"), kw);
-    let v3 = theme::pad_right(&format!("{c3}{bold}{cmd_val}{rst}"), kw);
-    let v4 = theme::pad_right(&format!("{c4}{bold}{usd_val}{rst}"), kw);
+    // Per-column widths, not one shared width: "token difference" is exactly 16
+    // columns, so a uniform 16 left no gap and the label ran into "compression".
+    // 5 lead + 17 + 15 + 16 + 16 = 69 of the 70-wide box.
+    let kw = [17usize, 15, 16, 16];
+    let v1 = theme::pad_right(&format!("{c1}{bold}{tok_val}{rst}"), kw[0]);
+    let v2 = theme::pad_right(&format!("{c2}{bold}{pct_val}{rst}"), kw[1]);
+    let v3 = theme::pad_right(&format!("{c3}{bold}{cmd_val}{rst}"), kw[2]);
+    let v4 = theme::pad_right(&format!("{c4}{bold}{usd_val}{rst}"), kw[3]);
     out.push(box_line(&format!("     {v1}{v2}{v3}{v4}")));
 
-    let ul1 = theme::pad_right(&t.kpi_underline(tok_val.len(), &t.success), kw);
-    let ul2 = theme::pad_right(&t.kpi_underline(pct_val.len(), &t.secondary), kw);
-    let ul3 = theme::pad_right(&t.kpi_underline(cmd_val.len(), &t.warning), kw);
-    let ul4 = theme::pad_right(&t.kpi_underline(usd_val.len(), &t.accent), kw);
+    let ul1 = theme::pad_right(&t.kpi_underline(tok_val.len(), &t.success), kw[0]);
+    let ul2 = theme::pad_right(&t.kpi_underline(pct_val.len(), &t.secondary), kw[1]);
+    let ul3 = theme::pad_right(&t.kpi_underline(cmd_val.len(), &t.warning), kw[2]);
+    let ul4 = theme::pad_right(&t.kpi_underline(usd_val.len(), &t.accent), kw[3]);
     out.push(box_line(&format!("     {ul1}{ul2}{ul3}{ul4}")));
 
-    let l1 = theme::pad_right(&format!("{dim}token difference{rst}"), kw);
-    let l2 = theme::pad_right(&format!("{dim}compression{rst}"), kw);
-    let l3 = theme::pad_right(&format!("{dim}commands{rst}"), kw);
-    let l4 = theme::pad_right(&format!("{dim}USD estimate{rst}"), kw);
+    let l1 = theme::pad_right(&format!("{dim}token difference{rst}"), kw[0]);
+    let l2 = theme::pad_right(&format!("{dim}compression{rst}"), kw[1]);
+    let l3 = theme::pad_right(&format!("{dim}commands{rst}"), kw[2]);
+    let l4 = theme::pad_right(&format!("{dim}USD estimate{rst}"), kw[3]);
     out.push(box_line(&format!("     {l1}{l2}{l3}{l4}")));
     out.push(box_line(""));
     out.push(format!("  {}", t.box_bottom(w)));
@@ -439,16 +442,19 @@ fn render_gain_dashboard_for_store(
     out.push(String::new());
 
     // -- COST BREAKDOWN section --
-    let price_label = format!(
-        "{} · @ ${:.2}/M input · ${:.2}/M output · {}",
-        cost_model.model_key,
-        cost_model.input_price_per_m,
-        cost_model.output_price_per_m,
+    // The full pricing detail overflowed the box label (truncated mid-figure at
+    // 66 columns), so the header carries only the match kind and the prices get
+    // their own row inside the box.
+    let cost_label = format!(
+        "COST BREAKDOWN ──── {}",
         pricing_match_label(cost_model.pricing_match_kind),
     );
-    let cost_label = format!("COST BREAKDOWN ──── {price_label}");
     out.push(format!("  {}", t.box_top_labeled(w, &cost_label)));
     out.push(sec_line(""));
+    out.push(sec_line(&format!(
+        "  {dim}{} · ${:.2}/M in · ${:.2}/M out{rst}",
+        cost_model.model_key, cost_model.input_price_per_m, cost_model.output_price_per_m,
+    )));
     let without_bar = t.gradient_bar(1.0, 26);
     let with_ratio = cost.total_cost_with / cost.total_cost_without.max(0.01);
     let with_bar = t.gradient_bar(with_ratio, 26);
@@ -545,11 +551,19 @@ fn render_gain_dashboard_for_store(
     if store.daily.len() >= 2 {
         out.push(String::new());
         out.push(format!("  {}", t.box_top_labeled(w, "RECENT DAYS")));
-        out.push(sec_line(&format!(
-            "  {dim}{}{rst}",
-            "Date     Cmds  Observed    Saved     Rate    Trend     Version",
-            dim = t.muted.fg()
-        )));
+        // Built from the same column widths as the rows below — the old literal
+        // sat one to two columns right of the data it labelled.
+        let hdr = format!(
+            "  {} {:>4}  {} {} {:>6}  {}  {}",
+            theme::pad_right("Date", 7),
+            "Cmds",
+            theme::pad_right("Observed", 11),
+            theme::pad_right("Saved", 9),
+            "Rate",
+            theme::pad_right("Trend", 8),
+            "Version",
+        );
+        out.push(sec_line(&format!("{dim}{hdr}{rst}", dim = t.muted.fg())));
 
         let max_day_saved = store
             .daily
@@ -597,11 +611,16 @@ fn render_gain_dashboard_for_store(
                 day.commands,
             )));
         }
+        // Three rows, not two: the first note was 75 columns and lost its last
+        // word to the 70-wide box.
         out.push(sec_line(&format!(
-            "  {dim}Rate = metered ctx_* baseline → returned tokens; commands include writes.{rst}"
+            "  {dim}Rate = metered ctx_* baseline → returned tokens;{rst}"
         )));
         out.push(sec_line(&format!(
-            "  {dim}Native sed/cat/Bash bypasses are unseen; n/a = no measured baseline.{rst}"
+            "  {dim}commands include writes; native sed/cat/Bash bypasses are unseen.{rst}"
+        )));
+        out.push(sec_line(&format!(
+            "  {dim}n/a = no measured baseline.{rst}"
         )));
         out.push(format!("  {}", t.box_bottom_square(w)));
     }
