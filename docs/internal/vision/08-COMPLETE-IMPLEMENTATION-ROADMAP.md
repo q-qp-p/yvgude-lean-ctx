@@ -152,11 +152,14 @@ trusting the producer; no universal performance or savings claim is needed.
 
 ### P3 — Supported SDK Preview vertical slice
 
-**Status (2026-08-24): exit candidate complete.** Candidate
+**Status (2026-08-25): P3 COMPLETE/INTEGRATED.** Merge
+`e47cb432f2e9e2d7ecf13e3c85a0d1cc4fa68f96` passed exact-baseline CI
+`32778481164`, Security `32778481373`, and CodeQL `32778481121`. Candidate
 `79e3888862659e5ac0623a8fa00e16155aa144da` proves the Python-owned Preview
 lifecycle through a strict local Engine-operation transport, native Embed, the
 actual OpenAI Agents SDK, exact recovery, factual receipts and explicit
-degradation. P4 remains unentered pending explicit authorization.
+degradation. `LIVE PROVIDER SMOKE: UNVERIFIED`.
+P4 ACTIVE governance follows the integrated seam; P5/Cloud not begun.
 
 **Objective:** make the existing Python reference path function end-to-end.
 
@@ -179,10 +182,10 @@ the host agent loop.
 
 ### P4 — Separate BSL 1.1 Production SDK repository
 
-**Status (2026-08-24): not entered.** Separate repository, primary-product
+**Status (2026-08-25): P4 ACTIVE.** Separate repository, primary-product
 priority and BSL 1.1 are DECIDED. Repository access, namespace, exact BSL
 parameters, OEM/pricing, contributor, security and release policy remain
-pending.
+pending; production SDK implementation has not started.
 
 **Objective:** create the premium SDK product around the small proven contract;
 remove lifecycle, integration, compatibility and maintenance burden from the
@@ -210,6 +213,9 @@ real customer/design-partner path validates dependency value. Cloud remains
 absent.
 
 ### P5 — Local Workspace contract
+
+**Status: NOT BEGUN.** P5 remains gated on the P4 exit and has no implementation
+or promoted Workspace contract.
 
 **Objective:** introduce `ContextWorkspace` only after the session/evidence
 path has earned P4.
@@ -278,6 +284,9 @@ references without implicit project-state mutation.
 transfer, cross-project leakage or false “handoff complete” status.
 
 ### P8 — Optional Cloud Receipt Board
+
+**Status: NOT BEGUN.** Cloud work remains unopened and is not required for local
+Engine or SDK operation.
 
 **Objective:** add the smallest credible organization surface in a private
 service, never inside OSS Engine.
