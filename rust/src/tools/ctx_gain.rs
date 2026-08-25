@@ -398,19 +398,20 @@ fn format_tasks_themed(engine: &GainEngine, t: &crate::core::theme::Theme, out: 
         .unwrap_or(1)
         .max(1);
 
+    // Column widths sum to 67 of the 70-wide box: 1 + 12 + 1 + 10 + 1 + 8 + 1
+    // + 11 + 1 + 12 + 1 + 8. Counts are right-aligned inside the ANSI wrapper
+    // (the `{:>N}` sees plain text) so five-digit tool counts no longer push
+    // the spend column past the border.
     for r in rows.iter().take(13) {
         let ratio = r.tokens_saved as f64 / max_saved as f64;
-        let bar = pad_right(&t.gradient_bar(ratio, 12), 12);
-        let cat = pad_right(&format!("{a}{}{rst}", r.category.label()), 14);
-        let saved = pad_right(
-            &format!("{s}{bold}{}{rst}", format_tokens(r.tokens_saved)),
-            9,
-        );
-        let cmds = format!("{dim}{:>5} cmds{rst}", r.commands);
-        let tools = format!("{dim}{:>3} tools{rst}", r.tool_calls);
-        let spend = format!("{m}{}{rst}", format_usd(r.tool_spend_usd));
+        let bar = pad_right(&t.gradient_bar(ratio, 10), 10);
+        let cat = pad_right(r.category.label(), 12);
+        let saved = format!("{s}{bold}{:>8}{rst}", format_tokens(r.tokens_saved));
+        let cmds = format!("{dim}{:>6} cmds{rst}", r.commands);
+        let tools = format!("{dim}{:>6} tools{rst}", r.tool_calls);
+        let spend = format!("{m}{:>8}{rst}", format_usd(r.tool_spend_usd));
         out.push(sec_line(&format!(
-            " {cat} {bar} {saved} {cmds}  {tools}  {spend}"
+            " {a}{cat}{rst} {bar} {saved} {cmds} {tools} {spend}"
         )));
     }
 
@@ -489,14 +490,14 @@ fn format_cost_themed(
                 &format!("{a}{}{rst}", truncate_str(&agent.agent_id, 18)),
                 20,
             );
-            let cost_s = format!("{s}${:.4}{rst}", agent.cost_usd);
+            let cost_s = format!("{s}{:>8}{rst}", format!("${:.4}", agent.cost_usd));
             let model_tag = agent
                 .model_key
                 .as_deref()
                 .map(|mk| format!(" {dim}[{mk}]{rst}"))
                 .unwrap_or_default();
             out.push(sec_line(&format!(
-                " {dim}{:>2}. {rst}{name} {bar} {cost_s} {dim}{}c{rst}{model_tag}",
+                " {dim}{:>2}. {rst}{name} {bar} {cost_s} {dim}{:>4}c{rst}{model_tag}",
                 i + 1,
                 agent.total_calls
             )));
@@ -517,9 +518,9 @@ fn format_cost_themed(
                 &format!("{w_col}{}{rst}", pad_right(&tool.tool_name, 12)),
                 14,
             );
-            let cost_s = format!("{s}${:.4}{rst}", tool.cost_usd);
+            let cost_s = format!("{s}{:>9}{rst}", format!("${:.4}", tool.cost_usd));
             out.push(sec_line(&format!(
-                " {dim}{:>2}. {rst}{name} {bar} {cost_s} {dim}{}c avg {:.0}in+{:.0}out{rst}",
+                " {dim}{:>2}. {rst}{name} {bar} {cost_s} {dim}{:>6}c avg {:>4.0}in+{:>5.0}out{rst}",
                 i + 1,
                 tool.total_calls,
                 tool.avg_input_tokens,
@@ -574,9 +575,9 @@ fn format_agents_themed(
             &format!("{a}{}{rst}", truncate_str(&agent.agent_id, 22)),
             24,
         );
-        let calls = format!("{s}{bold}{:>3}{rst}c", agent.total_calls);
+        let calls = format!("{s}{bold}{:>4}{rst}c", agent.total_calls);
         let toks = format!(
-            "{dim}{}in {}out{rst}",
+            "{dim}{:>7}in {:>8}out{rst}",
             format_tokens(agent.total_input_tokens),
             format_tokens(agent.total_output_tokens)
         );
@@ -709,13 +710,12 @@ fn format_heatmap_themed(
         let bar = pad_right(&t.gradient_bar(ratio, 10), 10);
         let short_path = shorten_path(&r.path, 28);
         let path_col = pad_right(&format!("{dim}{short_path}{rst}"), 30);
-        let saved = pad_right(
-            &format!("{s}{bold}{}{rst}", format_tokens(r.tokens_saved)),
-            8,
-        );
+        let saved = format!("{s}{bold}{:>8}{rst}", format_tokens(r.tokens_saved));
         let pct = t.pct_color(f64::from(r.compression_pct));
+        // `{:>3.0}%` — a 100% row is three digits and used to shove the access
+        // column one place right.
         out.push(sec_line(&format!(
-            " {dim}{:>2}.{rst} {path_col} {bar} {saved} {pct}{:>2.0}%{rst} {dim}{}x{rst}",
+            " {dim}{:>2}.{rst} {path_col} {bar} {saved} {pct}{:>3.0}%{rst} {dim}{:>4}x{rst}",
             i + 1,
             r.compression_pct,
             r.access_count
