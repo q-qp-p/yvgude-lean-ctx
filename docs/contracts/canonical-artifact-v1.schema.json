@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://leanctx.dev/contracts/canonical-artifact-v1.schema.json",
+  "title": "LeanCTX CanonicalArtifactEnvelopeV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_kind", "payload"],
+  "properties": {
+    "schema_version": { "const": "leanctx.canonical-artifact/v1" },
+    "artifact_kind": {
+      "enum": ["task_envelope", "execution_plan", "engine_invocation", "accepted_outcome", "receipt_document"]
+    },
+    "payload": { "type": "object" }
+  }
+}

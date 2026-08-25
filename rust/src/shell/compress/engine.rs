@@ -584,7 +584,14 @@ fn compress_if_beneficial_with_exit(
         if level.is_active() {
             let terse_result =
                 crate::core::terse::pipeline::compress(output, &level, Some(&compressed));
-            if terse_result.quality_passed {
+            // #1286: the terse result may only REPLACE the pattern compressor's
+            // output when it is actually smaller. It used to win on
+            // quality_passed alone — measured: `ls -la` had its ~80%-saving
+            // structural compression displaced by a ~6% terse dictionary pass.
+            if terse_result.quality_passed
+                && count_tokens_for(&terse_result.output, family)
+                    < count_tokens_for(&compressed, family)
+            {
                 compressed = terse_result.output;
             }
         }

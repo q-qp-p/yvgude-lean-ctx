@@ -746,6 +746,8 @@ jobs:
             docs/contracts/delivery-evidence-v1.json --root .
       - name: Rehearse hermetic rollback contract
         run: python3 tests/delivery/test_rehearse_delivery.py
+      - name: Verify public protocol surface freeze
+        run: python3 scripts/check-open-core-boundary.py
       - name: Run delivery, security, and OCLA contract tests
         run: python3 -m pytest -q tests/delivery tests/security tests/ocla_contract_suite
       - name: Verify audited public-tree delta

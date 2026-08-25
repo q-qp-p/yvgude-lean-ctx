@@ -460,22 +460,16 @@ mod contracts_integrity {
     }
 
     #[test]
-    fn architecture_references_ir_in_hotpath() {
+    fn architecture_points_to_canonical_product_authority() {
         let content = include_str!("../../../ARCHITECTURE.md");
 
         assert!(
-            content.contains("IRRecord"),
-            "ARCHITECTURE.md should reference IR recording in flow"
-        );
-        // Derive the count from the registry SSOT so the doc check can never
-        // drift again: adding/removing a tool updates this automatically.
-        let expected = format!(
-            "{} trait-based tools",
-            lean_ctx::server::registry::tool_count()
+            content.contains("docs/internal/vision/PRODUCT-ARCHITECTURE.md"),
+            "ARCHITECTURE.md should point to the canonical product architecture"
         );
         assert!(
-            content.contains(&expected),
-            "ARCHITECTURE.md should reference the current registry count ({expected})"
+            content.contains("implementation-orientation stub"),
+            "ARCHITECTURE.md should retain its non-product boundary"
         );
         assert!(
             !content.contains("pipeline_stages.rs"),

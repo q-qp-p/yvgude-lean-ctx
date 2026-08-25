@@ -646,13 +646,19 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn printf_adapter(temp: &TempDir) -> ExternalProcessAdapter {
+    fn stdin_consuming_adapter(temp: &TempDir) -> ExternalProcessAdapter {
+        // Keep the child alive until the host closes stdin; an output-only
+        // fixture can exit before `write_all` and race into EPIPE on Linux.
         ExternalProcessAdapter::discover(
             external_manifest(temp),
-            "/usr/bin/printf",
-            [OsString::from(
-                "{\"word_count\":3,\"char_count\":15,\"line_count\":1}",
-            )],
+            "/bin/sh",
+            [
+                OsString::from("-c"),
+                OsString::from(
+                    "while IFS= read -r _; do :; done; \
+                     printf '%s' '{\"word_count\":3,\"char_count\":15,\"line_count\":1}'",
+                ),
+            ],
         )
         .expect("bounded local process should be discovered")
     }
@@ -661,7 +667,7 @@ mod tests {
     #[test]
     fn discovered_external_process_invokes_reports_and_registers() {
         let temp = tempfile::tempdir().expect("fixture directory");
-        let adapter = printf_adapter(&temp);
+        let adapter = stdin_consuming_adapter(&temp);
         let result = adapter
             .invoke(test_invocation("hello world foo"))
             .expect("external process invocation");
@@ -697,7 +703,7 @@ mod tests {
     #[test]
     fn external_adapter_can_be_disabled_without_unregistering() {
         let temp = tempfile::tempdir().expect("fixture directory");
-        let adapter = printf_adapter(&temp);
+        let adapter = stdin_consuming_adapter(&temp);
         adapter.disable();
 
         assert!(adapter.invoke(test_invocation("hello world foo")).is_err());

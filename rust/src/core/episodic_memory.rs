@@ -577,8 +577,7 @@ pub mod tests {
 
     #[test]
     fn record_session_episode_deduplicates_per_agent() {
-        let tmp = tempfile::tempdir().unwrap();
-        crate::test_env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
+        let _isolated = crate::core::data_dir::isolated_data_dir();
         let policy = EpisodicPolicy::default();
         let project_hash = "episodic-agent-dedup";
         let mut session = super::super::session::SessionState::new();

@@ -18,6 +18,12 @@ pub(super) fn exec_buffered(
 
     let start = std::time::Instant::now();
 
+    // #1286: `command` is the clean user command (classification, compression,
+    // logging); the zsh preamble is added only to the string handed to the
+    // child shell.
+    let spawn_command = super::platform::zsh_safe_command(command, shell);
+    let spawn_command = spawn_command.as_str();
+
     let mut cmd = Command::new(shell);
 
     #[cfg(windows)]
@@ -51,20 +57,20 @@ pub(super) fn exec_buffered(
                         "lean-ctx: temp script unavailable ({e}); running PowerShell inline"
                     );
                     cmd.arg(shell_flag);
-                    cmd.arg(command);
+                    cmd.arg(spawn_command);
                     ps_tmp_path = None;
                 }
             }
         } else {
             cmd.arg(shell_flag);
-            cmd.arg(command);
+            cmd.arg(spawn_command);
             ps_tmp_path = None;
         }
     }
     #[cfg(not(windows))]
     {
         cmd.arg(shell_flag);
-        cmd.arg(command);
+        cmd.arg(spawn_command);
     }
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());

@@ -16,6 +16,99 @@ fn file_read_rewrite_cat() {
     assert_eq!(r, Some("lean-ctx read src/main.rs".to_string()));
 }
 
+/// #1279: `cat a b` used to collapse into `read "a b"` (one bogus path) and
+/// `cat -n f` into `read "-n f"`. Both must decline instead.
+#[test]
+fn file_read_cat_declines_multi_file_and_flags() {
+    assert_eq!(rewrite_file_read_command("cat a.md b.md", "lean-ctx"), None);
+    assert_eq!(
+        rewrite_file_read_command("cat -n src/main.rs", "lean-ctx"),
+        None
+    );
+    // A quoted path with spaces is one token — still rewritten.
+    assert_eq!(
+        rewrite_file_read_command("cat 'my file.md'", "lean-ctx"),
+        Some("lean-ctx read \"my file.md\"".to_string())
+    );
+}
+
+/// #1279: sed -n range prints are line-range reads — the exact form agent
+/// auto-modes recommend, previously a silent passthrough.
+#[test]
+fn file_read_rewrite_sed_range_print() {
+    assert_eq!(
+        rewrite_file_read_command("sed -n '1,90p' src/main.rs", "lean-ctx"),
+        Some("lean-ctx read src/main.rs -m lines:1-90".to_string())
+    );
+    assert_eq!(
+        rewrite_file_read_command("sed -n '42p' src/main.rs", "lean-ctx"),
+        Some("lean-ctx read src/main.rs -m lines:42-42".to_string())
+    );
+    // Write-mode, open-ended, and regex sed forms must never be touched.
+    assert_eq!(
+        rewrite_file_read_command("sed -i 's/a/b/' f.rs", "lean-ctx"),
+        None
+    );
+    assert_eq!(
+        rewrite_file_read_command("sed -n '5,$p' f.rs", "lean-ctx"),
+        None
+    );
+    assert_eq!(
+        rewrite_file_read_command("sed -n '/foo/p' f.rs", "lean-ctx"),
+        None
+    );
+}
+
+/// #1279: bare awk NR comparisons are line-limited reads.
+#[test]
+fn file_read_rewrite_awk_nr() {
+    assert_eq!(
+        rewrite_file_read_command("awk 'NR<=20' src/main.rs", "lean-ctx"),
+        Some("lean-ctx read src/main.rs -m lines:1-20".to_string())
+    );
+    assert_eq!(
+        rewrite_file_read_command("awk 'NR<20' src/main.rs", "lean-ctx"),
+        Some("lean-ctx read src/main.rs -m lines:1-19".to_string())
+    );
+    assert_eq!(
+        rewrite_file_read_command("awk 'NR==7' src/main.rs", "lean-ctx"),
+        Some("lean-ctx read src/main.rs -m lines:7-7".to_string())
+    );
+    // Anything beyond a bare NR comparison declines.
+    assert_eq!(
+        rewrite_file_read_command("awk '{print $1}' f.rs", "lean-ctx"),
+        None
+    );
+    assert_eq!(
+        rewrite_file_read_command("awk 'NR>5 && NR<10 {print}' f.rs", "lean-ctx"),
+        None
+    );
+}
+
+/// #1279: chains whose lead segment is not rewritable used to escape whole.
+/// Now the rewritable file-read segments are rewritten in place.
+#[test]
+fn compound_segments_rewritten_in_place() {
+    assert_eq!(
+        build_rewrite_compound("echo hi && cat src/main.rs", "lean-ctx"),
+        Some("echo hi && lean-ctx read src/main.rs".to_string())
+    );
+    assert_eq!(
+        build_rewrite_compound("echo hi && sed -n '1,30p' src/main.rs", "lean-ctx"),
+        Some("echo hi && lean-ctx read src/main.rs -m lines:1-30".to_string())
+    );
+    // Pipes change consumer semantics — segment-wise rewriting must decline.
+    assert_eq!(
+        super::file_rewrite::rewrite_segments_in_place(
+            &crate::compound_lexer::split_compound("cat f.rs | grep foo"),
+            "lean-ctx"
+        ),
+        None
+    );
+    // A chain with nothing rewritable stays untouched.
+    assert_eq!(build_rewrite_compound("echo a && echo b", "lean-ctx"), None);
+}
+
 #[test]
 fn rewrite_skip_reason_tracks_candidate_none_branches() {
     // Every command that `rewrite_candidate` declines must get a stable,

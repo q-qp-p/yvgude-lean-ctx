@@ -263,6 +263,23 @@ mod tests {
     }
 
     #[test]
+    fn decision_loop_keys_round_trip_through_cli_setter() {
+        let schema = ConfigSchema::generate();
+        let mut table = toml::Table::new();
+        for (key, value) in [
+            ("decision_loop.enabled", "false"),
+            ("decision_loop.max_filter_level", "0"),
+        ] {
+            let key_schema = schema.lookup(key).expect("decision-loop key in schema");
+            set_nested(&mut table, key, parse_value(value, key_schema).unwrap()).unwrap();
+        }
+
+        let cfg: Config = toml::Value::Table(table).try_into().unwrap();
+        assert!(!cfg.decision_loop.enabled);
+        assert_eq!(cfg.decision_loop.max_filter_level, 0);
+    }
+
+    #[test]
     fn set_nested_flat_key() {
         let mut table = toml::Table::new();
         set_nested(&mut table, "ultra_compact", toml::Value::Boolean(true)).unwrap();

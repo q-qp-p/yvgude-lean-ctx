@@ -327,14 +327,54 @@ fn print_deny_compression_markers(tool_name: &str, payload: &str) {
              Set LEAN_CTX_ALLOW_COMPRESSED_WRITE=1 to override."
         ),
     };
+    emit_deny(&msg, payload);
+}
+
+/// Emit a deny verdict in every hook dialect at once, then exit.
+///
+/// #1277: the legacy output (`{"decision":"deny",...}` + exit 2) left Claude
+/// Code blind — it expects `hookSpecificOutput.permissionDecision` on exit 0,
+/// or a stderr message on exit 2, and rendered the old shape as
+/// "PreToolUse hook error: No stderr output". The call still blocked, but the
+/// model got no guidance to switch to ctx_*.
+///
+/// Strategy:
+/// - stdout: one JSON object carrying the Cursor legacy keys, the Copilot
+///   top-level `permissionDecision`, and the Claude Code `hookSpecificOutput`.
+/// - stderr: the plain reason (Claude Code surfaces stderr on exit 2).
+/// - exit code: 0 for Claude-Code-shaped payloads (`transcript_path` marker)
+///   so the JSON verdict renders as a clean permission denial; 2 for every
+///   other host, matching their historical exit-code contract.
+fn emit_deny(msg: &str, payload: &str) -> ! {
     let output = serde_json::json!({
+        // Cursor legacy dialect.
         "decision": "deny",
         "reason": msg,
         "permission": "deny",
-        "user_message": msg
+        "user_message": msg,
+        // GitHub Copilot CLI dialect (top-level permissionDecision).
+        "permissionDecision": "deny",
+        // Claude Code / CodeBuddy dialect.
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": msg
+        }
     });
     println!("{output}");
+    eprintln!("{msg}");
+    if payload_is_claude_code(payload) {
+        std::process::exit(0);
+    }
     std::process::exit(2);
+}
+
+/// Claude Code hook payloads carry `transcript_path` (and `hook_event_name`);
+/// no other supported host sends a transcript path. Used only to pick the exit
+/// code Claude Code renders best — the JSON body is host-complete either way.
+fn payload_is_claude_code(payload: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(payload)
+        .is_ok_and(|v| v.get("transcript_path").is_some())
 }
 
 #[derive(Debug)]
@@ -377,14 +417,7 @@ fn detect_marker_source(payload: &str) -> MarkerSource {
 }
 fn print_smart_deny(tool_name: &str, payload: &str) {
     let msg = smart_deny_message(tool_name, payload);
-    let output = serde_json::json!({
-        "decision": "deny",
-        "reason": msg,
-        "permission": "deny",
-        "user_message": msg
-    });
-    println!("{output}");
-    std::process::exit(2);
+    emit_deny(&msg, payload);
 }
 
 /// Build a smart deny message that includes the exact ctx_* call with mapped arguments.

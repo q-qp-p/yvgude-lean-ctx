@@ -11,10 +11,10 @@
 ## Workstreams (parallel)
 
 ```text
-WS-1: CODEBASE CLEANUP          ██████████  Cleanup done; P0 implementation complete; CI rehearsal and admin policy apply remain
+WS-1: CODEBASE CLEANUP          ██████████  Cleanup and P0 operational delivery/security gate complete
 WS-2: SDK V1 + EVIDENCE         ██████████  Phase-A substrate complete; public SDK remains Preview
 WS-3: WEBSITE REBUILD           ████████░░  v2 live, Nav/Footer/SEO/Docs pending
-WS-4: OCLA + COMPOSABLE (B)     ██████████  Substrate complete; P1 runtime caller remains open
+WS-4: OCLA + COMPOSABLE (B)     ██████████  P1 Engine runtime exit complete; P2 evidence integration active
 WS-5: PARTNERSHIP (C)           —— DEFERRED (no near-term partner execution)
 WS-6: BENCHMARK + CALIBRATOR    ██████████  Technical v0 complete; P2 evidence gate remains open
 WS-7: REPRODUCIBLE EVIDENCE (C) ██████░░░░  Manifest and signed-bundle foundations exist; provenance replay and independent verification remain
@@ -36,16 +36,16 @@ This file schedules approved work; it does not supersede those authorities.
 
 | Roadmap phase | Current state | Next exit |
 | --- | --- | --- |
-| **P0 — delivery/security** | Code complete: exact-tag, OCLA conformance, signed manifest, evidence, rehearsal, delivery/security/history suites, and the audited history delta now gate `CI Green`; release/publishing remains transitively blocked. The branch-protection declaration requires `CI Green` plus the independent `Security Scan`. | Run the clean regular-CI rehearsal on `main`, then apply and verify the declared GitHub branch-protection rule with repository-admin authority. |
-| **P1 — Engine runtime spine** | Pending: Engine interface and native adapter proofs exist, but no canonical `ctx_read`/daemon caller invokes `NativeContextEngine`. | One bounded compression caller with policy/identity/digest/receipt linkage and a real-path fixture. |
-| **P2 — canonical evidence** | Partial: receipt, ledger and verifier substrates exist but have no single producer-to-ledger-to-independent-verifier chain. | Canonical Task → Plan → Invocation → Receipt → Outcome projection and replay/tamper verification. |
-| **P3 — Python Preview** | Blocked on P1/P2: the wrapper is fixture-backed; Rust session/Kit/receipt routes are absent. | Live-runtime parity or an explicitly narrowed facade with migration tests. |
+| **P0 — delivery/security** | **Operational exit complete (2026-08-23):** regular `main` CI run `32639983816`, Security Check `32639983788`, and CodeQL `32639983823` passed; declared GitHub `main` protection was applied and independently verified drift-free with required `CI Green` and `Security Scan`, admin enforcement, and force-push/deletion disabled. | Keep the declarative policy and drift verification green; release/publishing remains transitively gated by these checks. |
+| **P1 — Engine runtime spine** | **Exit complete (2026-08-23):** PRs `#1515` and `#1516` merged; latest merge commit `dd55473302`. Explicit `ctx_read` `engine_interface="v1"` dispatch, legacy omission compatibility, policy/rejection receipts, deadline behavior, descriptor/handle-rooted source and artifact containment, failure-atomic publication and adversarial swap/relocation coverage passed final CI run `32662146660`, including native Ubuntu and Windows tests. | Preserve the accepted v1/legacy behavior and feed its invocation, observation and receipt link into the single P2 evidence chain. |
+| **P2 — canonical evidence** | **Exit complete (2026-08-24):** PR `#1522` merged to `github/main@8ebf61a21c063a1d0a86be33511588d27d7ca71e`; exact-SHA CI `32758619963`, Security Check `32758619955`, and CodeQL `32758619966` passed. The chain keeps delivery factual and host/evaluator outcome explicit. | Preserve the accepted Task → Plan → Invocation → Observation → Receipt → explicit Outcome/Quality → independently verified Evidence Bundle chain. |
+| **P3 — Python Preview** | **Exit candidate complete (2026-08-24):** candidate `79e3888862659e5ac0623a8fa00e16155aa144da` runs Python-owned Session/Plan/View/Receipt lifecycle through the real local Engine operation transport, actual OpenAI Agents SDK `0.19.4`, native Embed, exact recovery and truthful degradation. | Integrate the reviewed candidate through normal GitHub workflow; then stop pending an explicit P4 directive. |
 | **P4 — production SDK repo** | Not entered: all four repository/license/release/security approvals remain pending. | Approved decision record plus P3 evidence, then separate SDK repo and five-primitive contract. |
 | **P5–P7 — Workspace, package, handoff** | Research queue: target architecture only. | Start only after P4; never promote legacy stores/artifacts as the new truth. |
 | **P8–P9 — Cloud/optimization** | Private and blocked. | Separate private repository only after local proof, trusted evidence and designated owners. |
 
-**Execution order:** P0 operational CI/branch-protection verification → P1 runtime Engine caller →
-P2 canonical evidence → P3 live Python Preview parity → P4 SDK repository.
+**Execution order:** P0 operational CI/branch-protection verification (**met**) → P1 runtime Engine caller
+(**met**) → P2 canonical evidence (**met**) → P3 real Python Preview (**exit candidate complete**) → P4 SDK repository (**not entered**).
 No later workstream may bypass an earlier exit.
 
 ---

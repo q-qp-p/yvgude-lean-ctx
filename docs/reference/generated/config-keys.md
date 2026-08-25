@@ -59,6 +59,7 @@ Top-level configuration keys
 - `profile` (string, default `""`) — Persistent profile name. Checked after LEAN_CTX_PROFILE env var. Set via: lean-ctx config set profile passthrough
 - `profiles` (table, default `{}`) — Named partial configuration overlays; nested tables merge recursively over base settings
 - `project_root` (string?, default `null` — env `LEAN_CTX_PROJECT_ROOT`) — Explicit project root directory. Prevents accidental home-directory scans
+- `prompt_reinject` (enum: auto | on | off, default `auto` — env `LEAN_CTX_PROMPT_REINJECT`) — Per-turn tool-precedence reinjection (#1288): the UserPromptSubmit hook emits a one-line additionalContext reminder that ctx_* tools are the mandated path, so it always post-dates session-level harness instructions preferring native Bash. auto (default): active only while shadow_mode is on. Costs ~45 tokens per turn when active
 - `proxy_enabled` (bool?, default `null`) — Enable/disable the proxy layer. null = auto-detect, true = force on, false = force off
 - `proxy_loopback_open` (bool, default `false`) — Skip ALL proxy authentication on loopback binds. MCP/HTTP clients work without tokens. Ignored on non-loopback (gateway mode)
 - `proxy_port` (u16?, default `null`) — Custom proxy port (default: 4444). Useful for multi-user systems. Env: LEAN_CTX_PROXY_PORT
@@ -82,6 +83,7 @@ Top-level configuration keys
 - `shell_allowlist_extra` (array, default `[]`) — Commands merged on top of shell_allowlist without replacing the defaults. Managed via `lean-ctx allow <cmd>`
 - `shell_heavy_timeout_secs` (u64?, default `null` — env `LEAN_CTX_SHELL_HEAVY_TIMEOUT_SECS`) — Shell command timeout (seconds) for heavy commands (cargo build/test, make, docker build, git commit/push). null = built-in 10-minute ceiling
 - `shell_hook_disabled` (bool, default `false` — env `LEAN_CTX_NO_HOOK`) — Disable shell hook injection
+- `shell_hook_mode` (enum: auto | rewrite | deny, default `auto` — env `LEAN_CTX_SHELL_HOOK_MODE`) — How the PreToolUse shell hook treats native Bash/Shell calls (#1278). rewrite: rewrite known read/search/list commands, unknown commands pass through raw. deny: block native shell outright so every command goes through ctx_shell (fail-opens: lean-ctx disabled, MCP daemon dead, explicit shadow-only surface). auto (default): currently rewrite
 - `shell_security` (string, default `enforce` — env `LEAN_CTX_SHELL_SECURITY`) — Shell command gating: enforce (default, secure), warn (log only, never block) or off (skip allowlist + hard blocks; compression stays active)
 - `shell_strict_mode` (bool, default `false`) — Block $(), backticks, <() in shell arguments. Default false = warn only.
 - `shell_timeout_secs` (u64?, default `null` — env `LEAN_CTX_SHELL_TIMEOUT_SECS`) — Shell command timeout (seconds) for normal commands. null = built-in 2-minute default. LEAN_CTX_SHELL_TIMEOUT_MS overrides both tiers (in ms)
@@ -180,6 +182,13 @@ Custom command aliases (array of {command, alias} entries). Note: field names ar
 
 - `alias` (string, default `""`) — The alias definition to execute
 - `command` (string, default `""`) — The command pattern to match (e.g. 'deploy')
+
+## `[decision_loop]`
+
+MCP decision-loop runtime settings
+
+- `enabled` (bool, default `true`) — Enable the MCP decision-loop runtime
+- `max_filter_level` (u8, default `0`) — Maximum lossy post-dispatch triage level (0 disables output filtering)
 
 ## `[embedding]`
 

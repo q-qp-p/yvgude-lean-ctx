@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 from collections import OrderedDict
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -26,6 +27,8 @@ _CONFIG_KEYS = {
     "default_profile",
     "fail_open",
     "integration_depth",
+    "engine_binary",
+    "engine_timeout",
 }
 _DEPTHS = {"attach", "wrap", "embed"}
 _KIT_CACHE_LIMIT = 128
@@ -41,6 +44,8 @@ class LeanCTXConfig:
     default_profile: str = "balanced"
     fail_open: bool = True
     integration_depth: str = "wrap"
+    engine_binary: str = "lean-ctx"
+    engine_timeout: float = 30.0
 
     def __post_init__(self) -> None:
         if self.project is not None and not isinstance(self.project, str):
@@ -67,11 +72,17 @@ class LeanCTXConfig:
             raise ValueError("fail_open must be a boolean")
         if self.integration_depth not in _DEPTHS:
             raise ValueError("integration_depth must be attach, wrap, or embed")
+        if not isinstance(self.engine_binary, str) or not self.engine_binary.strip():
+            raise ValueError("engine_binary must be a non-empty string")
+        if isinstance(self.engine_timeout, bool) or not isinstance(self.engine_timeout, (int, float)):
+            raise ValueError("engine_timeout must be finite and greater than zero")
+        if not math.isfinite(float(self.engine_timeout)) or float(self.engine_timeout) <= 0:
+            raise ValueError("engine_timeout must be finite and greater than zero")
 
 
 def _normalize_config(config: object) -> LeanCTXConfig:
     if config is None:
-        return LeanCTXConfig()
+        return LeanCTXConfig(engine_binary=os.environ.get("LEAN_CTX_ENGINE_BINARY", "lean-ctx"))
     if isinstance(config, LeanCTXConfig):
         return config
     if isinstance(config, Mapping):
@@ -107,10 +118,38 @@ class LeanCTX:
             raise ValueError("integration_depth='embed' is not supported by Python SDK v1")
         return WrappedAgent(self, agent, kit=kit, profile=profile)
 
-    def session(self) -> "ContextSession":
+    def session(
+        self,
+        task: Optional[str] = None,
+        *,
+        integration_depth: Optional[str] = None,
+        project_root: Optional[str] = None,
+        fail_open: Optional[bool] = None,
+    ) -> "ContextSession":
         from .session import ContextSession
 
-        return ContextSession(self)
+        return ContextSession(
+            self,
+            task=task,
+            integration_depth=integration_depth,
+            project_root=project_root,
+            fail_open=fail_open,
+        )
+
+    def embed(
+        self,
+        task: str,
+        *,
+        project_root: Optional[str] = None,
+        fail_open: Optional[bool] = None,
+    ) -> "ContextSession":
+        """Create an explicit host-controlled Preview Embed session."""
+        return self.session(
+            task,
+            integration_depth="embed",
+            project_root=project_root,
+            fail_open=fail_open,
+        )
 
     def load_kit(self, name) -> ContextKit:
         if isinstance(name, ContextKit):

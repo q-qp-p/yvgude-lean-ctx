@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -14,6 +15,7 @@ use serde::de::{self, Deserializer, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
+use super::receipt::{verify_receipt_document, InventoryArtifact, VerifiedReceipt};
 use super::verify::{hex_decode, sha256_hex, Step, StepStatus};
 
 const BUNDLE_SCHEMA: &str = "leanctx.customer-proof-evidence-bundle/v2";
@@ -31,18 +33,40 @@ pub struct V2Report {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TrustStore {
+pub(crate) struct TrustStore {
     schema_version: String,
+    trust_revision: u64,
+    evaluated_at: String,
     trusted_signers: Vec<TrustedSigner>,
+    receipt_chain_heads: Vec<TrustedReceiptChainHead>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TrustedSigner {
+struct TrustedReceiptChainHead {
+    chain_id: String,
+    sequence_number: u64,
+    receipt_id: String,
+}
+
+struct VerifiedInventory {
+    detail: String,
+    artifacts: BTreeMap<String, InventoryArtifact>,
+    refs: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TrustedSigner {
     trusted_signer_ref: String,
     key_id: String,
     public_key: String,
     allowed_trust_bases: Vec<String>,
+    receipt_key_ids: Vec<String>,
+    revision: u64,
+    admitted_at: String,
+    expires_at: Option<String>,
+    revoked_at: Option<String>,
 }
 
 #[derive(Clone)]
@@ -203,7 +227,7 @@ pub fn verify_v2_document(
         Ok(detail) => detail,
         Err(detail) => return failed_report("artifact inventory", detail),
     };
-    steps.push(passed("artifact inventory", inventory));
+    steps.push(passed("artifact inventory", inventory.detail.clone()));
 
     if let Err(detail) = verify_semantics(&document) {
         return failed_report("semantic joins", detail);
@@ -225,6 +249,12 @@ pub fn verify_v2_document(
             )
         }
     };
+    let receipt_detail = match verify_arm_receipts(&document, &inventory, &trust_store) {
+        Ok(detail) => detail,
+        Err(detail) => return failed_report("signed arm receipts", detail),
+    };
+    steps.push(passed("signed arm receipts", receipt_detail));
+
     let key = match trusted_key(&document, &trust_store) {
         Ok(key) => key,
         Err(detail) => return failed_report("external signer trust", detail),
@@ -269,7 +299,7 @@ fn passed(name: &'static str, detail: impl Into<String>) -> Step {
     }
 }
 
-fn parse_canonical_json(raw: &[u8], label: &str) -> Result<Value, String> {
+pub(crate) fn parse_canonical_json(raw: &[u8], label: &str) -> Result<Value, String> {
     let parsed: StrictJson = serde_json::from_slice(raw)
         .map_err(|error| format!("{label} is not strict JSON: {error}"))?;
     let value = parsed.into_value();
@@ -282,7 +312,7 @@ fn parse_canonical_json(raw: &[u8], label: &str) -> Result<Value, String> {
     Ok(value)
 }
 
-fn canonical_bytes(value: &Value) -> Vec<u8> {
+pub(crate) fn canonical_bytes(value: &Value) -> Vec<u8> {
     serde_json::to_vec(&sort_value(value.clone())).expect("JSON value always serializes")
 }
 
@@ -301,39 +331,52 @@ fn sort_value(value: Value) -> Value {
     }
 }
 
-fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, String> {
+pub(crate) fn object<'a>(value: &'a Value, label: &str) -> Result<&'a Map<String, Value>, String> {
     value
         .as_object()
         .ok_or_else(|| format!("{label} must be an object"))
 }
 
-fn array<'a>(value: &'a Value, label: &str) -> Result<&'a [Value], String> {
+pub(crate) fn array<'a>(value: &'a Value, label: &str) -> Result<&'a [Value], String> {
     value
         .as_array()
         .map(Vec::as_slice)
         .ok_or_else(|| format!("{label} must be an array"))
 }
 
-fn field<'a>(object: &'a Map<String, Value>, key: &str, label: &str) -> Result<&'a Value, String> {
+pub(crate) fn field<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    label: &str,
+) -> Result<&'a Value, String> {
     object
         .get(key)
         .ok_or_else(|| format!("{label}.{key} is required"))
 }
 
-fn string<'a>(object: &'a Map<String, Value>, key: &str, label: &str) -> Result<&'a str, String> {
+pub(crate) fn string<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    label: &str,
+) -> Result<&'a str, String> {
     field(object, key, label)?
         .as_str()
         .ok_or_else(|| format!("{label}.{key} must be a string"))
 }
 
-fn unsigned(object: &Map<String, Value>, key: &str, label: &str, max: u64) -> Result<u64, String> {
+pub(crate) fn unsigned(
+    object: &Map<String, Value>,
+    key: &str,
+    label: &str,
+    max: u64,
+) -> Result<u64, String> {
     field(object, key, label)?
         .as_u64()
         .filter(|value| *value <= max)
         .ok_or_else(|| format!("{label}.{key} must be an integer in range"))
 }
 
-fn check_fields(
+pub(crate) fn check_fields(
     object: &Map<String, Value>,
     label: &str,
     required: &[&str],
@@ -367,13 +410,13 @@ fn is_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn is_digest(value: &str) -> bool {
+pub(crate) fn is_digest(value: &str) -> bool {
     value
         .strip_prefix("sha256:")
         .is_some_and(|hex| is_hex(hex, 64))
 }
 
-fn is_content_id(value: &str) -> bool {
+pub(crate) fn is_content_id(value: &str) -> bool {
     value
         .strip_prefix("id:sha256:")
         .is_some_and(|hex| is_hex(hex, 64))
@@ -397,7 +440,7 @@ fn is_safe_path(value: &str) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
-fn is_rfc3339_utc_timestamp(value: &str) -> bool {
+pub(crate) fn is_rfc3339_utc_timestamp(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 20
         || bytes[4] != b'-'
@@ -442,7 +485,7 @@ fn is_rfc3339_utc_timestamp(value: &str) -> bool {
         2 => 28,
         _ => return false,
     };
-    (1..=days_in_month).contains(&day) && hour < 24 && minute < 60 && second < 60
+    year != 0 && (1..=days_in_month).contains(&day) && hour < 24 && minute < 60 && second < 60
 }
 
 fn validate_shape(document: &Value) -> Result<(), String> {
@@ -508,8 +551,8 @@ fn validate_subject(value: &Value) -> Result<(), String> {
     )?;
     let customer = string(subject, "customer_ref", "subject")?;
     let project = string(subject, "project_ref", "subject")?;
-    if !customer.starts_with("customer:")
-        || !project.starts_with("project:")
+    if !restricted_ref(customer, "customer:", 2, 64)
+        || !restricted_ref(project, "project:", 2, 64)
         || !is_content_id(string(subject, "workload_ref", "subject")?)
     {
         return Err("subject references are malformed".to_string());
@@ -525,8 +568,8 @@ fn validate_identity(value: &Value, label: &str) -> Result<(), String> {
         &["provider", "model", "source_commit", "workload_digest"],
         &["endpoint_ref"],
     )?;
-    if string(identity, "provider", label)?.is_empty()
-        || string(identity, "model", label)?.is_empty()
+    if !restricted_name(string(identity, "provider", label)?, 2, 64, false)
+        || !restricted_name(string(identity, "model", label)?, 1, 128, true)
         || !string(identity, "source_commit", label)?
             .strip_prefix("git:")
             .is_some_and(|hex| is_hex(hex, 40) || is_hex(hex, 64))
@@ -534,7 +577,32 @@ fn validate_identity(value: &Value, label: &str) -> Result<(), String> {
     {
         return Err(format!("{label} is malformed"));
     }
+    if identity.contains_key("endpoint_ref")
+        && !restricted_name(string(identity, "endpoint_ref", label)?, 1, 128, true)
+    {
+        return Err(format!("{label}.endpoint_ref is malformed"));
+    }
     Ok(())
+}
+
+fn restricted_ref(value: &str, prefix: &str, min: usize, max: usize) -> bool {
+    value
+        .strip_prefix(prefix)
+        .is_some_and(|suffix| restricted_name(suffix, min, max, false))
+}
+
+fn restricted_name(value: &str, min: usize, max: usize, extended: bool) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= min
+        && bytes.len() <= max
+        && bytes[0].is_ascii_alphanumeric()
+        && (!bytes[0].is_ascii_uppercase() || extended)
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b'-')
+                || (extended && (byte.is_ascii_uppercase() || matches!(byte, b':' | b'/' | b'@')))
+        })
 }
 
 fn validate_measurements(value: &Value, label: &str) -> Result<(), String> {
@@ -717,6 +785,31 @@ fn validate_inventory(value: &Value) -> Result<(), String> {
         if !is_content_id(reference) || !is_digest(digest) || reference != format!("id:{digest}") {
             return Err(format!("{label} ref and digest do not match"));
         }
+        in_set(
+            string(item, "kind", &label)?,
+            &[
+                "arm_receipt",
+                "receipt_predecessor",
+                "quality_measurement",
+                "replay_input",
+                "replay_result",
+                "run_metadata",
+                "claim_basis",
+                "frozen_audit_bundle_v1",
+                "task_envelope",
+                "execution_plan",
+                "engine_invocation",
+                "engine_observation",
+                "accepted_outcome",
+                "measurement",
+                "assumption",
+                "formula",
+                "price_table",
+                "invoice",
+                "acceptance_evidence",
+            ],
+            &format!("{label}.kind"),
+        )?;
         let path = string(item, "path", &label)?;
         if !is_safe_path(path)
             || !refs.insert(reference.to_owned())
@@ -850,7 +943,7 @@ fn validate_replay(value: &Value) -> Result<(), String> {
         ],
         "replay.determinism",
     )?;
-    let _ = string(replay, "notes", "replay")?;
+    bounded_chars(string(replay, "notes", "replay")?, 0, 1024, "replay.notes")?;
     validate_refs(
         field(replay, "input_refs", "replay")?,
         "replay.input_refs",
@@ -883,6 +976,38 @@ fn validate_limitations(value: &Value) -> Result<(), String> {
     )?;
     if known.len() > 32 || unproven.is_empty() || unproven.len() > 32 {
         return Err("limitations item count is invalid".to_string());
+    }
+    let mut known_values = BTreeSet::new();
+    for value in known {
+        let value = value
+            .as_str()
+            .ok_or_else(|| "limitations.known_limitations must contain strings".to_string())?;
+        bounded_chars(value, 0, 512, "limitations.known_limitations item")?;
+        if !known_values.insert(value) {
+            return Err("limitations.known_limitations must be unique".to_string());
+        }
+    }
+    let mut unproven_values = BTreeSet::new();
+    for value in unproven {
+        let value = value
+            .as_str()
+            .ok_or_else(|| "limitations.unproven must contain strings".to_string())?;
+        in_set(
+            value,
+            &[
+                "omission_before_capture",
+                "third_party_attestation",
+                "generalization_beyond_workload",
+                "production_sla",
+                "future_outcomes",
+                "unavailable_external_service",
+                "redacted_content",
+            ],
+            "limitations.unproven item",
+        )?;
+        if !unproven_values.insert(value) {
+            return Err("limitations.unproven must be unique".to_string());
+        }
     }
     Ok(())
 }
@@ -920,7 +1045,12 @@ fn validate_redaction(value: &Value) -> Result<(), String> {
     field(redaction, "reversible", "redaction")?
         .as_bool()
         .ok_or_else(|| "redaction.reversible must be boolean".to_string())?;
-    let _ = string(redaction, "notes", "redaction")?;
+    bounded_chars(
+        string(redaction, "notes", "redaction")?,
+        0,
+        512,
+        "redaction.notes",
+    )?;
     Ok(())
 }
 
@@ -947,9 +1077,15 @@ fn validate_claims(value: &Value) -> Result<(), String> {
             &[],
         )?;
         let id = string(claim, "claim_id", &label)?;
-        if !is_content_id(id) || !ids.insert(id) || string(claim, "statement", &label)?.is_empty() {
+        if !is_content_id(id) || !ids.insert(id) {
             return Err(format!("{label} id or statement is invalid"));
         }
+        bounded_chars(
+            string(claim, "statement", &label)?,
+            1,
+            512,
+            &format!("{label}.statement"),
+        )?;
         in_set(
             string(claim, "claim_type", &label)?,
             &[
@@ -982,6 +1118,14 @@ fn validate_claims(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn bounded_chars(value: &str, min: usize, max: usize, label: &str) -> Result<(), String> {
+    let count = value.chars().count();
+    if count < min || count > max {
+        return Err(format!("{label} has an invalid length"));
+    }
+    Ok(())
+}
+
 fn validate_signing(value: &Value) -> Result<(), String> {
     let signing = object(value, "signing")?;
     check_fields(
@@ -1009,11 +1153,12 @@ fn validate_signing(value: &Value) -> Result<(), String> {
         &["customer_configured", "out_of_band", "local_identity"],
         "signing.trust_basis",
     )?;
+    let encoded = string(signing, "signature", "signing")?;
     let signature = STANDARD
-        .decode(string(signing, "signature", "signing")?)
+        .decode(encoded)
         .map_err(|_| "signing.signature is not standard Base64".to_string())?;
-    if signature.len() != 64 {
-        return Err("signing.signature is not an Ed25519 signature".to_string());
+    if signature.len() != 64 || STANDARD.encode(&signature) != encoded {
+        return Err("signing.signature is not canonical Ed25519 Base64".to_string());
     }
     Ok(())
 }
@@ -1049,10 +1194,16 @@ fn verify_bundle_identity(document: &Value, digest: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn verify_inventory(document: &Value, artifact_root: Option<&Path>) -> Result<String, String> {
+fn verify_inventory(
+    document: &Value,
+    artifact_root: Option<&Path>,
+) -> Result<VerifiedInventory, String> {
     let root = object(document, "bundle")?;
-    let inventory = object(field(root, "inventory", "bundle")?, "inventory")?;
-    let items = array(field(inventory, "items", "inventory")?, "inventory.items")?;
+    let bundle_inventory = object(field(root, "inventory", "bundle")?, "inventory")?;
+    let items = array(
+        field(bundle_inventory, "items", "inventory")?,
+        "inventory.items",
+    )?;
     let root = artifact_root
         .ok_or_else(|| "artifact root is required for proof eligibility".to_string())?;
     let canonical_root =
@@ -1060,6 +1211,8 @@ fn verify_inventory(document: &Value, artifact_root: Option<&Path>) -> Result<St
     if !canonical_root.is_dir() {
         return Err("artifact root is not a directory".to_string());
     }
+    let mut artifacts = BTreeMap::new();
+    let mut refs = BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
         let label = format!("inventory.items[{index}]");
         let item = object(item, &label)?;
@@ -1067,25 +1220,191 @@ fn verify_inventory(document: &Value, artifact_root: Option<&Path>) -> Result<St
             continue;
         }
         let artifact = safe_artifact_path(&canonical_root, string(item, "path", &label)?)?;
-        let metadata =
-            fs::metadata(&artifact).map_err(|error| format!("{label} is missing: {error}"))?;
-        if !metadata.is_file() {
+        let file =
+            fs::File::open(&artifact).map_err(|error| format!("{label} is missing: {error}"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("{label} metadata is unavailable: {error}"))?;
+        if !metadata.file_type().is_file() {
             return Err(format!("{label} is not a regular file"));
         }
         let expected_size = unsigned(item, "size_bytes", &label, MAX_ITEM_BYTES)?;
         if metadata.len() != expected_size {
             return Err(format!("{label} size does not match inventory"));
         }
-        let bytes =
-            fs::read(&artifact).map_err(|error| format!("{label} cannot be read: {error}"))?;
-        if format!("sha256:{}", sha256_hex(&bytes)) != string(item, "digest", &label)? {
+        let capacity = usize::try_from(expected_size)
+            .map_err(|_| format!("{label} size cannot be represented locally"))?;
+        let mut bytes = Vec::with_capacity(capacity);
+        file.take(expected_size.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("{label} cannot be read: {error}"))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != expected_size {
+            return Err(format!("{label} bytes changed while being read"));
+        }
+        let digest = string(item, "digest", &label)?;
+        if format!("sha256:{}", sha256_hex(&bytes)) != digest {
             return Err(format!("{label} digest does not match artifact"));
         }
+        if artifacts
+            .insert(
+                digest.to_owned(),
+                InventoryArtifact {
+                    kind: string(item, "kind", &label)?.to_owned(),
+                    bytes,
+                },
+            )
+            .is_some()
+            || refs
+                .insert(string(item, "ref", &label)?.to_owned(), digest.to_owned())
+                .is_some()
+        {
+            return Err("present inventory digests and refs must be unique".to_string());
+        }
+    }
+    Ok(VerifiedInventory {
+        detail: format!(
+            "{} inventory artifacts are bounded, local, and hash-verified",
+            items.len()
+        ),
+        artifacts,
+        refs,
+    })
+}
+
+fn verify_arm_receipts(
+    document: &Value,
+    inventory: &VerifiedInventory,
+    trust: &TrustStore,
+) -> Result<String, String> {
+    let root = object(document, "bundle")?;
+    let bundle_inventory = object(field(root, "inventory", "bundle")?, "inventory")?;
+    let items = array(
+        field(bundle_inventory, "items", "inventory")?,
+        "inventory.items",
+    )?;
+    let mut receipt_refs = BTreeSet::new();
+    for item in items {
+        let item = object(item, "inventory item")?;
+        if string(item, "availability", "inventory item")? != "present" {
+            continue;
+        }
+        let kind = string(item, "kind", "inventory item")?.to_owned();
+        if kind == "arm_receipt" {
+            receipt_refs.insert(string(item, "ref", "inventory item")?.to_owned());
+        }
+    }
+    let arms = object(field(root, "matched_arms", "bundle")?, "matched_arms")?;
+    let mut joined = BTreeSet::new();
+    for arm_name in ["control", "treatment"] {
+        let arm = object(field(arms, arm_name, "matched_arms")?, "arm")?;
+        let matching: Vec<&str> = array(field(arm, "evidence_refs", "arm")?, "arm.evidence_refs")?
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|reference| receipt_refs.contains(*reference))
+            .collect();
+        if matching.len() != 1 || !joined.insert(matching[0]) {
+            return Err(format!("{arm_name} must join one distinct arm_receipt"));
+        }
+    }
+    if receipt_refs.len() != joined.len() {
+        return Err("unreferenced or missing arm receipt inventory item".to_string());
+    }
+    let mut verified = BTreeMap::<String, VerifiedReceipt>::new();
+    let mut receipt_by_ref = BTreeMap::new();
+    let mut predecessor_ids = BTreeSet::new();
+    let mut positions = BTreeSet::new();
+    for (digest, artifact) in &inventory.artifacts {
+        if !matches!(
+            artifact.kind.as_str(),
+            "arm_receipt" | "receipt_predecessor"
+        ) {
+            continue;
+        }
+        let receipt = verify_receipt_document(&artifact.bytes, &inventory.artifacts, trust)?;
+        if !positions.insert((receipt.chain_id.clone(), receipt.sequence_number))
+            || verified.contains_key(&receipt.receipt_id)
+        {
+            return Err("receipt inventory contains a duplicate chain position or ID".to_string());
+        }
+        if artifact.kind == "arm_receipt" {
+            let reference = inventory
+                .refs
+                .iter()
+                .find_map(|(reference, candidate)| (candidate == digest).then_some(reference))
+                .ok_or_else(|| "arm receipt has no verified inventory ref".to_string())?;
+            receipt_by_ref.insert(reference.clone(), receipt.receipt_id.clone());
+        } else {
+            predecessor_ids.insert(receipt.receipt_id.clone());
+        }
+        verified.insert(receipt.receipt_id.clone(), receipt);
+    }
+    let mut verified_chains = BTreeSet::new();
+    let mut reachable = BTreeSet::new();
+    for reference in &joined {
+        let receipt_id = receipt_by_ref
+            .get(*reference)
+            .ok_or_else(|| "arm receipt ref did not resolve to verified bytes".to_string())?;
+        let receipt = verified
+            .get(receipt_id)
+            .ok_or_else(|| "arm receipt did not resolve to verified bytes".to_string())?;
+        let heads: Vec<&TrustedReceiptChainHead> = trust
+            .receipt_chain_heads
+            .iter()
+            .filter(|head| head.chain_id == receipt.chain_id)
+            .collect();
+        if heads.len() != 1
+            || heads[0].sequence_number != receipt.sequence_number
+            || heads[0].receipt_id != receipt.receipt_id
+            || !verified_chains.insert(receipt.chain_id.clone())
+        {
+            return Err(
+                "receipt is stale, forked, duplicated, or absent from trusted chain heads"
+                    .to_string(),
+            );
+        }
+        verify_receipt_chain(&verified, receipt, &mut reachable)?;
+    }
+    if predecessor_ids
+        .iter()
+        .any(|receipt_id| !reachable.contains(receipt_id))
+    {
+        return Err("receipt inventory contains an unreferenced predecessor".to_string());
     }
     Ok(format!(
-        "{} inventory artifacts are bounded, local, and hash-verified",
-        items.len()
+        "{} canonical signed receipts resolve all lineage/evidence digests",
+        joined.len()
     ))
+}
+
+fn verify_receipt_chain(
+    receipts: &BTreeMap<String, VerifiedReceipt>,
+    head: &VerifiedReceipt,
+    reachable: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    let mut current = head;
+    loop {
+        if !reachable.insert(current.receipt_id.clone()) {
+            return Err("receipt chain contains a cycle or shared fork".to_string());
+        }
+        if current.sequence_number == 1 {
+            return Ok(());
+        }
+        let previous_id = current
+            .previous_receipt_id
+            .as_deref()
+            .ok_or_else(|| "non-genesis receipt omits predecessor ID".to_string())?;
+        let previous = receipts
+            .get(previous_id)
+            .ok_or_else(|| "receipt predecessor bytes are absent from inventory".to_string())?;
+        if previous.chain_id != current.chain_id
+            || previous.sequence_number.checked_add(1) != Some(current.sequence_number)
+            || current.previous_signature_digest.as_deref()
+                != Some(previous.signature_digest.as_str())
+        {
+            return Err("receipt predecessor chain or signature binding is invalid".to_string());
+        }
+        current = previous;
+    }
 }
 
 fn safe_artifact_path(root: &Path, path: &str) -> Result<PathBuf, String> {
@@ -1332,23 +1651,71 @@ fn parse_trust_store(raw: &[u8]) -> Result<TrustStore, String> {
     let value = parse_canonical_json(raw, "trust store")?;
     let store: TrustStore =
         serde_json::from_value(value).map_err(|error| format!("invalid trust store: {error}"))?;
-    if store.schema_version != TRUST_SCHEMA || store.trusted_signers.is_empty() {
-        return Err("trust store schema_version or signers is invalid".to_string());
+    if store.schema_version != TRUST_SCHEMA
+        || store.trust_revision == 0
+        || !is_rfc3339_utc_timestamp(&store.evaluated_at)
+        || store.trusted_signers.is_empty()
+        || store.receipt_chain_heads.is_empty()
+    {
+        return Err(
+            "trust store schema, revision, evaluation time, or signers is invalid".to_string(),
+        );
     }
     let mut identities = BTreeSet::new();
+    let mut receipt_aliases = BTreeSet::new();
     for signer in &store.trusted_signers {
-        validate_trusted_signer(signer)?;
+        validate_trusted_signer(signer, &store.evaluated_at, store.trust_revision)?;
         if !identities.insert((signer.trusted_signer_ref.clone(), signer.key_id.clone())) {
             return Err("trust store contains duplicate signer identity".to_string());
+        }
+        if signer
+            .receipt_key_ids
+            .iter()
+            .any(|alias| !receipt_aliases.insert(alias))
+        {
+            return Err("trust store contains duplicate receipt key alias".to_string());
+        }
+    }
+    let mut chains = BTreeSet::new();
+    for head in &store.receipt_chain_heads {
+        if head.chain_id.is_empty()
+            || head.chain_id.len() > 256
+            || head.chain_id.chars().any(char::is_control)
+            || head.sequence_number == 0
+            || head.sequence_number > 9_007_199_254_740_991
+            || !is_digest(&head.receipt_id)
+            || !chains.insert(head.chain_id.clone())
+        {
+            return Err("trust store receipt chain head is malformed or duplicate".to_string());
         }
     }
     Ok(store)
 }
 
-fn validate_trusted_signer(signer: &TrustedSigner) -> Result<(), String> {
+fn validate_trusted_signer(
+    signer: &TrustedSigner,
+    evaluated_at: &str,
+    trust_revision: u64,
+) -> Result<(), String> {
     if !is_signer_ref(&signer.trusted_signer_ref)
         || !is_content_id(&signer.key_id)
         || !is_hex(&signer.public_key, 64)
+        || signer.revision == 0
+        || signer.revision > trust_revision
+        || !is_rfc3339_utc_timestamp(&signer.admitted_at)
+        || signer
+            .expires_at
+            .as_deref()
+            .is_some_and(|value| !is_rfc3339_utc_timestamp(value))
+        || signer
+            .revoked_at
+            .as_deref()
+            .is_some_and(|value| !is_rfc3339_utc_timestamp(value))
+        || signer.receipt_key_ids.is_empty()
+        || signer
+            .receipt_key_ids
+            .iter()
+            .any(|key_id| !is_receipt_key_id(key_id))
         || signer.allowed_trust_bases.is_empty()
         || signer
             .allowed_trust_bases
@@ -1356,6 +1723,16 @@ fn validate_trusted_signer(signer: &TrustedSigner) -> Result<(), String> {
             .any(|basis| !matches!(basis.as_str(), "customer_configured" | "out_of_band"))
     {
         return Err("trust store signer is malformed or permits an unsupported basis".to_string());
+    }
+    if signer
+        .expires_at
+        .as_deref()
+        .is_some_and(|expires| expires <= signer.admitted_at.as_str())
+        || signer.revoked_at.as_deref().is_some_and(|revoked| {
+            revoked <= signer.admitted_at.as_str() || revoked <= evaluated_at
+        })
+    {
+        return Err("trust store signer is expired or revoked at evaluation time".to_string());
     }
     let key = hex_decode(&signer.public_key)
         .ok_or_else(|| "trust store public key is invalid hex".to_string())?;
@@ -1367,12 +1744,26 @@ fn validate_trusted_signer(signer: &TrustedSigner) -> Result<(), String> {
     Ok(())
 }
 
+fn is_receipt_key_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'-')
+        })
+        && !value.starts_with("base64:")
+        && !value.starts_with("hex:")
+}
+
 fn trusted_key(document: &Value, store: &TrustStore) -> Result<VerifyingKey, String> {
     let root = object(document, "bundle")?;
     let signing = object(field(root, "signing", "bundle")?, "signing")?;
     let signer_ref = string(signing, "trusted_signer_ref", "signing")?;
     let key_id = string(signing, "key_id", "signing")?;
     let basis = string(signing, "trust_basis", "signing")?;
+    let created_at = string(root, "created_at", "bundle")?;
     if basis == "local_identity" || signer_ref != format!("signer:{key_id}") {
         return Err("bundle signer must use an externally trusted key identity".to_string());
     }
@@ -1386,10 +1777,50 @@ fn trusted_key(document: &Value, store: &TrustStore) -> Result<VerifyingKey, Str
             .allowed_trust_bases
             .iter()
             .any(|allowed| allowed == basis)
+        || created_at < matching[0].admitted_at.as_str()
+        || matching[0]
+            .expires_at
+            .as_deref()
+            .is_some_and(|expires| created_at >= expires)
+        || store.evaluated_at.as_str() < created_at
     {
-        return Err("no unique external trust-store signer authorizes this bundle".to_string());
+        return Err(
+            "no unique currently valid trust-store signer authorizes this bundle".to_string(),
+        );
     }
-    let bytes = hex_decode(&matching[0].public_key)
+    verifying_key(matching[0])
+}
+
+pub(crate) fn trusted_receipt_key(
+    key_id: &str,
+    issued_at: &str,
+    store: &TrustStore,
+) -> Result<VerifyingKey, String> {
+    let matching: Vec<&TrustedSigner> = store
+        .trusted_signers
+        .iter()
+        .filter(|signer| {
+            signer
+                .receipt_key_ids
+                .iter()
+                .any(|candidate| candidate == key_id)
+        })
+        .collect();
+    if matching.len() != 1
+        || issued_at < matching[0].admitted_at.as_str()
+        || matching[0]
+            .expires_at
+            .as_deref()
+            .is_some_and(|expires| issued_at >= expires)
+        || store.evaluated_at.as_str() < issued_at
+    {
+        return Err("receipt signer is not uniquely trusted for issued_at".to_string());
+    }
+    verifying_key(matching[0])
+}
+
+fn verifying_key(signer: &TrustedSigner) -> Result<VerifyingKey, String> {
+    let bytes = hex_decode(&signer.public_key)
         .ok_or_else(|| "trusted public key is invalid".to_string())?;
     VerifyingKey::from_bytes(
         &bytes
@@ -1402,9 +1833,13 @@ fn trusted_key(document: &Value, store: &TrustStore) -> Result<VerifyingKey, Str
 fn verify_signature(document: &Value, unsigned: &[u8], key: &VerifyingKey) -> Result<(), String> {
     let root = object(document, "bundle")?;
     let signing = object(field(root, "signing", "bundle")?, "signing")?;
+    let encoded = string(signing, "signature", "signing")?;
     let signature = STANDARD
-        .decode(string(signing, "signature", "signing")?)
+        .decode(encoded)
         .map_err(|_| "signature is not standard Base64".to_string())?;
+    if STANDARD.encode(&signature) != encoded {
+        return Err("signature is not canonical standard Base64".to_string());
+    }
     let signature = Signature::from_slice(&signature)
         .map_err(|_| "signature is not an Ed25519 signature".to_string())?;
     key.verify(unsigned, &signature)

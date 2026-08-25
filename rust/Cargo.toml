@@ -425,9 +425,14 @@ panic = "unwind"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_Threading",
+  "Win32_System_JobObjects",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_Security",
   "Win32_System_Pipes",
   "Win32_Storage_FileSystem",
+  "Wdk_Foundation",
+  "Wdk_Storage_FileSystem",
+  "Win32_System_IO",
 ] }
 
 [target.'cfg(not(windows))'.dependencies]
@@ -435,6 +440,7 @@ tikv-jemallocator = { version = "0.7", optional = true }
 tikv-jemalloc-ctl = { version = "0.7", optional = true }
 
 [dev-dependencies]
+leanctx-verify = { path = "../packages/leanctx-verify" }
 criterion = { version = "0.8", features = ["html_reports"] }
 filetime = "0.2"
 insta = "1.48"

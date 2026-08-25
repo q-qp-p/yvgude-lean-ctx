@@ -250,7 +250,12 @@ pub fn exec(command: &str) -> i32 {
 
     let (shell, shell_flag) = super::super::platform::shell_and_flag();
     let command = crate::tools::ctx_shell::normalize_command_for_shell(command);
-    let command = super::super::platform::zsh_safe_command(&command, &shell);
+    // #1286: keep the zsh preamble (`setopt nonomatch noequals; `) OUT of the
+    // command string used for classification and compression — every
+    // `starts_with("ls ")`/`git`-style pattern matcher silently stopped
+    // matching under zsh (the default macOS shell), degrading pattern
+    // compression to the generic terse fallback. The preamble is applied to
+    // the SPAWNED command only, inside the exec helpers.
     let command = command.as_str();
 
     if super::super::reentry::is_disabled() {
@@ -422,9 +427,12 @@ fn split_simple_shell_words(command: &str) -> Option<Vec<SimpleShellWord>> {
 }
 
 fn exec_inherit(command: &str, shell: &str, shell_flag: &str) -> i32 {
+    // #1286: the zsh preamble is applied at spawn time only, so `command`
+    // stays clean for classification/compression upstream.
+    let spawn_command = super::super::platform::zsh_safe_command(command, shell);
     let mut cmd = Command::new(shell);
     cmd.arg(shell_flag)
-        .arg(command)
+        .arg(&spawn_command)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -443,9 +451,10 @@ fn exec_inherit(command: &str, shell: &str, shell_flag: &str) -> i32 {
 }
 
 fn exec_shell_default(command: &str, shell: &str, shell_flag: &str) -> i32 {
+    let spawn_command = super::super::platform::zsh_safe_command(command, shell);
     let mut cmd = Command::new(shell);
     cmd.arg(shell_flag)
-        .arg(command)
+        .arg(&spawn_command)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());

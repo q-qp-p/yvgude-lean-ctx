@@ -753,7 +753,7 @@ mod cli_commands {
         let out = lean_ctx_bin().arg("--help").output().unwrap();
         assert!(out.status.success());
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.contains("Context Runtime"));
+        assert!(stdout.contains("Context SDK for AI Agents"));
     }
 
     #[test]

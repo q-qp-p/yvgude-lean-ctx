@@ -249,8 +249,11 @@ pub(super) fn extract_base_from_segment(segment: &str) -> String {
         return String::new();
     }
 
-    let cmd_part = skip_env_assignments(trimmed);
+    let cmd_part = skip_powershell_assignment(skip_env_assignments(trimmed));
     if cmd_part.is_empty() {
+        return String::new();
+    }
+    if is_powershell_value_expression(cmd_part) {
         return String::new();
     }
 
@@ -270,6 +273,55 @@ pub(super) fn extract_base_from_segment(segment: &str) -> String {
         .next()
         .unwrap_or(first_token)
         .to_string()
+}
+
+/// Skip a local PowerShell assignment (`$result = Get-Content …`) so the
+/// wrapped cmdlet is validated. Environment/scoped variables contain `:` and
+/// intentionally remain unrecognized, preventing `$env:PATH = …` bypasses.
+pub(super) fn skip_powershell_assignment(segment: &str) -> &str {
+    let trimmed = segment.trim_start();
+    let Some(variable_end) = powershell_local_variable_end(trimmed) else {
+        return trimmed;
+    };
+    let after_variable = trimmed[variable_end..].trim_start();
+    let Some(after_equals) = after_variable.strip_prefix('=') else {
+        return trimmed;
+    };
+    after_equals.trim_start()
+}
+
+fn powershell_local_variable_end(segment: &str) -> Option<usize> {
+    let bytes = segment.as_bytes();
+    if bytes.first() != Some(&b'$') {
+        return None;
+    }
+    let mut end = 1;
+    let first = *bytes.get(end)?;
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return None;
+    }
+    end += 1;
+    while bytes
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        end += 1;
+    }
+    (bytes.get(end) != Some(&b':')).then_some(end)
+}
+
+/// A bare local variable or simple index lookup is pipeline data, not a command.
+/// Method calls and scoped variables deliberately fall through to deny-by-default.
+fn is_powershell_value_expression(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    let Some(variable_end) = powershell_local_variable_end(trimmed) else {
+        return false;
+    };
+    let suffix = trimmed[variable_end..].trim();
+    suffix.is_empty()
+        || (suffix.starts_with('[')
+            && suffix.ends_with(']')
+            && !suffix.contains(['(', ')', ';', '|', '&', '=']))
 }
 
 /// #1488: detect whether a segment is a shell function definition.
@@ -360,11 +412,14 @@ pub(super) fn skip_env_assignments(segment: &str) -> &str {
             rest = &rest_trimmed[end..];
             continue;
         }
-        if unquoted.contains('=')
-            && !unquoted.starts_with('-')
-            && !unquoted.starts_with('/')
-            && !unquoted.starts_with('.')
-        {
+        let is_posix_assignment = unquoted.split_once('=').is_some_and(|(name, _)| {
+            let mut bytes = name.bytes();
+            bytes
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        });
+        if is_posix_assignment {
             rest = &rest_trimmed[end..];
         } else {
             return rest_trimmed;

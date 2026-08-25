@@ -153,9 +153,9 @@ pub mod tests {
     }
 
     fn setup() -> (
-        std::sync::MutexGuard<'static, ()>,
-        crate::core::data_dir::TestEnvGuard,
         EnvGuard,
+        crate::core::data_dir::TestEnvGuard,
+        std::sync::MutexGuard<'static, ()>,
     ) {
         let kernel = kernel_config::KERNEL_TEST_LOCK
             .lock()
@@ -163,7 +163,9 @@ pub mod tests {
         let env = crate::core::data_dir::test_env_lock();
         let vars = EnvGuard::clear();
         reset();
-        (kernel, env, vars)
+        // Tuple fields drop left-to-right: restore process env before releasing
+        // either lock, otherwise parallel kernel tests can observe transient vars.
+        (vars, env, kernel)
     }
 
     #[test]

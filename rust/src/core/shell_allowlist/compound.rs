@@ -2,7 +2,7 @@ use crate::core::error::ShellError;
 
 use super::{
     contains_double_semicolon, extract_all_commands, find_shell_word, quote_aware_token_end,
-    rewrite_case_constructs, shell_tokenize, skip_env_assignments,
+    rewrite_case_constructs, shell_tokenize, skip_env_assignments, skip_powershell_assignment,
 };
 
 /// Shell reserved words whose operator-delimited segment carries no validatable
@@ -78,7 +78,21 @@ fn resolve_segment_leaves(
         }
         break;
     }
+    let assignment_rhs = skip_powershell_assignment(s);
+    if assignment_rhs.len() != s.len() {
+        return resolve_segment_leaves(assignment_rhs, depth + 1, out);
+    }
     if let Some(inner) = balanced_paren_inner(s) {
+        for inner_seg in extract_all_commands(inner) {
+            resolve_segment_leaves(&inner_seg, depth + 1, out)?;
+        }
+        return Ok(());
+    }
+    // #1514: PowerShell commonly wraps a read-only cmdlet before selecting a
+    // property: `(Get-Item 'x').VersionInfo`. Validate the inner command and
+    // accept only a conservative property chain. Method calls, indexers and
+    // operators fall through to deny-by-default as an unrecognized command.
+    if let Some(inner) = powershell_property_expression_inner(s) {
         for inner_seg in extract_all_commands(inner) {
             resolve_segment_leaves(&inner_seg, depth + 1, out)?;
         }
@@ -135,7 +149,7 @@ fn resolve_segment_leaves(
 /// a nested quoted `)` — e.g. inside a jq filter — doesn't end the walk early.
 /// Returns `(inner, end)` with `end` just past the matching `)`; `None` if
 /// unbalanced.
-fn balanced_paren_at(s: &str, open: usize) -> Option<(&str, usize)> {
+pub(super) fn balanced_paren_at(s: &str, open: usize) -> Option<(&str, usize)> {
     let bytes = s.as_bytes();
     let len = bytes.len();
     let mut depth: i32 = 0;
@@ -187,6 +201,29 @@ fn balanced_paren_at(s: &str, open: usize) -> Option<(&str, usize)> {
         }
     }
     None
+}
+
+fn powershell_property_expression_inner(segment: &str) -> Option<&str> {
+    let trimmed = segment.trim();
+    if !trimmed.starts_with('(') {
+        return None;
+    }
+    let (inner, end) = balanced_paren_at(trimmed, 0)?;
+    let mut suffix = trimmed[end..].trim();
+    if suffix.is_empty() {
+        return None;
+    }
+    while let Some(rest) = suffix.strip_prefix('.') {
+        let name_len = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        if name_len == 0 || !rest.as_bytes()[0].is_ascii_alphabetic() {
+            return None;
+        }
+        suffix = &rest[name_len..];
+    }
+    suffix.is_empty().then_some(inner)
 }
 
 /// #855: the leading run of `VAR=value` assignment tokens in `s` (the same

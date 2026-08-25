@@ -292,6 +292,21 @@ mod tests {
     }
 
     #[test]
+    fn decision_loop_keys_are_cli_settable_with_types_and_defaults() {
+        let schema = ConfigSchema::generate();
+        for (key, ty, default) in [
+            ("decision_loop.enabled", "bool", serde_json::json!(true)),
+            ("decision_loop.max_filter_level", "u8", serde_json::json!(0)),
+        ] {
+            let entry = schema
+                .lookup(key)
+                .unwrap_or_else(|| panic!("config set {key} must be recognized"));
+            assert_eq!(entry.ty, ty, "schema type for {key}");
+            assert_eq!(entry.default, default, "schema default for {key}");
+        }
+    }
+
+    #[test]
     fn permission_inheritance_defaults_to_on() {
         let cfg = super::super::Config::default();
         assert_eq!(

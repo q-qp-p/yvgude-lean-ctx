@@ -18,8 +18,11 @@ pub mod context_prefetch;
 pub(crate) mod datadog_push;
 #[allow(dead_code)]
 pub(crate) mod edit_snapshot;
+pub(crate) mod engine_artifact;
 #[allow(dead_code)]
 pub(crate) mod engine_interface;
+#[allow(dead_code)]
+pub(crate) mod engine_receipt_artifact;
 pub mod entropy;
 pub mod etpao;
 pub mod eval_ab;
@@ -32,6 +35,8 @@ pub mod html_crush;
 pub mod ib;
 pub mod import;
 pub mod integration_proof;
+#[allow(dead_code)]
+pub(crate) mod invocation_admission;
 pub mod json_crush;
 pub mod json_sample;
 pub(crate) mod markdown_compact;
@@ -49,6 +54,8 @@ pub(crate) mod protect;
 pub mod rabin_karp;
 #[allow(dead_code)]
 pub(crate) mod read_provenance;
+#[allow(dead_code)]
+pub(crate) mod receipt_document_adapter;
 pub mod relevance_tracker;
 pub mod rule_artifacts;
 pub(crate) mod rule_discovery;
@@ -351,6 +358,7 @@ pub mod extension_registry;
 pub mod extractors;
 pub mod feedback;
 pub(crate) mod fep_prefetch;
+pub(crate) mod file_lock;
 pub(crate) mod filters;
 pub mod gain;
 pub(crate) mod git;

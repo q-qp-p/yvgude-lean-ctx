@@ -39,6 +39,24 @@ fn manifest() -> &'static CapabilityManifestV1 {
 /// Local adapter that combines existing file reads and compression primitives.
 pub struct NativeContextAdapter {
     root: PathBuf,
+    #[cfg(test)]
+    materialized_test_control: Option<std::sync::Arc<MaterializedTestControl>>,
+}
+
+#[cfg(test)]
+pub(crate) struct MaterializedTestControl {
+    pub(crate) release: std::sync::Barrier,
+    pub(crate) completed: std::sync::Barrier,
+}
+
+#[cfg(test)]
+impl MaterializedTestControl {
+    pub(crate) fn new() -> Self {
+        Self {
+            release: std::sync::Barrier::new(2),
+            completed: std::sync::Barrier::new(2),
+        }
+    }
 }
 
 /// Payload-free result used by the internal Engine proof path.
@@ -88,6 +106,8 @@ impl NativeContextAdapter {
     pub fn new() -> Self {
         Self {
             root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            #[cfg(test)]
+            materialized_test_control: None,
         }
     }
 
@@ -95,7 +115,18 @@ impl NativeContextAdapter {
     pub fn with_root(root: impl AsRef<Path>) -> Self {
         Self {
             root: root.as_ref().to_path_buf(),
+            #[cfg(test)]
+            materialized_test_control: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_materialized_test_control(
+        mut self,
+        control: std::sync::Arc<MaterializedTestControl>,
+    ) -> Self {
+        self.materialized_test_control = Some(control);
+        self
     }
 
     #[must_use]
@@ -126,6 +157,18 @@ impl NativeContextAdapter {
         let input = read_context_paths(&self.root, paths).map_err(|error| {
             NativeContextInvocationFailure::SourceUnavailable(error.to_string())
         })?;
+        self.invoke_materialized_context(invocation, paths, mode, budget_tokens, start, &input)
+    }
+
+    fn invoke_materialized_context(
+        &self,
+        invocation: &CapabilityInvocation,
+        paths: &[String],
+        mode: &str,
+        budget_tokens: Option<u64>,
+        start: Instant,
+        input: &str,
+    ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
         let input_tokens = tokens::count_tokens(&input) as u64;
         if let Some(max) = invocation.policy_constraints.max_input_tokens
             && input_tokens > max
@@ -200,16 +243,7 @@ impl NativeContextAdapter {
         &self,
         invocation: &CapabilityInvocation,
     ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
-        invocation
-            .validate()
-            .map_err(|error| NativeContextInvocationFailure::InvalidRequest(error.to_string()))?;
-        if invocation.capability_id != self.manifest().capability_id.as_str()
-            || invocation.capability_version != self.manifest().version
-        {
-            return Err(NativeContextInvocationFailure::InvalidRequest(
-                "invocation capability identity does not match adapter manifest".into(),
-            ));
-        }
+        self.validate_engine_invocation(invocation)?;
         let start = Instant::now();
         match &invocation.input {
             CapabilityInput::ContextRequest {
@@ -221,6 +255,107 @@ impl NativeContextAdapter {
                 Err(NativeContextInvocationFailure::UnsupportedInput)
             }
         }
+    }
+
+    /// Execute against the exact source snapshot already acquired by a
+    /// production caller. This prevents a second file read and binds the
+    /// Engine digest to the same bytes the caller will render.
+    fn invoke_materialized_with_output_identity(
+        &self,
+        invocation: &CapabilityInvocation,
+        input: &str,
+    ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
+        self.validate_engine_invocation(invocation)?;
+        let start = Instant::now();
+        match &invocation.input {
+            CapabilityInput::ContextRequest {
+                paths,
+                mode,
+                budget_tokens,
+            } => self.invoke_materialized_context(
+                invocation,
+                paths,
+                mode,
+                *budget_tokens,
+                start,
+                input,
+            ),
+            CapabilityInput::ShellCommand { .. } | CapabilityInput::ModelRequest { .. } => {
+                Err(NativeContextInvocationFailure::UnsupportedInput)
+            }
+        }
+    }
+
+    /// Execute a materialized invocation behind an actual host deadline.
+    /// Timed-out workers can finish computation, but cannot persist Engine
+    /// artifacts because persistence remains in the receiving Engine layer.
+    pub(crate) fn invoke_materialized_bounded(
+        &self,
+        invocation: CapabilityInvocation,
+        input: String,
+    ) -> Result<NativeContextInvocationResult, NativeContextInvocationFailure> {
+        if invocation.timeout_ms == 0 {
+            return Err(NativeContextInvocationFailure::ResourceLimit(
+                "native context deadline expired before dispatch".to_owned(),
+            ));
+        }
+        let timeout = std::time::Duration::from_millis(invocation.timeout_ms);
+        let adapter = Self::with_root(&self.root);
+        #[cfg(test)]
+        let adapter = {
+            let mut adapter = adapter;
+            adapter.materialized_test_control = self.materialized_test_control.clone();
+            adapter
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("native-context-engine".to_owned())
+            .spawn(move || {
+                #[cfg(test)]
+                if let Some(control) = adapter.materialized_test_control.as_ref() {
+                    control.release.wait();
+                }
+                let result = adapter.invoke_materialized_with_output_identity(&invocation, &input);
+                #[cfg(test)]
+                if let Some(control) = adapter.materialized_test_control.as_ref() {
+                    control.completed.wait();
+                }
+                let _ = tx.send(result);
+            })
+            .map_err(|error| {
+                NativeContextInvocationFailure::InvalidRequest(format!(
+                    "start native context worker: {error}"
+                ))
+            })?;
+        rx.recv_timeout(timeout).map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => {
+                NativeContextInvocationFailure::ResourceLimit(
+                    "native context execution exceeded its deadline".to_owned(),
+                )
+            }
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                NativeContextInvocationFailure::InvalidRequest(
+                    "native context worker disconnected".to_owned(),
+                )
+            }
+        })?
+    }
+
+    fn validate_engine_invocation(
+        &self,
+        invocation: &CapabilityInvocation,
+    ) -> Result<(), NativeContextInvocationFailure> {
+        invocation
+            .validate()
+            .map_err(|error| NativeContextInvocationFailure::InvalidRequest(error.to_string()))?;
+        if invocation.capability_id != self.manifest().capability_id.as_str()
+            || invocation.capability_version != self.manifest().version
+        {
+            return Err(NativeContextInvocationFailure::InvalidRequest(
+                "invocation capability identity does not match adapter manifest".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

@@ -128,12 +128,12 @@ impl FileLock {
             match file.try_lock_exclusive() {
                 Ok(()) => return Ok(Self { file }),
                 Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
+                    if crate::core::file_lock::is_contended(&error)
                         && std::time::Instant::now() < deadline =>
                 {
                     std::thread::sleep(RETRY);
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error) if crate::core::file_lock::is_contended(&error) => {
                     return Err(format!(
                         "agent registry lock timed out after {}ms",
                         TIMEOUT.as_millis()

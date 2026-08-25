@@ -103,7 +103,6 @@ fn with_registry<T>(
     f: impl FnOnce(&mut BTreeMap<String, AgentRecord>) -> Result<T, String>,
 ) -> Result<T, String> {
     use fs2::FileExt;
-    use std::io::ErrorKind;
     use std::time::{Duration, Instant};
 
     const LOCK_TIMEOUT: Duration = Duration::from_millis(750);
@@ -120,10 +119,10 @@ fn with_registry<T>(
     loop {
         match lock.try_lock_exclusive() {
             Ok(()) => break,
-            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+            Err(error) if super::file_lock::is_contended(&error) && Instant::now() < deadline => {
                 std::thread::sleep(LOCK_RETRY_INTERVAL);
             }
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+            Err(error) if super::file_lock::is_contended(&error) => {
                 return Err(format!(
                     "registry lock timed out after {}ms; another agent operation is still active",
                     LOCK_TIMEOUT.as_millis()

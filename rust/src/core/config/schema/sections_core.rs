@@ -444,6 +444,32 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             ),
         );
     root.insert(
+        "shell_hook_mode".into(),
+        key_enum_with_env(
+            &["auto", "rewrite", "deny"],
+            "auto",
+            "How the PreToolUse shell hook treats native Bash/Shell calls (#1278). \
+             rewrite: rewrite known read/search/list commands, unknown commands pass \
+             through raw. deny: block native shell outright so every command goes \
+             through ctx_shell (fail-opens: lean-ctx disabled, MCP daemon dead, \
+             explicit shadow-only surface). auto (default): currently rewrite",
+            "LEAN_CTX_SHELL_HOOK_MODE",
+        ),
+    );
+    root.insert(
+        "prompt_reinject".into(),
+        key_enum_with_env(
+            &["auto", "on", "off"],
+            "auto",
+            "Per-turn tool-precedence reinjection (#1288): the UserPromptSubmit hook \
+             emits a one-line additionalContext reminder that ctx_* tools are the \
+             mandated path, so it always post-dates session-level harness \
+             instructions preferring native Bash. auto (default): active only while \
+             shadow_mode is on. Costs ~45 tokens per turn when active",
+            "LEAN_CTX_PROMPT_REINJECT",
+        ),
+    );
+    root.insert(
         "read_redirect".into(),
         key_enum_with_env(
             &["auto", "on", "off"],

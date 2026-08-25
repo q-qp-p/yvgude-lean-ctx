@@ -522,7 +522,7 @@ Read source files. mode recommended — choose by intent (see `mode` below); def
 To UNDERSTAND code run ctx_compose FIRST; ctx_read after it identified files.
 anchored → edit by reference via ctx_patch (no exact-recall).
 
-Parameters: `aggressiveness`, `fresh`, `limit`, `mode`, `offset`, `path`, `paths`, `protect`, `raw`, `start_line`
+Parameters: `aggressiveness`, `engine_interface`, `fresh`, `limit`, `mode`, `offset`, `path`, `paths`, `protect`, `raw`, `start_line`
 
 ## `ctx_refactor`
 
