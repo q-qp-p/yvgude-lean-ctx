@@ -241,6 +241,11 @@ fn remove(id: &str) {
         .remove(id);
 }
 
+#[cfg(all(test, not(windows)))]
+pub(crate) fn remove_for_test(id: &str) {
+    remove(id);
+}
+
 pub fn status(id: &str) -> Option<JobState> {
     let jobs = JOBS
         .lock()

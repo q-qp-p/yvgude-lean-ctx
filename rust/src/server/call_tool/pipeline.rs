@@ -56,12 +56,16 @@ pub(in crate::server) async fn dispatch_and_post_process(
                 return Err(e);
             }
         };
+    let mut shell_outcome = shell_outcome;
 
     let task_profile = {
         let session = server.session.read().await;
         crate::core::decision_loop_runtime::DecisionLoopRuntime::get_or_init()
             .profile_for_session(&session.id)
     };
+    let background_status = shell_outcome
+        .as_ref()
+        .is_some_and(crate::server::tool_trait::ShellOutcome::is_background_status);
     // #1484: respect lossless escape hatches — never triage when the caller
     // explicitly requested unfiltered output (raw, aggressiveness=0, fresh=true).
     // #1490: an explicit lines:N-M / anchored:N-M window is already an
@@ -69,7 +73,10 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // #1492: mode="full" is documented as "verbatim, edit-ready" — triaging it
     // defeats its contract and causes agents to edit against incomplete content.
     let triage_bypass = triage_bypass_requested(name, args);
-    if !triage_bypass {
+    // Background-status verdicts are archived verbatim first; their display
+    // variant is triaged after the archive/firewall step below (#1510), so
+    // the structured lifecycle text the archive keeps stays complete.
+    if !background_status && !triage_bypass {
         result_text = apply_task_triage_filter(
             result_text,
             task_profile.as_ref(),
@@ -91,7 +98,7 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // Image/binary content blocks: skip all post-processing, return directly.
     if let Some(blocks) = content_blocks {
         let mut result = CallToolResult::success(blocks);
-        if let Some(outcome) = shell_outcome
+        if let Some(outcome) = shell_outcome.as_ref()
             && outcome.is_error()
         {
             result.is_error = Some(true);
@@ -279,6 +286,76 @@ pub(in crate::server) async fn dispatch_and_post_process(
     // `minimal` (no-overhead mode) skips even archiving.
     let archive_hint = if minimal {
         None
+    } else if background_status {
+        use crate::core::archive;
+        let chars = result_text.chars().count();
+        let lines = result_text.lines().count();
+        let trimmed = result_text.trim();
+        let mut summary = if trimmed.is_empty() {
+            "no output".to_string()
+        } else if chars <= 512 {
+            trimmed.to_string()
+        } else {
+            format!("{chars} chars, {lines} lines")
+        };
+        let mut stored_result = None;
+        if archive::should_archive(&result_text) {
+            let job_id = match shell_outcome.as_ref() {
+                Some(crate::server::tool_trait::ShellOutcome::Background(outcome)) => {
+                    outcome.job_id.clone()
+                }
+                _ => String::new(),
+            };
+            let session_id = server.session.read().await.id.clone();
+            let to_store = crate::core::redaction::redact_text_if_enabled(&result_text);
+            if let Some(stored) =
+                archive::store_with_result(name, &job_id, &to_store, Some(&session_id))
+            {
+                summary = if stored.truncated {
+                    format!(
+                        "{} captured chars, {} archived chars (archive truncated)",
+                        stored.captured_chars, stored.archived_chars
+                    )
+                } else {
+                    format!("{chars} chars, {lines} lines archived")
+                };
+                if !is_raw_shell {
+                    let archived = if stored.truncated {
+                        archive::retrieve(&stored.id).unwrap_or_default()
+                    } else {
+                        to_store.clone()
+                    };
+                    let tokens = crate::core::tokens::count_tokens(&archived);
+                    if crate::core::firewall::should_firewall(name, tokens, &config) {
+                        let digest = crate::core::firewall::summarize(
+                            &archived, &stored.id, name, tokens, &job_id,
+                        );
+                        result_text = if stored.truncated {
+                            format!(
+                                "[archive truncated: {} captured chars, {} archived chars; remainder unavailable]\n{digest}",
+                                stored.captured_chars, stored.archived_chars
+                            )
+                        } else {
+                            digest
+                        };
+                        firewalled = true;
+                    }
+                }
+                stored_result = Some(stored);
+            }
+        }
+        if let Some(crate::server::tool_trait::ShellOutcome::Background(outcome)) =
+            shell_outcome.as_mut()
+        {
+            outcome.summary = summary;
+            if let Some(stored) = stored_result {
+                outcome.archive_id = Some(stored.id);
+                outcome.archive_truncated = Some(stored.truncated);
+                outcome.captured_chars = Some(stored.captured_chars);
+                outcome.archived_chars = Some(stored.archived_chars);
+            }
+        }
+        None
     } else {
         use crate::core::archive;
         let archivable = matches!(
@@ -315,6 +392,15 @@ pub(in crate::server) async fn dispatch_and_post_process(
             None
         }
     };
+
+    if background_status && !triage_bypass && !is_raw_shell && !firewalled {
+        result_text = apply_task_triage_filter(
+            result_text,
+            task_profile.as_ref(),
+            &mut decision_context,
+            config.decision_loop.max_filter_level.min(2),
+        );
+    }
 
     let pre_compression = result_text.clone();
     // A firewalled result is already a compact digest — re-compressing it would mangle
@@ -824,6 +910,22 @@ pub(in crate::server) async fn dispatch_and_post_process(
     server
         .persist_shared_context_os(name, action.as_deref(), args)
         .await;
+
+    if let Some(crate::server::tool_trait::ShellOutcome::Background(outcome)) =
+        shell_outcome.as_ref()
+        && let Some(display) = &outcome.display
+    {
+        let mut rendered = display.header.clone();
+        if !result_text.trim().is_empty() {
+            rendered.push('\n');
+            rendered.push_str(&result_text);
+        }
+        if let Some(footer) = &display.footer {
+            rendered.push('\n');
+            rendered.push_str(footer);
+        }
+        result_text = rendered;
+    }
 
     let skip_checkpoint = minimal
         || matches!(
