@@ -2,6 +2,60 @@
 use super::super::*;
 use super::{finalize_call_result, roots_list_failure_is_permanent};
 
+/// Community regression (3.9.19): every documented lossless escape hatch was
+/// ignored — triage ran after the compression pipeline, so per-call
+/// parameters never reached it. These pins guarantee the bypass contract
+/// stays wired at the dispatch chokepoint.
+mod triage_bypass_tests {
+    use super::super::pipeline::triage_bypass_requested;
+
+    fn args(json: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        json.as_object().expect("test args are an object").clone()
+    }
+
+    #[test]
+    fn ctx_read_is_always_exempt() {
+        // ctx_read delivers file content agents edit against — and its cache
+        // marks content as fully delivered BEFORE the pipeline runs, so any
+        // post-hoc filtering silently corrupts the dedup contract ("full
+        // content already in this conversation" after a stripped delivery).
+        assert!(triage_bypass_requested("ctx_read", None));
+        assert!(triage_bypass_requested(
+            "ctx_read",
+            Some(&args(&serde_json::json!({"path": "src/identity.rs"})))
+        ));
+    }
+
+    #[test]
+    fn documented_lossless_escape_hatches_bypass_triage() {
+        for a in [
+            serde_json::json!({"raw": true}),
+            serde_json::json!({"mode": "raw"}),
+            serde_json::json!({"mode": "full"}),
+            serde_json::json!({"mode": "full-compact"}),
+            serde_json::json!({"mode": "lines:32-33"}),
+            serde_json::json!({"mode": "anchored:1-10"}),
+            serde_json::json!({"mode": "diff"}),
+            serde_json::json!({"aggressiveness": 0.0}),
+            serde_json::json!({"fresh": true}),
+        ] {
+            assert!(
+                triage_bypass_requested("ctx_shell", Some(&args(&a))),
+                "escape hatch must bypass triage: {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_calls_remain_subject_to_the_level_gate() {
+        assert!(!triage_bypass_requested(
+            "ctx_shell",
+            Some(&args(&serde_json::json!({"command": "git status"})))
+        ));
+        assert!(!triage_bypass_requested("ctx_search", None));
+    }
+}
+
 mod shell_outcome_tests {
     use super::*;
     use crate::server::tool_trait::ShellOutcome;
